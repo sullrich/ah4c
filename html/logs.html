@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Log Viewer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+        }
+        #log-content {
+            height: calc(100% - 46px);  // Adjust this if your header height changes
+            overflow-y: scroll;
+		    padding: 4px 4px 4px 4px;
+        }
+        h3 {
+            margin: 0;
+            padding: 10px;
+            background: #000;
+            color: #fff;
+            padding: 3px;
+        }
+    </style>
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+</head>
+<body>
+	<h3 id="time-header">Last updated: <span id="last-update"></span></h3>
+    <div id="log-content"></div>
+
+    <script>
+        var autoScroll = true;
+
+	    function fetchLogs() {
+	        $.get('/logs/text', function(data) {
+	            var logContentDiv = $('#log-content');
+	            var shouldScroll = autoScroll && (logContentDiv.scrollTop() + logContentDiv.innerHeight() >= logContentDiv[0].scrollHeight);
+
+	            // Array of search and replace items
+	            var replaceItems = [
+	                {search: 'Failure', replace: '<span style="color: red;">Failure</span>'},
+	                {search: '404', replace: '<span style="color: red;">404</span>'},
+	                {search: '200', replace: '<span style="color: green;">200</span>'},
+                    {search: '304', replace: '<span style="color: green;">304</span>'},
+                    {search: 'started', replace: '<span style="color: green;">started</span>'},
+                    {search: 'successfully', replace: '<span style="color: green;">successfully</span>'},
+                    {search: 'ready', replace: '<span style="color: green;">ready</span>'},
+                    {search: 'waiting', replace: '<span style="color: yellow;">waiting</span>'}
+	            ];
+
+	            // For each item in the array, replace in the data
+	            replaceItems.forEach(function(item) {
+	                data = data.replace(new RegExp(item.search, 'g'), item.replace);
+	            });
+
+	            // Replace line breaks with HTML line breaks
+	            $('#log-content').html(data.replace(/\n/g, '<br>'));
+
+	            var now = new Date();
+	            $('#last-update').text(now.toLocaleString());
+
+	            if (shouldScroll) {
+	                logContentDiv.scrollTop(logContentDiv[0].scrollHeight);
+	            }
+	        });
+	    }
+
+        $(document).ready(function() {
+		    // Check if 'notime' parameter is present in the URL
+		    var urlParams = new URLSearchParams(window.location.search);
+		    if (urlParams.has('notime')) {
+		        // Hide the <h3> element if 'notime' is present
+		        $('#time-header').hide();
+		    }
+            $('#log-content').on('scroll', function() {
+                autoScroll = $(this).scrollTop() + $(this).innerHeight() >= $(this)[0].scrollHeight;
+            });
+
+            fetchLogs();
+            setInterval(fetchLogs, 1000);  // fetch every 2 seconds
+        });
+    </script>
+</body>
+</html>

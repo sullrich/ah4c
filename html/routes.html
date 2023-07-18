@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Available Routes</title>
+</head>
+<body>
+This is the androidhdmi-for-channels server. Available api endpoints are:<p/>
+	<table border="1" style="border-collapse: collapse;">
+		<tr>
+			<th>HTTP Method</th>
+			<th>Path</th>
+			<th>Handler</th>
+		</tr>
+		{{ range . }}
+		<tr>
+			<td>{{ .Method }}</td>
+			<td>{{ .Path }}</td>
+			<td>{{ .Handler }}</td>
+		</tr>
+		{{ end }}
+	</table>
+</body>
+</html>

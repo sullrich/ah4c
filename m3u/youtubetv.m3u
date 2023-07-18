@@ -1,0 +1,29 @@
+#EXTM3U
+#EXTINF:-1 channel-id="aRGFZpHQkzY" tvc-guide-stationid="10518",NBC
+http://{{ .IPADDRESS }}/play/tuner/aRGFZpHQkzY
+#EXTINF:-1 channel-id="q6bWEVqhP8o" tvc-guide-stationid="16300",MSNBC
+http://{{ .IPADDRESS }}/play/tuner/q6bWEVqhP8o
+#EXTINF:-1 channel-id="ILTrUfLFrHI" tvc-guide-stationid="17561",E!
+http://{{ .IPADDRESS }}/play/tuner/ILTrUfLFrHI
+#EXTINF:-1 channel-id="xNk2Sv4t4Tc" tvc-guide-stationid="31555",Bravo
+http://{{ .IPADDRESS }}/play/tuner/xNk2Sv4t4Tc
+#EXTINF:-1 channel-id="v4upAc0UExk" tvc-guide-stationid="21744",Oxygen
+http://{{ .IPADDRESS }}/play/tuner/v4upAc0UExk
+#EXTINF:-1 channel-id="DJ7m0fdLKEY", tvc-guide-stationid="11208",USA
+http://{{ .IPADDRESS }}/play/tuner/DJ7m0fdLKEY
+#EXTINF:-1 channel-id="2_WogcoZ1cY" tvc-guide-stationid="24533",SyFy
+http://{{ .IPADDRESS }}/play/tuner/2_WogcoZ1cY
+#EXTINF:-1 channel-id="GIBoX-XF5i0" tvc-guide-stationid="10139",CNBC
+http://{{ .IPADDRESS }}/play/tuner/GIBoX-XF5i0
+#EXTINF:-1 channel-id="XK34g7QRvGk" tvc-guide-stationid="14899",Golf
+http://{{ .IPADDRESS }}/play/tuner/XK34g7QRvGk
+#EXTINF:-1 channel-id="_pYg9qMKKIA" tvc-guide-stationid="34710",NFL
+http://{{ .IPADDRESS }}/play/tuner/_pYg9qMKKIA
+#EXTINF:-1 channel-id="ZIzM3eNrylg" tvc-guide-stationid="91096",NewsNation
+http://{{ .IPADDRESS }}/play/tuner/ZIzM3eNrylg
+#EXTINF:-1 channel-id="isxl2N52bUQ" tvc-guide-stationid="59054",MTV Classic
+http://{{ .IPADDRESS }}/play/tuner/isxl2N52bUQ
+#EXTINF:-1 channel-id="g5BmB1qXulc" tvc-guide-stationid="89542",BBCNews
+http://{{ .IPADDRESS }}/play/tuner/g5BmB1qXulc
+#EXTINF:-1 channel-id="c05ACdzJxiE" tvc-guide-stationid="65799",Smithsonian
+http://{{ .IPADDRESS }}/play/tuner/c05ACdzJxiE

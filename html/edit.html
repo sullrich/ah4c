@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+    <head>
+            <title>Text Editor</title>
+	<style>
+		textarea {
+			width: 100%;
+			height: calc(100vh - 45px);
+		}
+	</style>
+    </head>
+    <body>
+		<form action="/save" method="POST">
+			<textarea name="content">{{ .content }}</textarea><br>
+			<input type="submit" value="Save">
+		</form>
+    </body>
+</html>
+

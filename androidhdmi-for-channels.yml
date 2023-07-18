@@ -1,0 +1,32 @@
+version: '3.9'
+services:
+  androidhdmi-for-channels:
+    image: bnhf/androidhdmi-for-channels:alpha
+    container_name: ah4channels-alpha
+    hostname: ah4channels
+    dns_search: localdomain # Specify the name of your LAN's domain, usually local or localdomain
+    ports:
+      - 5037:5037 # Port used by adb-server
+      - 7654:7654 # Port used by Channels androidhdmi-for-channels proxy
+    environment:
+      - IPADDRESS=${IPADDRESS} # Hostname or IP address to be used in M3U file
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined 1, 2, 3 or 4 supported
+      - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
+      - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
+      - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
+      - TUNER4_IP=${TUNER4_IP} # Streaming device #4 with adb port in the form hostname:port or ip:port
+      - ENCODER1_URL=${ENCODER1_URL} # Full URL for tuner #1 in the form http://hostname/stream or http://ip/stream
+      - ENCODER2_URL=${ENCODER2_URL} # Full URL for tuner #2 in the form http://hostname/stream or http://ip/stream
+      - ENCODER3_URL=${ENCODER3_URL} # Full URL for tuner #3 in the form http://hostname/stream or http://ip/stream
+      - ENCODER4_URL=${ENCODER4_URL} # Full URL for tuner #4 in the form http://hostname/stream or http://ip/stream
+      - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form streamer/app (use lowercase with slash between as shown)
+#      - ALERT_SMTP_SERVER="smtp.gmail.com:587"
+#      - ALERT_AUTH_SERVER="smtp.gmail.com"
+#      - ALERT_EMAIL_FROM=""
+#      - ALERT_EMAIL_PASS=""
+#      - ALERT_EMAIL_TO=""
+#      - ALERT_WEBHOOK_URL=""
+    volumes:
+      - /data/androidhdmi-for-channels:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
+      - /data/adb:/root/.android # Persistent data directory for adb keys
+    restart: unless-stopped

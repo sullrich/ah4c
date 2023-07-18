@@ -1,0 +1,30 @@
+
+Getting started
+
+What you will need
+	Working golang install
+	HDMI Encoder device - I am using a pair of these: https://www.amazon.com/dp/B08FDZ2VNZ?psc=1&ref=ppx_yo2ov_dt_b_product_details
+	FireStick 4K or Cube device (I am using the cube): https://www.amazon.com/gp/product/B09BZZ3MM7/ref=ppx_yo_dt_b_asin_title_o02_s00?ie=UTF8&psc=1
+	ChannelsDVR setup and working: https://getchannels.com/
+	Hulu Live subscription 
+
+* Install the Android Bridge https://developer.android.com/tools/releases/platform-tools
+* Setup the FireStick or cube for debugging https://www.xda-developers.com/how-to-access-developer-options-amazon-fire-tv/
+* Setup the encoder (connect to its default IP address and then change the IP to a address on your local network)
+* Plug the encoder into Fire device.  Navigate to the encoders webGUI and verify you see Fire device in preview.
+* Clone the androidhdmi-for-channels repo to the machine you wish to run it on
+* Modify the env file and set your ENCODERX_URL(s) and TUNERX_IP(s).  Set the number of encoders you have.
+* Start the androidhdmi-for-channels proxy by running ./start.sh - I currently use screen to detach from the running process to keep in background. https://formulae.brew.sh/formula/screen
+* Setup the custom channel in channels using the custom_channel.txt.  Be sure to modify the IP address in custom_channel.txt to the IP address of the running androidhdmi-for-channels proxy:
+	ChannelsDVR > Add Source
+	Nickname > ChannelsHDMI 
+	Stream Format > MPEG-TS
+	Source > Text
+	Paste in the custom_channel.txt into the textbox.
+	Prefer channel-number from M3U
+	Prefer channel logos from Guide Data
+	Limit to X streams (the number of encoders you have)
+	XMLTV Guide Data > Refresh daily
+* Navigate to ChannelsDVR > Live TV > Guide.  Select the new custom channel source.  CLick on a channel and Watch Live to verify it's working.
+* If recording networks that also exist in TVE you might want to set the channel ordering to list custom channel 1st if you wish to prefer it recording vs TVE.
+* Schedule some content to record and enjoy!

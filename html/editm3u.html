@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Edit M3U File</title>
+	<style>
+		.styled-input {
+			border: 1px solid #000;
+			padding: 6px;
+		}
+	</style>
+</head>
+<body>
+	<h1>Edit M3U File: {{.filename}}</h1>
+	<table id="entriesTable">
+		<thead>
+			<tr>
+				<th>Id</th>
+				<th>Station Id</th>
+				<th>Channel Name</th>
+				<th>Stream Location</th>
+				<th>Action</th>
+			</tr>
+		</thead>
+		<tbody>
+			{{range .entries}}
+			<tr>
+			    <td class="styled-input" contentEditable="true">{{ .Id }}</td>
+			    <td class="styled-input" contentEditable="true">{{ .StationId }}</td>
+			    <td class="styled-input" contentEditable="true">{{ .ChannelName }}</td>
+			    <td class="styled-input" contentEditable="true">{{ .StreamURL }}</td> 
+			    <td><button onclick="deleteRow(this)">Delete</button></td>
+			</tr>
+			{{end}}
+		</tbody>
+	</table>
+	<p>Total Channels: {{ len .entries }}</p>
+	<button onclick="addRow()">Add Channel</button>
+	<p/>
+	<button onclick="saveData()">Save</button> 	<button onclick="cancel()">Cancel</button> 
+	<script>
+		function deleteRow(btn) {
+			var row = btn.parentNode.parentNode;
+			row.parentNode.removeChild(row);
+		}
+		function addRow() {
+			var table = document.getElementById("entriesTable");
+			var row = table.insertRow(-1);
+			var cell1 = row.insertCell(0);
+			var cell2 = row.insertCell(1);
+			var cell3 = row.insertCell(2);
+			var cell4 = row.insertCell(3);
+			var cell5 = row.insertCell(4);
+			cell1.className = "styled-input";
+			cell2.className = "styled-input";
+			cell3.className = "styled-input";
+			cell4.className = "styled-input";
+			cell1.contentEditable = "true";
+			cell2.contentEditable = "true";
+			cell3.contentEditable = "true";
+			cell4.contentEditable = "true";
+			cell5.innerHTML = '<button onclick="deleteRow(this)">Delete</button>';
+		}
+		function saveData() {
+		    let table = document.getElementById('entriesTable');
+		    let entries = [];
+		    for (let i = 1, row; row = table.rows[i]; i++) {
+		        let entry = {
+		            Id: row.cells[0].innerText,
+		            StationId: row.cells[1].innerText,
+		            ChannelName: row.cells[2].innerText,
+		            StreamURL: row.cells[3].innerText,
+		        };
+		        entries.push(entry);
+		    }
+		    fetch('/m3usave/{{ .filename }}', {
+		        method: 'POST',
+		        headers: {
+		            'Content-Type': 'application/json',
+		        },
+		        body: JSON.stringify(entries),
+		    })
+		    .then(response => response.json())
+		    .then(data => alert(data.status))
+		    .catch((error) => {
+		        console.error('Error:', error);
+		    });
+		}
+		function cancel() {
+			window.location.href = "/";
+		}
+	</script>
+</body>
+</html>

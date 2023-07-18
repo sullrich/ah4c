@@ -1,0 +1,112 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="nbc" tvc-guide-stationid="10991",NBC
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__0dd6cd60-e42d-458f-b7b5-5c749fd4a2af
+
+#EXTINF:-1 channel-id="msnbc" tvc-guide-stationid="16300",MSNBC
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__529a7abd-7113-4b74-bed0-3f4f0129d77c
+
+#EXTINF:-1 channel-id="e!" tvc-guide-stationid="61812",E!
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__b6f5e4b5-3e92-45ce-b6c8-179a2665c245
+
+#EXTINF:-1 channel-id="bravo" tvc-guide-stationid="58625",Bravo
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__414af5d5-8037-48f2-9aec-7fcbb012859b
+
+#EXTINF:-1 channel-id="usa" tvc-guide-stationid="58452",USA
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__02924d6e-d1bb-4286-a62b-0adfd1ecec7b
+
+#EXTINF:-1 channel-id="syfy" tvc-guide-stationid="58623",SyFy
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__07fb8004-d9af-43fe-8f7c-811cf3b7e0b0
+
+#EXTINF:-1 channel-id="cnbc" tvc-guide-stationid="58780",CNBC
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__abf13f07-a494-4c3e-b56f-866145f64916
+
+#EXTINF:-1 channel-id="vice" tvc-guide-stationid="65732",Vice
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__bde4af8e-b348-448f-a580-a7ea6e5d4dc4
+
+#EXTINF:-1 channel-id="fox" tvc-guide-stationid="32824",Fox
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__8f7c4d8f-87fb-42c6-98af-34ff4362cfd5
+
+#EXTINF:-1 channel-id="dsc" tvc-guide-stationid="56905",Discovery
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__15c4547b-7457-44d2-8cf3-e6aefa2ac09d
+
+#EXTINF:-1 channel-id="food" tvc-guide-stationid="50747",Food Network
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__5a757cdb-7d34-45f4-99b8-338d0461e51f
+
+#EXTINF:-1 channel-id="mtv" tvc-guide-stationid="10986",MTV
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__aa3d9731-5bfa-4de4-9128-b5adbe84f4d2
+
+#EXTINF:-1 channel-id="par" tvc-guide-stationid="59186",Paramount
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__23586acc-6f36-4b00-9ecf-9c7f5973bd68
+
+#EXTINF:-1 channel-id="history" tvc-guide-stationid="14771",History
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__bf84c00e-26c4-4c19-b4f2-e113fd4ebbc8
+
+#EXTINF:-1 channel-id="tbs" tvc-guide-stationid="11867",TBS
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__94d96b72-90dd-4299-93ab-6963d717635d
+
+#EXTINF:-1 channel-id="abc" tvc-guide-stationid="10003",ABC
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__80dd3a6b-15df-41ac-acec-d822fb826332
+
+#EXTINF:-1 channel-id="cbs" tvc-guide-stationid="10098",CBS
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__5a19f5b5-75ea-4024-807e-bbc54467a55b
+
+#EXTINF:-1 channel-id="fyihd" tvc-guide-stationid="58988",FYI
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__172b34f5-7390-4dad-af63-c82f5fb4d10f
+
+#EXTINF:-1 channel-id="hgtv" tvc-guide-stationid="14902",HGTV
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__af9c0379-06e2-44f4-ac5d-bda681c704f2
+
+#EXTINF:-1 channel-id="mthd" tvc-guide-stationid="31046",Motortrend
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__b41b0d7e-58e2-4a5e-bf1b-1f4d19eab44c
+
+#EXTINF:-1 channel-id="cw" tvc-guide-stationid="31046",CW
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__2f06b839-579b-4877-800d-f40cf5335a89
+
+#EXTINF:-1 channel-id="trav" tvc-guide-stationid="59303",Travel
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__f8e60a0b-d5ed-4c8d-8e01-e2e7a7c77f26
+
+#EXTINF:-1 channel-id="vh1" tvc-guide-stationid="60046",VH1
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__889fc1eb-79f2-4db8-9614-bd249af16f03
+
+#EXTINF:-1 channel-id="tnt" tvc-guide-stationid="11164",TNT
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__dd326f4a-244a-464e-8b87-4d321c2937a3
+
+#EXTINF:-1 channel-id="aetv" tvc-guide-stationid="10035",AETV
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__67d198b0-9d65-485e-a381-7a24848cfe38
+
+#EXTINF:-1 channel-id="dsc" tvc-guide-stationid="56905",Discovery
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__15c4547b-7457-44d2-8cf3-e6aefa2ac09d
+
+#EXTINF:-1 channel-id="espn" tvc-guide-stationid="10179",ESPN
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__2c27a816-4404-4daf-90e0-5cf434e7e0c9
+
+#EXTINF:-1 channel-id="espn2" tvc-guide-stationid="12444",ESPN2
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__d6115f15-959f-4e42-8cb5-7ab54b966c02
+
+#EXTINF:-1 channel-id="golf" tvc-guide-stationid="14899",Golf
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__1de38239-acc4-4b3a-9c1e-1b71051acc90
+
+#EXTINF:-1 channel-id="ngc" tvc-guide-stationid="49438",NatGeo
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__b9b110fb-bd2d-4618-81ad-8654544a0e25
+
+#EXTINF:-1 channel-id="cnn" tvc-guide-stationid="58646",CNN
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__d8bcc76b-0ab5-4b4f-bf87-a707fd94e04d
+
+#EXTINF:-1 channel-id="fnc" tvc-guide-stationid="60179",Fox news
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__02652a4f-1fef-4668-822f-ca88314fdd48
+
+#EXTINF:-1 channel-id="nasatv" tvc-guide-stationid="12553",NASA
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__46954346-92e0-4266-b697-41c838b72e8f
+
+#EXTINF:-1 channel-id="tlc" tvc-guide-stationid="11158",TLC
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__1b7297c8-07e7-458f-9ded-ccf91d10909d
+
+#EXTINF:-1 channel-id="weath" tvc-guide-stationid="11158",Weather Channel
+http://{{ .IPADDRESS }}:7654/play/tuner/hulu__1b7297c8-07e7-458f-9ded-ccf91d10909d
+
+
+
+
+
+

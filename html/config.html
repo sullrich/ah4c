@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Config</title>
+	<script>
+		let tunerCount = {{len .Tuners}};
+		function addTuner() {
+			tunerCount++;
+			let html = `<div>
+				<p/><b>Tuner ${tunerCount}</b><br/>
+				<label>CMD</label>
+				<input type="text" name="CMD${tunerCount}" value="" size="40">
+				<label>Encoder IP</label>
+				<input type="text" name="ENCODER${tunerCount}_IP" value="" size="40">
+				<label>Tuner URL</label>
+				<input type="text" name="TUNER${tunerCount}_URL" value="" size="40">
+				<button type="button" onclick="deleteTuner(this)">Delete</button>
+			</div>`;
+			let tunersDiv = document.getElementById('tuners');
+			tunersDiv.insertAdjacentHTML('beforeend', html);
+		}
+		function deleteTuner(button) {
+			let div = button.parentElement;
+			div.parentElement.removeChild(div);
+		}
+		function cancelForm() {
+			window.location.href = "/";
+		}
+	</script>
+</head>
+<body>
+	<h2>Global Variables</h2>
+	<form action="/configsave" method="post">
+		<table>
+			{{range .EnvVariables}}
+			<tr>
+				<td align="right">
+					<label>{{.Key}}</label>
+				</td>
+				<td>
+					<input type="text" name="{{.Key}}" value="{{.Value}}">
+				</td>
+			</tr>
+			{{end}}
+		</table>
+		<h2>Tuners</h2>
+		<div id="tuners">
+		{{range .Tuners}}
+		<div>
+			<p/><b>Tuner {{.Number}}</b><br/>
+			<label>CMD</label>
+			<input type="text" name="CMD{{.Number}}" value="{{.Cmd}}" size="40">
+			<label>Encoder URL</label>
+			<input type="text" name="ENCODER{{.Number}}_URL" value="{{.EncoderUrl}}" size="40">
+			<label>Tuner IP</label>
+			<input type="text" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}" size="40">
+			<button type="button" onclick="deleteTuner(this)">Delete</button>
+		</div>
+		{{end}}
+		</div>
+		<p/>&nbsp;<br/>
+		<button type="button" onClick="addTuner()">Add Tuner</button> 
+		<button type="submit">Save</button> 
+		<button type="button" onClick="cancelForm()">Cancel</button> 
+	</form>
+</body>
+</html>

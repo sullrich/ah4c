@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>M3U Files</title>
+</head>
+<body>
+	<h1>M3U Files</h1>
+	<ul>
+		{{range .m3us}}
+		<li><a href="/editm3u/{{.}}">{{.}}</a></li>
+		{{end}}
+	</ul>
+</body>
+</html>

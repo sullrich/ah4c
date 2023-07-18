@@ -1,0 +1,473 @@
+<strong></strong><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tuner Status</title>
+    <style>
+        td, th {
+            padding: 4px;
+            vertical-align: top;
+		}
+        .table-container {
+            height: 285px; /* Fixed height for container */
+            border: 1px solid black;
+        }
+        .table-container-a {
+            height: 285px; /* Fixed height for container */
+            border: 1px solid black;
+        }
+        .flot-tooltip {
+            position: absolute;
+            display: none;
+            border: 1px solid #fdd;
+            padding: 2px;
+            background-color: #fee;
+            opacity: 0.80;
+            z-index: 10000;
+        }
+	</style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.time.min.js"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.navigate.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.selection.min.js"></script> 
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.crosshair.min.js"></script>
+</head>
+<body>
+    <div id="tooltip" class="flot-tooltip"></div>
+
+<table>
+	<tr>
+		<td>
+			<h2>System Stats</h2>
+			<div class="table-container-a">
+				<table id="systemStats" style="width:290px;">
+					<!-- Filled by JavaScript -->
+				</table>
+			</div>
+		</td>
+		<td valign="top">
+			<h2>DVR Activity <span id="activity"></span></h2>
+			<div class="table-container">
+				<table id="activityTable" style="width:290px;">
+					<!-- Filled by JavaScript -->
+				</table>
+			</div>
+		</td>
+	</tr>
+	</table>
+
+    <h2>Tuner Status</h2>
+    <table id="tunerStatus" width="600" style="border: 1px solid; border-collapse: collapse;">
+        <!-- Filled by JavaScript -->
+    </table>
+
+    <h2>Reader Status</h2>
+    <table id="readerStatus" width="600" style="border: 1px solid; border-collapse: collapse;">
+        <!-- Filled by JavaScript -->
+    </table>
+
+    <h2>CPU & Memory Usage (%)</h2>
+    <div id="cpu-usage" style="width:605px;height:250px;"></div>
+
+	<br/>
+	
+    <h2>Network In/Out (Megabit)</h2>
+    <div id="network-io" style="width:605px;height:250px;"></div>
+
+	<br/>
+	
+    <h2>GPU Usage (%)</h2>
+    <div id="gpu-usage" style="width:605px;height:250px;"></div>
+
+	<br/>
+	
+    <script>
+		$(document).ready(function() {
+            function showTooltip(x, y, contents) {
+                $("#tooltip").css({
+                    top: y + 5,
+                    left: x + 5
+                }).html(contents).fadeIn(200);
+            }
+            // CPU & Memory Usage tooltips
+            $("#cpu-usage").bind("plothover", function(event, pos, item) {
+                if (item) {
+                    var x = item.datapoint[0],
+                        y = item.datapoint[1].toFixed(2);
+                    var content = item.series.label + ": " + y;
+                    showTooltip(item.pageX, item.pageY, content);
+                } else {
+                    $("#tooltip").hide();
+                }
+            });
+            // Network In/Out tooltips
+            $("#network-io").bind("plothover", function(event, pos, item) {
+                if (item) {
+                    var x = item.datapoint[0],
+                        y = item.datapoint[1].toFixed(2);
+                    var content = item.series.label + ": " + y + " Mbps";
+                    showTooltip(item.pageX, item.pageY, content);
+                } else {
+                    $("#tooltip").hide();
+                }
+            });
+		    var cpuData = [];
+		    var memoryData = [];
+		    var networkInData = [];
+		    var networkOutData = [];
+		    var prevNetRecv = null;
+		    var prevNetSent = null;
+		    var prevTimestamp = Date.now();
+			var megabitsSentPerSecond = 0
+			var megabitsRecvPerSecond = 0
+			var networkInMegabits = 0;
+		    var networkOutMegabits = 0;
+			var showplotscpu = false;
+			var showplotsnet = false;
+            var gpuCPUData = [];
+            var gpuMemData = [];
+            var gpuPowerData = [];
+			// Function to fetch and update data
+		    function fetchDataAndUpdate() {
+		        // Fetch data from /api/status
+		        $.getJSON("/api/status", function(data) {
+		            var currentTimestamp = Date.now();
+
+		            // Populate System Stats
+		            var systemStatsHtml = `
+		                <tr>
+		                    <td align='right'>CPU Usage</td>
+		                    <td align='left'><b>%${data.CPU}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Memory Usage</td>
+		                    <td align='left'><b>%${data.Memory}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Disk Usage</td>
+		                    <td align='left'><b>%${data.Disk}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Network In (bytes)</td>
+		                    <td align='left'><b>${data.NetRecv}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Network Out (bytes)</td>
+		                    <td align='left'><b>${data.NetSent}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Network recv (Mbps)</td>
+		                    <td align='left'><b>${networkInMegabits}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>Network Out (Mbps)</td>
+		                    <td align='left'><b>${networkOutMegabits}</b></td>
+		                </tr>
+		            `;
+
+					if(data.GPUCPUUsage) {
+						systemStatsHtml = systemStatsHtml + `
+		                <tr>
+		                    <td align='right'>GPU Usage</td>
+		                    <td align='left'><b>%${data.GPUCPUUsage}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>GPU Memory Usage</td>
+		                    <td align='left'><b>%${data.GPUMemUsage}</b></td>
+		                </tr>
+		                <tr>
+		                    <td align='right'>GPU Power Usage</td>
+		                    <td align='left'><b>%${data.GPUPowerUsage}</b></td>
+		                </tr>
+						`;
+					}
+					
+		            $('#systemStats').html(systemStatsHtml);
+
+		            // Populate Tuner Status
+		            var tunerStatusHtml = `
+		                <tr>
+		                    <th align='right'>Tuner Index</th>
+		                    <th align='right'>Tuner IP</th>
+		                    <th align='right'>URL</th>
+		                    <th align='right'>Active</th>
+		                </tr>`;
+		            $.each(data.Tuners, function(index, tuner) {
+		                tunerStatusHtml += `
+		                    <tr>
+		                        <td align='right'>${index}</td>
+		                        <td align='right'>${tuner.Tunerip}</td>
+		                        <td align='right'>${tuner.Url}</td>
+		                        <td align='right'>${tuner.Active}</td>
+		                    </tr>
+		                `;
+		            });
+		            $('#tunerStatus').html(tunerStatusHtml);
+
+		            // Populate Reader Status
+		            var readerStatusHtml = `
+		                <tr>
+		                    <th align='right'>Tuner</th>
+		                    <th align='right'>Channel</th>
+		                    <th align='right'>Started</th>
+		                    <th align='right'>File</th>
+		                    <th align='right'>CMD</th>
+		                </tr>`;
+		            $.each(data.Readers, function(index, reader) {
+		                readerStatusHtml += `
+		                    <tr>
+		                        <td align='right'>${reader.T}</td>
+		                        <td align='right'>${reader.Channel}</td>
+		                        <td align='right'>${reader.Started}</td>
+		                        <td align='right'>${reader.FileName}</td>
+		                        <td align='right'>${reader.Cmd}</td>
+		                    </tr>
+		                `;
+		            });
+		            $('#readerStatus').html(readerStatusHtml);
+
+					if (prevNetRecv !== null && prevNetSent !== null) {
+						var timeInterval = (currentTimestamp - prevTimestamp) / 1000; // in seconds
+						var deltaNetRecv = data.NetRecv - prevNetRecv; // in bytes
+						var deltaNetSent = data.NetSent - prevNetSent; // in bytes
+
+						// convert bytes per second to megabits per second
+						networkInMegabits = Math.round(((deltaNetRecv * 8) / timeInterval) / 1048576);
+						networkOutMegabits = Math.round(((deltaNetSent * 8) / timeInterval) / 1048576);
+
+						/*
+						console.log("---- Debugging Information ----");
+						console.log("prevNetRecv in bytes:", prevNetRecv);
+						console.log("data.NetRecv in bytes:", data.NetRecv);
+						console.log("prevNetSent in bytes:", prevNetSent);
+						console.log("data.NetSent in bytes:", data.NetSent);
+						console.log("prevTimestamp in ms:", prevTimestamp);
+						console.log("currentTimestamp in ms:", currentTimestamp);
+						console.log("TimeInterval in seconds:", timeInterval);
+						console.log("deltaNetRecv in bytes:", deltaNetRecv);
+						console.log("deltaNetSent in bytes:", deltaNetSent);
+						console.log("networkInMegabits (Mbps):", networkInMegabits);
+						console.log("networkOutMegabits (Mbps):", networkOutMegabits);
+						console.log("---- End of Debugging Information ----");
+						*/
+					}
+
+		            prevNetRecv = Math.round(data.NetRecv)
+					prevNetSent = Math.round(data.NetSent)
+		            prevTimestamp = currentTimestamp
+
+					var CPUoptions = {
+					    xaxis: { 
+					        mode: "time", 
+							timezone: "browser", // Using browser's local timezone
+					        timeformat: "%H:%M:%S", // Format of the time
+							ticks: 5,
+							labelMargin: 15 
+					    },
+					    yaxis: {
+					        axisLabel: 'Percentage (%)', // Y-axis label
+					        min: 0, // Fix the minimum value for Y-axis
+					        max: 100 // Fix the maximum value for Y-axis
+					    },
+						crosshair: { mode: "x" },
+					    grid: {
+					        hoverable: true,
+					        clickable: true,
+					        borderWidth: 1,
+					        markings: function(axes) {
+					            var markings = [];
+					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					            }
+					            return markings;
+					        }
+					    },					    
+						selection: { mode: "xy" }, 
+						lines: { show: true, fill: true, lineWidth: 3 },
+						points: { show: showplotscpu },
+					    colors: ["#DA70D6", "#800080"]
+					};
+
+					var NEToptions = {
+					    xaxis: { 
+					        mode: "time",
+							timezone: "browser", // Using browser's local timezone
+					        timeformat: "%H:%M:%S", // Format of the time
+							ticks: 5,
+							labelMargin: 15 
+					    },
+						crosshair: { mode: "x" },
+					    grid: {
+					        hoverable: true,
+					        clickable: true,
+					        borderWidth: 1,
+					        markings: function(axes) {
+					            var markings = [];
+					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					            }
+					            return markings;
+					        }
+					    },					    
+						selection: { mode: "xy" },
+						lines: { show: true, fill: true, lineWidth: 3 },
+						points: { show: showplotsnet },
+					    colors: ["#7393B3", "#0047AB"],
+					};
+
+					var GPUoptions = {
+					    xaxis: { 
+					        mode: "time",
+							timezone: "browser", // Using browser's local timezone
+					        timeformat: "%H:%M:%S", // Format of the time
+							ticks: 5,
+							labelMargin: 15 
+					    },
+						crosshair: { mode: "x" },
+					    grid: {
+					        hoverable: true,
+					        clickable: true,
+					        borderWidth: 1,
+					        markings: function(axes) {
+					            var markings = [];
+					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					            }
+					            return markings;
+					        }
+					    },					    
+						selection: { mode: "xy" },
+						lines: { show: true, fill: true, lineWidth: 3 },
+						points: { show: showplotsnet },
+					    colors: ["#1f77b4", "#ff7f0e", "#2ca02c"],
+					};
+
+			        $("<style type='text/css'> .flot-x-axis .flot-tick-label { transform: rotate(-35deg) translateY(15px); text-anchor: end; white-space: nowrap; } </style>").appendTo("head");
+
+					// Update the placeholder arrays
+					cpuData.push([currentTimestamp, data.CPU]); // Using currentTimestamp as the x-axis value
+					memoryData.push([currentTimestamp, data.Memory]); // Using currentTimestamp as the x-axis value
+					networkInData.push([currentTimestamp, networkInMegabits]); // Using currentTimestamp as the x-axis value
+					networkOutData.push([currentTimestamp, networkOutMegabits]); // Using currentTimestamp as the x-axis value
+
+                    // GPU data
+                    gpuCPUData.push([currentTimestamp, data.GPUCPUUsage]); 
+                    gpuMemData.push([currentTimestamp, data.GPUMemUsage]);
+                    gpuPowerData.push([currentTimestamp, data.GPUPowerUsage]);
+
+					// Limit the size of the arrays to avoid memory issues
+					if (cpuData.length > 50) cpuData.shift();
+					if (memoryData.length > 50) memoryData.shift();
+					if (networkInData.length > 50) networkInData.shift();
+					if (networkOutData.length > 50) networkOutData.shift();
+                    if (gpuCPUData.length > 50) gpuCPUData.shift();
+                    if (gpuMemData.length > 50) gpuMemData.shift();
+                    if (gpuPowerData.length > 50) gpuPowerData.shift(); 
+
+                    // plot GPU graph
+                    $.plot("#gpu-usage", [
+                        { data: gpuCPUData, label: "GPU CPU %" }, 
+                        { data: gpuMemData, label: "GPU Mem %" },
+                        { data: gpuPowerData, label: "GPU Power %" }
+                    ], GPUoptions);
+
+					// Plot the data
+					$.plot("#cpu-usage", [
+						{ data: cpuData, label: "CPU %" },
+						{ data: memoryData, label: "Mem %" }
+					], CPUoptions);
+					$.plot("#network-io", [
+						{ data: networkInData, label: "In" },
+						{ data: networkOutData, label: "Out" }
+					], NEToptions);
+					
+					// Toggle points on hover
+					$("#cpu-usage").on("mouseenter", function() {
+					    CPUoptions.points.show = true;
+						showplotscpu = true;
+					    plot = $.plot("#cpu-usage", [
+					        { data: cpuData, label: "CPU %" },
+					        { data: memoryData, label: "Mem %" }
+					    ], CPUoptions);
+					});
+
+					$("#cpu-usage").on("mouseleave", function() {
+					    CPUoptions.points.show = false;
+						showplotscpu = false;
+					    plot = $.plot("#cpu-usage", [
+					        { data: cpuData, label: "CPU %" },
+					        { data: memoryData, label: "Mem %" }
+					    ], CPUoptions);
+					});
+					
+					// Toggle points on hover
+					$("#network-io").on("mouseenter", function() {
+					    NEToptions.points.show = true;
+						showplotsnet = true;
+					    plot = $.plot("#network-io", [
+					        { data: networkInData, label: "In" },
+					        { data: networkOutData, label: "Out" }
+					    ], NEToptions);
+					});
+
+					$("#network-io").on("mouseleave", function() {
+					    NEToptions.points.show = false;
+						showplotsnet = false;
+					    plot = $.plot("#network-io", [
+					        { data: networkInData, label: "In" },
+					        { data: networkOutData, label: "Out" }
+					    ], NEToptions);
+					});
+					
+		        });
+
+		    }
+
+		    // Fetch data and update immediately
+		    fetchDataAndUpdate();
+
+		    // Set interval to fetch data every 5 seconds (5000 milliseconds)
+		    setInterval(fetchDataAndUpdate, 5000);
+		});
+    </script>
+    <script>
+        $(document).ready(function() {
+            function fetchDataAndUpdateDVR() {
+                // Fetch data from /dvr
+                $.getJSON("/status/channelsactivity", function(data) {
+					statusA = data.busy;
+					console.log(data.busy);
+					if(statusA == false) {
+						status = "- Idle";
+					} else {
+						status = "- Active";
+					}
+					$('#activity').text(status);
+					// Populate Activity Table
+                    var activityHtml = ``;
+					var isempty = true;
+                    $.each(data.activity, function(key, details) {
+                        activityHtml += `
+                            <tr>
+                                <td>${details}</td>
+                            </tr>
+                        `;
+						isempty = false;
+                    });
+					if(isempty == true) {
+						var activityHtml = `<tr><td>&nbsp;</td></tr>`;
+					}
+                    $('#activityTable').html(activityHtml);
+                });
+            }
+            // Fetch data and update immediately
+            fetchDataAndUpdateDVR();
+            // Set interval to fetch data every 1 seconds (1000 milliseconds)
+            setInterval(fetchDataAndUpdateDVR, 3000);
+        });
+    </script>
+</body>
+</html>

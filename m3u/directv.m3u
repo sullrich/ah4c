@@ -1,0 +1,37 @@
+#EXTM3U
+#EXTINF:-1 channel-id="8" tvc-guide-stationid="25102",KAET PBS 8
+http://{{ .IPADDRESS }}:7654/play/tuner/8
+#EXTINF:-1 channel-id="10" tvc-guide-stationid="21209",KSAZ FOX 10
+http://{{ .IPADDRESS }}:7654/play/tuner/10
+#EXTINF:-1 channel-id="12" tvc-guide-stationid="20507",KPNX NBC 12
+http://{{ .IPADDRESS }}:7654/play/tuner/12
+#EXTINF:-1 channel-id="212" tvc-guide-stationid="45399",NFL Network HD
+http://{{ .IPADDRESS }}:7654/play/tuner/212
+#EXTINF:-1 channel-id="216" tvc-guide-stationid="45526",NBA TV HD
+http://{{ .IPADDRESS }}:7654/play/tuner/216
+#EXTINF:-1 channel-id="217" tvc-guide-stationid="60316",Tennis Channel HD
+http://{{ .IPADDRESS }}:7654/play/tuner/217
+#EXTINF:-1 channel-id="219" tvc-guide-stationid="82547",FOX Sports 1 HD
+http://{{ .IPADDRESS }}:7654/play/tuner/219
+#EXTINF:-1 channel-id="241" tvc-guide-stationid="59186",Paramount Network HD
+http://{{ .IPADDRESS }}:7654/play/tuner/241
+#EXTINF:-1 channel-id="242" tvc-guide-stationid="58452",USA Network HD
+http://{{ .IPADDRESS }}:7654/play/tuner/242
+#EXTINF:-1 channel-id="501" tvc-guide-stationid="19548",HBO HD East
+http://{{ .IPADDRESS }}:7654/play/tuner/501
+#EXTINF:-1 channel-id="502" tvc-guide-stationid="59368",HBO2 HD East
+http://{{ .IPADDRESS }}:7654/play/tuner/502
+#EXTINF:-1 channel-id="503" tvc-guide-stationid="59363",HBO Signature HD East
+http://{{ .IPADDRESS }}:7654/play/tuner/503
+#EXTINF:-1 channel-id="504" tvc-guide-stationid="19566",HBO West HD
+http://{{ .IPADDRESS }}:7654/play/tuner/504
+#EXTINF:-1 channel-id="505" tvc-guide-stationid="59368",HBO2 West HD
+http://{{ .IPADDRESS }}:7654/play/tuner/505
+#EXTINF:-1 channel-id="506" tvc-guide-stationid="59839",HBO Comedy HD
+http://{{ .IPADDRESS }}:7654/play/tuner/506
+#EXTINF:-1 channel-id="507" tvc-guide-stationid="59357",HBO Family East HD
+http://{{ .IPADDRESS }}:7654/play/tuner/507
+#EXTINF:-1 channel-id="509" tvc-guide-stationid="59845",HBO Zone HD
+http://{{ .IPADDRESS }}:7654/play/tuner/509
+#EXTINF:-1 channel-id="618" tvc-guide-stationid="59305",FOX Sports 2 HD
+http://{{ .IPADDRESS }}:7654/play/tuner/618
