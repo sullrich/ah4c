@@ -33,7 +33,6 @@ TUNERIP="$1"
 function is_ip_address() {
     local ip_port=$1
     local ip=${ip_port%:*}  # If a port is included, this removes it
-
     # If IP address is valid
     if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         IFS='.' read -ra ip_parts <<< "$ip"
