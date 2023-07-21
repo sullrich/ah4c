@@ -16,7 +16,7 @@
 13. Custom script support - drop in your scripts and set STREAMER_APP env variable to match dir location
 14. Web graphs of cpu, mem, gpu (nvidia)
 15. Tee support (sending feed to a secondary target)
-16. Application based tuning! Just sent the feed to stdout
+16. Application based tuning! Just send the feed to stdout
 99. ... and more to come!
 
 #### Docker Instructions
