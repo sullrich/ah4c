@@ -1,6 +1,3 @@
-![example workflow](https://github.com/sullrich/androidhdmi-for-channels/actions/workflows/go.yml/badge.svg)
-![Discord](https://img.shields.io/discord/832433862884982885?color=7289da&label=discord&style=plastic)
-
 ### This is a fork of https://github.com/tmm1/androidhdmi-for-channels with these features:
 
 0. ENV variable support
