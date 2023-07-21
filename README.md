@@ -14,6 +14,8 @@
 11. Logging endpoint /logs for moments you do not have access to console with dynamic refresh!
 12. Webhook support on failure use $reason variable in URL.
 13. Custom script support - drop in your scripts and set STREAMER_APP env variable to match dir location
+14. Web graphs of cpu, mem, gpu (nvidia)
+15. Tee support (sending feed to a secondary target)
 99. ... and more to come!
 
 #### Docker Instructions
