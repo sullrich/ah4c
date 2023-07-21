@@ -21,6 +21,22 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
+echo "$1" > /tmp/temp.txt
+echo "$2" >> /tmp/temp.txt
+echo "$3" >> /tmp/temp.txt
+
+STATION="$1"
+TUNERIP="$2"
+content_file="hulu_contentid.txt"
+content_id=""
+URL=""
+PROVIDER=""
+status="notplaying"
+
+declare -i counter=0
+declare -i failsafe=0
+declare -i giveup=0
+
 function finish {
 	date
 	rm -f /tmp/$TUNERIP.lock
@@ -58,19 +74,11 @@ function find_provider() {
 	echo $EXE
 }
 
-echo "$1" > /tmp/temp.txt
-echo "$2" >> /tmp/temp.txt
-echo "$3" >> /tmp/temp.txt
-
-STATION="$1"
-TUNERIP="$2"
-content_file="hulu_contentid.txt"
-
 date
 echo "bmitune.sh is starting for $STATION $TUNERIP"
 echo "$STATION" > /tmp/$TUNERIP.playing
 
-rmlock() {
+function rmlock() {
 	rm -f /tmp/$TUNERIP.lock
 }
 
@@ -78,10 +86,30 @@ function finish {
 	rmlock
 }
 
+function tunein() {
+	if [ "$PROVIDER" = "hulu" ]; then
+		echo ">>> Sending media intent for $content_id"
+		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
+		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
+	fi
+	if [ "$PROVIDER" = "youtube" ]; then
+		echo ">>> Sending media intent for $content_id"
+		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$content_id&t=1s"
+	fi
+	if [ "$PROVIDER" = "weatherscan" ]; then
+		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$content_id"
+		exit
+	fi
+	if [ "$PROVIDER" = "www" ]; then
+		URL=$(echo "$content_id" | tr '\\' '/')
+		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
+		exit
+	fi
+}
+
 trap finish EXIT
 
-adb_connect() {
-	#adb -s $TUNERIP disconnect
+function adb_connect() {
 	echo ">>> Connecting ADB to $TUNERIP"
 	local -i adbcounter=0
 	while true; do
@@ -125,13 +153,13 @@ elif [ $(echo "$STATION" | grep "tunein" | wc -l) -gt 0 ]; then
     exit 0
 else
     PROVIDER="hulu"
-    # Read content_id from file
     if [ -f "$content_file" ]; then
-        content_id=$(grep -w "^$1" "$content_file" | cut -d " " -f 2)
+		content_id=$(echo "$STATION" | awk -F '__' '{print $2}')
     fi    
 fi
 
 echo "$PROVIDER" > /tmp/$TUNERIP.provider
+echo "$content_id" > /tmp/$TUNERIP.contentid
 
 # Check if content_id is empty
 if [ -z "$content_id" ]; then
@@ -140,32 +168,8 @@ if [ -z "$content_id" ]; then
 	exit 1
 fi
 
-if [ "$PROVIDER" = "hulu" ]; then
-	echo ">>> Sending media intent for $content_id"
-	echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
-	adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
-fi
+tunein
 
-if [ "$PROVIDER" = "youtube" ]; then
-	echo ">>> Sending media intent for $content_id"
-	adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$content_id&t=1s"
-fi
-
-if [ "$PROVIDER" = "weatherscan" ]; then
-	adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$content_id"
-	exit
-fi
-
-if [ "$PROVIDER" = "www" ]; then
-	URL=$(echo "$content_id" | tr '\\' '/')
-	adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
-	exit
-fi
-
-declare -i counter=0
-declare -i failsafe=0
-declare -i giveup=0
-status="notplaying"
 /bin/echo -n ">>> Waiting for stream to start..."
 while [ "$status" == "notplaying" ]; do
 	sleep 1
@@ -176,11 +180,14 @@ while [ "$status" == "notplaying" ]; do
 		echo ">>> Stream $content_id has started."
 	else
 		/bin/echo -n "."
-		if ((counter > 40)); then
+		if ((counter > 30)); then
 			((failsafe++))
+			PID=$(adb -s $TUNERIP shell ps | grep hulu | awk '{ print $2 }')
 			/bin/echo ""
-			/bin/echo ">>> Stream timeout.  Sending intent again ($failsafe)." 
-			adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d https://www.hulu.com/watch/$content_id
+			/bin/echo ">>> Stream timeout.  Killing PID $PID & Sending intent again ($failsafe) "
+			RESULT=$(adb -s $TUNERIP kill $PID)
+			sleep 1
+			tunein
 			counter=0
 		fi
 		if ((failsafe > 3)); then

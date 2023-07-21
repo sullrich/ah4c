@@ -34,8 +34,6 @@ echo "prebmitune.sh is starting for $TUNERIP"
 
 touch /tmp/$TUNERIP.lock
 
-#killall adb
-
 adb -s $TUNERIP shell pm trim-caches 9999999999
 
 function connect_adb() {

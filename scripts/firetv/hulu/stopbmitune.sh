@@ -79,15 +79,3 @@ is_running youtube && adb -s $ENCODERIP shell am force-stop $YOUTUBE
 
 adb -s $ENCODERIP shell input keyevent KEYCODE_HOME
 
-if [ "$PROVIDER" = "hulu" ]; then
-	echo "Starting hulu $HULU"
-	adb -s $ENCODERIP shell monkey -p $HULU -c android.intent.category.LAUNCHER 1
-	echo adb -s $ENCODERIP shell monkey -p $HULU -c android.intent.category.LAUNCHER 1
-fi
-
-if [ "$PROVIDER" = "youtube" ]; then
-	echo "Starting youtube $YOUTUBE"
-	echo adb -s $ENCODERIP shell monkey -p $YOUTUBE -c android.intent.category.LAUNCHER 1
-	adb -s $ENCODERIP shell monkey -p $YOUTUBE -c android.intent.category.LAUNCHER 1
-fi
-

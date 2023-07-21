@@ -41,7 +41,7 @@ function is_ip_address() {
     fi
 }
 
-adb_connect() {
+function adb_connect() {
 	local -i adbcounter=0
 	while true; do
 		adbstatus=$(adb connect $TUNERIP)
