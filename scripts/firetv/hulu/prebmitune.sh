@@ -23,60 +23,31 @@
 
 TUNERIP="$1"
 
+date
+echo ">>> prebmitune.sh is starting for $TUNERIP"
+
+. ./scripts/firetv/hulu/common_functions.sh
+
 function finish {
 	date
 }
 
 trap finish EXIT
 
-date
-echo "prebmitune.sh is starting for $TUNERIP"
-
 touch /tmp/$TUNERIP.lock
 
 adb -s $TUNERIP shell pm trim-caches 9999999999
 
-function connect_adb() {
-	echo ">>> Connecting to adb $TUNERIP"
-	adb connect $TUNERIP
-}
-
-function is_ip_address() {
-    local ip_port=$1
-    local ip=${ip_port%:*}  # If a port is included, this removes it
-    # If IP address is valid
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        IFS='.' read -ra ip_parts <<< "$ip"
-        for i in "${ip_parts[@]}"; do
-            # If IP address octet is less than 0 or greater than 255
-            if ((i < 0 || i > 255)); then
-                return 1
-            fi
-        done
-        return 0  # IP address is valid
-    else
-        return 1  # IP address is invalid
-    fi
-}
-
-if is_ip_address $TUNERIP; then
-    connect_adb
-else
-    echo "Invalid IP address"
-fi
+is_ip_address $TUNERIP && adb_connect
 
 # Wake up
 adb -s $TUNERIP shell input keyevent 224
 
-#adb -s $TUNERIP shell am force-stop com.google.android.youtube.tv
-
-#adb -s $TUNERIP shell am force-stop com.hulu.plus
-
-#adb -s $TUNERIP shell am force-stop com.hulu.livingroomplus
+killtunein
 
 # Back
-#adb -s $TUNERIP shell input keyevent 4
+adb -s $TUNERIP shell input keyevent 4
 
 # Home
-#adb -s $TUNERIP shell input keyevent 3
+adb -s $TUNERIP shell input keyevent 3
 

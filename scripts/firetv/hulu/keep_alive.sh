@@ -21,39 +21,6 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
-if [ -f '../../../env' ]; then
-	source ../../../env
-	# Read each line in the file
-	while IFS= read -r line; do
-		# Check if the line contains a variable assignment
-		if [[ $line == *=* ]]; then
-			# Export the variable
-			varName="${line%%=*}"
-			export "$varName"
-		fi
-	done < ../../../env
-else
-	echo "Warning: could not locate ../../../env.  Docker users can ignore this warning."
-fi
-
-function is_ip_address() {
-    local ip_port=$1
-    local ip=${ip_port%:*}  # If a port is included, this removes it
-    # If IP address is valid
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        IFS='.' read -ra ip_parts <<< "$ip"
-        for i in "${ip_parts[@]}"; do
-            # If IP address octet is less than 0 or greater than 255
-            if ((i < 0 || i > 255)); then
-                return 1
-            fi
-        done
-        return 0  # IP address is valid
-    else
-        return 1  # IP address is invalid
-    fi
-}
-
 function finish {
 	date
 	echo "keep_alive.sh is exiting."
@@ -71,6 +38,8 @@ declare -a tunerArray
 # Get the number of tuners
 numTuners=$NUMBER_TUNERS
 
+. ./scripts/firetv/hulu/common_functions.sh
+
 # Loop through the tuner environment variables
 for i in $(seq 1 $numTuners); do
 	# Use indirect variable reference to access the environment variable
@@ -84,67 +53,6 @@ if [ "$i" -lt 1 ]; then
 	echo "Could not find ENV variables describing tuners."
 	exit 1
 fi
-
-updatefailcounter() {
-	echo "$2" > /tmp/$1.failcounter
-}
-
-getfailcounter() {
-	failcounter=$(cat /tmp/$1.failcounter)
-}
-
-check() {
-	IPADDR="$1"
-	if [ -f /tmp/$IPADDR.lock ]; then 
-		return
-	fi
-	if [ ! -f /tmp/$IPADDR.playing ]; then
-		return
-	fi
-	if [ $(cat /tmp/$IPADDR.playing) == "weatherscan" ]; then
-		return
-	fi
-	status=$(./isconnected.sh $IPADDR)
-	if [ "$status" == "true" ]; then
-		failcounter=0
-		updatefailcounter $IPADDR $failcounter
-		return
-	else
-		getfailcounter $IPADDR
-		((failcounter++))
-		updatefailcounter $IPADDR $failcounter
-		if ((failcounter > 3)); then
-			is_ip_address $IPADDR && adb connect $IPADDR
-			adb -s $IPADDR shell dumpsys appops --op TOAST_WINDOW > /tmp/fail.$IPADDR.txt
-			failcounter=1
-			updatefailcounter $IPADDR $failcounter
-			rm /tmp/$IPADDR*.*
-			#adb -s $IPADDR disconnect
-			echo "!!! Giving up trying to stream $IPADDR."
-			return
-		fi	
-		station=$(cat /tmp/$IPADDR.playing)
-		echo "!!! Performing rescue of $IPADDR $station"
-		./bmitune.sh "$station" "$IPADDR"
-	fi
-}
-
-rebootall(){
-	echo "Rebooting devices..."
-	for ip in $tunerArray; do 
-		adb connect $ip
-		adb -s $ip shell reboot
-	done
-	killall adb
-	sleep 60
-}
-
-keepalive(){
-	ip="$1"
-	is_ip_address $ip && adb connect $ip
-	adb -s $ip shell input keyevent 25
-	adb -s $ip shell input keyevent 24
-}
 
 while [ /bin/true ]; do
 	echo ""

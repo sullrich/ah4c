@@ -21,21 +21,33 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
-echo "$1" > /tmp/temp.txt
+echo "$1"  > /tmp/temp.txt
 echo "$2" >> /tmp/temp.txt
 echo "$3" >> /tmp/temp.txt
 
 STATION="$1"
 TUNERIP="$2"
-content_file="hulu_contentid.txt"
-content_id=""
+CONTENT_FILE="hulu_contentid.txt"
+CONTENT_ID=""
 URL=""
 PROVIDER=""
-status="notplaying"
+STATUS="notplaying"
+ADBSTATUS=""
+PID=""
+RESULT=""
+EXE=""
+ISPKG=""
+WHICH_PROVIDER=""
 
-declare -i counter=0
-declare -i failsafe=0
-declare -i giveup=0
+declare -i COUNTER=0
+declare -i FAILSAFE=0
+declare -i GIVEUP=0
+declare -i REBOOTCOUNTER=0
+declare -i ADBCOUNTER=0
+declare -i MS=0
+
+date
+echo ">>> bmitune.sh is starting for $STATION $TUNERIP"
 
 function finish {
 	date
@@ -45,176 +57,101 @@ function finish {
 
 trap finish EXIT
 
-function is_ip_address() {
-    local ip_port=$1
-    local ip=${ip_port%:*}  # If a port is included, this removes it
-    # If IP address is valid
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        IFS='.' read -ra ip_parts <<< "$ip"
-        for i in "${ip_parts[@]}"; do
-            # If IP address octet is less than 0 or greater than 255
-            if ((i < 0 || i > 255)); then
-                return 1
-            fi
-        done
-        return 0  # IP address is valid
-    else
-        return 1  # IP address is invalid
-    fi
-}
+. ./scripts/firetv/hulu/common_functions.sh
 
-function find_provider() {
-	WHICH_PROVIDER=$(adb -s $ENCODERIP shell pm list package | grep "$1" | grep -v music )
-	ISPKG=$(echo "$WHICH_PROVIDER" | grep "package:" | wc -l)
-	if [ "$ISPKG" -gt 0 ]; then
-		EXE=$(echo "$WHICH_PROVIDER" | cut -d':' -f2)
-	else
-		EXE=$(echo "$WHICH_PROVIDER")
-	fi
-	echo $EXE
-}
-
-date
-echo "bmitune.sh is starting for $STATION $TUNERIP"
 echo "$STATION" > /tmp/$TUNERIP.playing
-
-function rmlock() {
-	rm -f /tmp/$TUNERIP.lock
-}
-
-function finish {
-	rmlock
-}
-
-function tunein() {
-	if [ "$PROVIDER" = "hulu" ]; then
-		echo ">>> Sending media intent for $content_id"
-		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
-		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$content_id"
-	fi
-	if [ "$PROVIDER" = "youtube" ]; then
-		echo ">>> Sending media intent for $content_id"
-		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$content_id&t=1s"
-	fi
-	if [ "$PROVIDER" = "weatherscan" ]; then
-		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$content_id"
-		exit
-	fi
-	if [ "$PROVIDER" = "www" ]; then
-		URL=$(echo "$content_id" | tr '\\' '/')
-		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
-		exit
-	fi
-}
-
-trap finish EXIT
-
-function adb_connect() {
-	echo ">>> Connecting ADB to $TUNERIP"
-	local -i adbcounter=0
-	while true; do
-		adbstatus=$(adb connect $TUNERIP)
-		if [[ $adbstatus == *"connected"* ]]; then
-			break
-		fi
-		if [[ $adbstatus == "adb: device offline" ]]; then
-			echo "!!! Error with adb"
-			rm -f /tmp/$TUNERIP.lock
-			exit 1
-		fi		
-		if ((adbcounter > 25)); then
-			echo "!!! Could not connect via ADB to $TUNERIP"
-			rm -f /tmp/$TUNERIP.lock
-			exit 1
-		fi
-		sleep 1
-		((adbcounter++))
-	done
-}
 
 is_ip_address $TUNERIP && adb_connect
 
-content_id=""
-
 if [ $(echo "$STATION" | grep "youtube__" | wc -l) -gt 0 ]; then
-    content_id=$(echo "$STATION" | awk -F '__' '{print $2}')
+    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
     PROVIDER="youtube"
 elif [ $(echo "$STATION" | grep "hulu__" | wc -l) -gt 0 ]; then
-    content_id=$(echo "$STATION" | awk -F '__' '{print $2}')
+    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
     PROVIDER="hulu"
 elif [ $(echo "$STATION" | grep "www" | wc -l) -gt 0 ]; then
-    content_id=$(echo "$STATION" | awk -F '__' '{print $2}')
+    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
     PROVIDER="www"
 elif [ $(echo "$STATION" | grep "weatherscan" | wc -l) -gt 0 ]; then
-    content_id="http://weatherscan.net"
+    CONTENT_ID="http://weatherscan.net"
     PROVIDER="weatherscan"
 elif [ $(echo "$STATION" | grep "tunein" | wc -l) -gt 0 ]; then
     # Simply tune into device and do not run any apps
     exit 0
 else
     PROVIDER="hulu"
-    if [ -f "$content_file" ]; then
-		content_id=$(echo "$STATION" | awk -F '__' '{print $2}')
+    if [ -f "$CONTENT_FILE" ]; then
+		CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
     fi    
 fi
 
 echo "$PROVIDER" > /tmp/$TUNERIP.provider
-echo "$content_id" > /tmp/$TUNERIP.contentid
+echo "$CONTENT_ID" > /tmp/$TUNERIP.contentid
 
-# Check if content_id is empty
-if [ -z "$content_id" ]; then
-	echo "Invalid option or content_id not found in $content_file"
-	rm -f /tmp/$TUNERIP.lock
+# Check if CONTENT_ID is empty
+if [ -z "$CONTENT_ID" ]; then
+	echo "!!! Invalid option or CONTENT_ID not found in $CONTENT_FILE"
+	rm -f /tmp/$TUNERIP.*
 	exit 1
+fi
+
+if [ "$PROVIDER" = "HULU" ]; then 
+	HULU=$(find_provider hulu)
+	adb -s $TUNERIP shell monkey -p $HULU 1
+	sleep 7
+fi
+if [ "$PROVIDER" = "YOUTUBE" ]; then 
+	YOUTUBE=$(find_provider youtube)
+	adb -s $TUNERIP shell monkey -p $YOUTUBE 1	
+	sleep 7
 fi
 
 tunein
 
 /bin/echo -n ">>> Waiting for stream to start..."
-while [ "$status" == "notplaying" ]; do
+while [ "$STATUS" == "notplaying" ]; do
 	sleep 1
-	ms=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
-	if ((ms > 0)); then
-		status="playing"
+	MS=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
+	if ((MS > 0)); then
+		STATUS="playing"
 		echo ""
-		echo ">>> Stream $content_id has started."
+		echo ">>> Stream $CONTENT_ID has started."
 	else
 		/bin/echo -n "."
-		if ((counter > 30)); then
-			((failsafe++))
-			PID=$(adb -s $TUNERIP shell ps | grep hulu | awk '{ print $2 }')
+		if ((COUNTER > 30)); then
+			((FAILSAFE++))
 			/bin/echo ""
-			/bin/echo ">>> Stream timeout.  Killing PID $PID & Sending intent again ($failsafe) "
-			RESULT=$(adb -s $TUNERIP kill $PID)
+			/bin/echo ">>> Stream timeout.  Killing PID $PID & Sending intent again ($FAILSAFE) "
+			killtunein
 			sleep 1
 			tunein
-			counter=0
+			COUNTER=0
 		fi
-		if ((failsafe > 3)); then
+		if ((FAILSAFE > 3)); then
 			/bin/echo ""
-			/bin/echo "!!! Could not stream $content_id on $TUNERIP."
+			/bin/echo "!!! Could not stream $CONTENT_ID on $TUNERIP."
 			/bin/echo -n "!!! Issuing reboot for $TUNERIP."
 			adb -s $TUNERIP shell reboot
-			declare -i rebootcounter=0
+			REBOOTCOUNTER=0
 			while true; do
-				if ((rebootcounter > 35)); then
+				if ((REBOOTCOUNTER > 35)); then
 					echo
 					break
 				fi
 				/bin/echo -n "."
-				((rebootcounter++))
+				((REBOOTCOUNTER++))
 				sleep 3
 			done
 			adb_connect
-			declare -i counter=0
-			declare -i failsafe=0
-			((giveup++))
+			COUNTER=0
+			FAILSAFE=0
+			((GIVEUP++))
 		fi
-		if ((giveup > 2)); then
+		if ((GIVEUP > 2)); then
 			/bin/echo -n ">>> Cannot stream after rebooting $TUNERIP Android device. Giving up." 
 			rm -f /tmp/$TUNERIP.lock
 			exit 1
 		fi
-		((counter++))
+		((COUNTER++))
 	fi
 done
