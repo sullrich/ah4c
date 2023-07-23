@@ -86,19 +86,26 @@ function is_running() {
 	fi
 }
 
-function tunein() {
+function start_provider() {
 	if [ "$PROVIDER" = "hulu" ]; then
 		HULU=$(find_provider hulu)
 		adb shell monkey -p $HULU 1
 		sleep 10
-		echo ">>> Sending media intent for $CONTENT_ID"
-		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
-		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		YOUTUBE=$(find_provider youtube)
 		adb shell monkey -p $YOUTUBE 1
 		sleep 10
+	fi
+}
+
+function tunein() {
+	if [ "$PROVIDER" = "hulu" ]; then
+		echo ">>> Sending media intent for $CONTENT_ID"
+		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
+		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
+	fi
+	if [ "$PROVIDER" = "youtube" ]; then
 		echo ">>> Sending media intent for $CONTENT_ID"
 		echo adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"

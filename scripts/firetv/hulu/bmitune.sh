@@ -95,17 +95,21 @@ if [ -z "$CONTENT_ID" ]; then
 	exit 1
 fi
 
-if [ "$PROVIDER" = "HULU" ]; then 
+if [ "$PROVIDER" = "hulu" ]; then 
 	HULU=$(find_provider hulu)
 	adb -s $TUNERIP shell monkey -p $HULU 1
 	sleep 7
 fi
-if [ "$PROVIDER" = "YOUTUBE" ]; then 
+if [ "$PROVIDER" = "youtube" ]; then 
 	YOUTUBE=$(find_provider youtube)
 	adb -s $TUNERIP shell monkey -p $YOUTUBE 1	
 	sleep 7
 fi
 
+# Start Youtube or Hulu
+start_provider
+
+# Send media intent URL
 tunein
 
 /bin/echo -n ">>> Waiting for stream to start..."
