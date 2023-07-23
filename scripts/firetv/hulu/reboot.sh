@@ -22,7 +22,7 @@
 #
 
 function finish {
-	date
+	logger "reboot.sh is now exiting"
 }
 
 trap finish EXIT

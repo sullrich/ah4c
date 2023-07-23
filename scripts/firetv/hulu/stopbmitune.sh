@@ -25,8 +25,7 @@ TUNERIP="$1"
 PROVIDER=$(cat /tmp/$TUNERIP.provider)
 EXE=""
 
-date
-echo ">>> stopbmitune.sh is starting for $TUNERIP"
+logger "[STOPPING] stopbmitune.sh is starting for $TUNERIP"
 
 function finish {
 	rm -f /tmp/$TUNERIP.*

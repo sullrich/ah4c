@@ -46,13 +46,11 @@ declare -i REBOOTCOUNTER=0
 declare -i ADBCOUNTER=0
 declare -i MS=0
 
-date
-echo ">>> bmitune.sh is starting for $STATION $TUNERIP"
+logger "[STARTING] bmitune.sh $STATION $TUNERIP"
 
 function finish {
-	date
 	rm -f /tmp/$TUNERIP.lock
-	echo "bmitune.sh is ending for $TUNERIP"
+	logger "[FINISH] bmitune.sh is ending for $TUNERIP"
 }
 
 trap finish EXIT
@@ -65,7 +63,7 @@ setup_provider
 
 # Check if CONTENT_ID is empty
 if [ -z "$CONTENT_ID" ]; then
-	echo "!!! Invalid option or CONTENT_ID not found in $CONTENT_FILE"
+	logger "[ERROR] Invalid option or CONTENT_ID not found in $CONTENT_FILE"
 	rm -f /tmp/$TUNERIP.*
 	exit 1
 fi
@@ -76,19 +74,19 @@ start_provider
 # Send media intent URL
 tunein
 
-/bin/echo -n ">>> Waiting for stream to start..."
+/bin/echo -n "[WAITING] for stream to start..."
 while [ "$STATUS" == "notplaying" ]; do
 	sleep 1
 	if is_media_playing; then
 		STATUS="playing"
-		echo ""
-		echo ">>> Stream $CONTENT_ID has started."
+		/bin/echo ""
+		logger "[SUCCESS] Stream $CONTENT_ID has started."
 	else
 		/bin/echo -n "."
 		if ((COUNTER > 30)); then
 			((FAILSAFE++))
 			/bin/echo ""
-			/bin/echo ">>> Stream timeout.  Killing PID $PID & Sending intent again ($FAILSAFE) "
+			logger "[TIMEOUT] Stream timeout.  Killing PID $PID & Sending intent again ($FAILSAFE) "
 			stop_provider
 			sleep 1
 			start_provider
@@ -98,13 +96,13 @@ while [ "$STATUS" == "notplaying" ]; do
 		fi
 		if ((FAILSAFE > 3)); then
 			/bin/echo ""
-			/bin/echo "!!! Could not stream $CONTENT_ID on $TUNERIP."
-			/bin/echo -n "!!! Issuing reboot for $TUNERIP."
+			logger "[ERROR] Could not stream $CONTENT_ID on $TUNERIP."
+			/bin/echo -n "[REBOOT] Issuing reboot for $TUNERIP."
 			adb -s $TUNERIP shell reboot
 			REBOOTCOUNTER=0
 			while true; do
 				if ((REBOOTCOUNTER > 35)); then
-					echo
+					/bin/echo ""
 					break
 				fi
 				/bin/echo -n "."
@@ -117,7 +115,7 @@ while [ "$STATUS" == "notplaying" ]; do
 			((GIVEUP++))
 		fi
 		if ((GIVEUP > 2)); then
-			/bin/echo -n ">>> Cannot stream after rebooting $TUNERIP Android device. Giving up." 
+			logger "[FAIL] Cannot stream after rebooting $TUNERIP Android device. Giving up." 
 			rm /tmp/$TUNERIP.*
 			exit 1
 		fi

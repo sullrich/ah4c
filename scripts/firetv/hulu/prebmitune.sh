@@ -23,8 +23,7 @@
 
 TUNERIP="$1"
 
-date
-echo ">>> prebmitune.sh is starting for $TUNERIP"
+logger ">>> prebmitune.sh is starting for $TUNERIP"
 
 . ./scripts/firetv/hulu/common_functions.sh
 

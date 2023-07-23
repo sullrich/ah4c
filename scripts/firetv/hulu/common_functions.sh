@@ -21,8 +21,13 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
+function logger() {
+	DATE=$(date +"%Y-%d-%m %T")
+	echo "$DATE $@"
+}
+
 DIR=$(pwd)
-echo "Current PWD is $DIR"
+logger "[PWD] Current PWD is $DIR"
 
 if [ -f './env' ]; then
 	source ./env
@@ -36,7 +41,7 @@ if [ -f './env' ]; then
 		fi
 	done < ./env
 else
-	echo "!!! Warning: could not locate ./env.  Docker users can ignore this warning."
+	logger "[WARNING] Could not locate ./env.  Docker users can ignore this warning."
 fi
 
 function setup_provider() {
@@ -116,13 +121,13 @@ function is_running() {
 function start_provider() {
 	if [ "$PROVIDER" = "hulu" ]; then
 		HULU=$(find_provider hulu)
-		echo "Stopping $HULU"
+		logger "[STOPPING] $HULU"
 		adb shell monkey -p $HULU 1
 		sleep 10
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		YOUTUBE=$(find_provider youtube)
-		echo "Stopping $YOUTUBE"
+		logger "[STOPPING] $YOUTUBE"
 		adb shell monkey -p $YOUTUBE 1
 		sleep 10
 	fi
@@ -137,32 +142,32 @@ function stop_provider() {
 
 function tunein() {
 	if [ "$PROVIDER" = "hulu" ]; then
-		echo ">>> Sending media intent for $CONTENT_ID"
-		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
+		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
+		logger adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
-		echo ">>> Sending media intent for $CONTENT_ID"
-		echo adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
+		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
+		logger adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 	fi
 	if [ "$PROVIDER" = "weatherscan" ]; then
-		echo ">>> Sending media intent for $CONTENT_ID"
-		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$CONTENT_ID"
+		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
+		logger adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$CONTENT_ID"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$CONTENT_ID"
 		exit 0
 	fi
 	if [ "$PROVIDER" = "www" ]; then
-		echo ">>> Sending media intent for $CONTENT_ID"
+		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
 		URL=$(echo "$CONTENT_ID" | tr '\\' '/')
-		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
+		logger adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
 		exit 0
 	fi
 }
 
 function adb_connect() {
-	echo ">>> Connecting ADB to $TUNERIP"
+	logger "[CONNECTING] ADB to $TUNERIP"
 	local -i ADBCOUNTER=0
 	while true; do
 		ADBSTATUS=$(adb connect $TUNERIP)
@@ -170,12 +175,12 @@ function adb_connect() {
 			break
 		fi
 		if [[ $ADBSTATUS == "adb: device offline" ]]; then
-			echo "!!! Error with adb"
+			logger "!!! Error with adb"
 			rm -f /tmp/$TUNERIP.lock
 			exit 1
 		fi		
 		if ((ADBCOUNTER > 25)); then
-			echo "!!! Could not connect via ADB to $TUNERIP"
+			logger "!!! Could not connect via ADB to $TUNERIP"
 			rm -f /tmp/$TUNERIP.lock
 			exit 1
 		fi
@@ -230,17 +235,17 @@ check() {
 			failcounter=1
 			updatefailcounter $IPADDR $failcounter
 			rm /tmp/$IPADDR.*
-			echo "!!! Giving up trying to stream $IPADDR."
+			logger "[FAIL] Giving up trying to stream $IPADDR."
 			return
 		fi	
 		station=$(cat /tmp/$IPADDR.playing)
-		echo "!!! Performing rescue of $IPADDR $station"
+		logger "[ERROR] Performing rescue of $IPADDR $station"
 		./$STREAMER_APP/bmitune.sh "$station" "$IPADDR"
 	fi
 }
 
 rebootall(){
-	echo "Rebooting devices..."
+	logger "[INFO] Rebooting devices..."
 	for ip in $tunerArray; do 
 		adb connect $ip
 		adb -s $ip shell reboot
