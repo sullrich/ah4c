@@ -126,17 +126,6 @@ function tunein() {
 }
 
 function killtunein() {
-	if [ $(echo "$STATION" | grep "youtube__" | wc -l) -gt 0 ]; then
-		PID=$(adb -s $TUNERIP shell ps | grep youtube | awk '{ print $2 }')
-	elif [ $(echo "$STATION" | grep "hulu__" | wc -l) -gt 0 ]; then
-		PID=$(adb -s $TUNERIP shell ps | grep hulu | awk '{ print $2 }')
-	else
-		PID=$(adb -s $TUNERIP shell ps | grep hulu | awk '{ print $2 }')
-	fi
-	if [ "$PID" != "" ]; then
-		echo ">>> Killing process $PID for $STATION"
-		RESULT=$(adb -s $TUNERIP shell kill $PID)
-	fi
 	HULU=$(find_provider hulu)
 	YOUTUBE=$(find_provider youtube)
 	is_running hulu && adb -s $TUNERIP shell am force-stop $HULU
