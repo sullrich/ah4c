@@ -21,8 +21,11 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
-if [ -f '../../../env' ]; then
-	source ../../../env
+DIR=$(pwd)
+echo "Current PWD is $DIR"
+
+if [ -f './env' ]; then
+	source ./env
 	# Read each line in the file
 	while IFS= read -r line; do
 		# Check if the line contains a variable assignment
@@ -31,7 +34,7 @@ if [ -f '../../../env' ]; then
 			varName="${line%%=*}"
 			export "$varName"
 		fi
-	done < ../../../env
+	done < ./env
 else
 	echo "!!! Warning: could not locate ../../../env.  Docker users can ignore this warning."
 fi
@@ -85,11 +88,17 @@ function is_running() {
 
 function tunein() {
 	if [ "$PROVIDER" = "hulu" ]; then
+		HULU=$(find_provider hulu)
+		adb shell monkey -p $HULU 1
+		sleep 10
 		echo ">>> Sending media intent for $CONTENT_ID"
 		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.hulu.com/watch/$CONTENT_ID"
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
+		YOUTUBE=$(find_provider youtube)
+		adb shell monkey -p $YOUTUBE 1
+		sleep 10
 		echo ">>> Sending media intent for $CONTENT_ID"
 		echo adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
