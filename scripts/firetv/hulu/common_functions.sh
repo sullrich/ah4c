@@ -166,11 +166,20 @@ function adb_connect() {
 
 
 updatefailcounter() {
-	echo "$2" > /tmp/$1.failcounter
+	if [ ! -f /tmp/$1.failcounter ]; then
+		echo 1 > /tmp/$1.failcounter
+	else
+		echo "$2" > /tmp/$1.failcounter
+	fi
 }
 
 getfailcounter() {
-	failcounter=$(cat /tmp/$1.failcounter)
+	if [ ! -f /tmp/$1.failcounter ]; then 
+		echo 1 > /tmp/$1.failcounter
+		failcounter=1
+	else
+		failcounter=$(cat /tmp/$1.failcounter)
+	fi
 }
 
 check() {
