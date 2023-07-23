@@ -1,7 +1,9 @@
-### This is a fork of https://github.com/tmm1/androidhdmi-for-channels with these features:
+### Eye candy
 
 ![image](static/status_ss.png)
 (built in stats gui)
+
+### This is a fork of https://github.com/tmm1/androidhdmi-for-channels with these features:
 
 0. ENV variable support
 1. Standardize and improve script durability / reliability
