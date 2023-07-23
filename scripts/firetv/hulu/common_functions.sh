@@ -193,10 +193,10 @@ check() {
 	if [ $(cat /tmp/$IPADDR.playing) == "weatherscan" ]; then
 		return
 	fi
-	status=$(./$STREAMER_APP/isconnected.sh $IPADDR)
-	echo status=$(./$STREAMER_APP/isconnected.sh $IPADDR)
-	echo $status
-	if [ "$status" == "true" ]; then
+	if [ $(cat /tmp/$IPADDR.playing) == "www" ]; then
+		return
+	fi
+	if is_media_playing; then
 		failcounter=0
 		updatefailcounter $IPADDR $failcounter
 		return
