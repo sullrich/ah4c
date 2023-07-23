@@ -35,22 +35,27 @@
 				var shouldScroll = autoScroll && (logContentDiv.scrollTop() + logContentDiv.innerHeight() >= logContentDiv[0].scrollHeight);
 				// Array of search and replace items
 				var replaceItems = [
-					{search: 'Failure', replace: '<span style="color: red;">Failure</span>'},
-					{search: '404', replace: '<span style="color: red;">404</span>'},
-					{search: '200', replace: '<span style="color: green;">200</span>'},
+					{search: 'Failure', replace: '<span style="color: darkred;">Failure</span>'},
+					{search: '404', replace: '<span style="color: maroon;">404</span>'},
+					{search: '200', replace: '<span style="color: darkgreen;">200</span>'},
 					{search: '304', replace: '<span style="color: green;">304</span>'},
-					{search: 'started', replace: '<span style="color: green;">started</span>'},
-					{search: 'successfully', replace: '<span style="color: green;">successfully</span>'},
-					{search: 'ready', replace: '<span style="color: green;">ready</span>'},
-					{search: 'START', replace: '<span style="color: green;">START</span>'},
-					{search: 'SUCCESS', replace: '<span style="color: green;">SUCCESS</span>'},
-					{search: 'ENV', replace: '<span style="color: blue;">ENV</span>'},
+					{search: 'started', replace: '<span style="color: forestgreen;">started</span>'},
+					{search: 'successfully', replace: '<span style="color: mediumseagreen;">successfully</span>'},
+					{search: 'ready', replace: '<span style="color: limegreen;">ready</span>'},
+					{search: 'START', replace: '<span style="color: lime;">START</span>'},
+					{search: 'SUCCESS', replace: '<span style="color: mediumspringgreen;">SUCCESS</span>'},
+					{search: 'ENV', replace: '<span style="color: mediumblue;">ENV</span>'},
 					{search: 'ERROR', replace: '<span style="color: red;">ERROR</span>'},
-					{search: 'FAIL', replace: '<span style="color: red;">FAIL</span>'},
-					{search: 'WAITING', replace: '<span style="color: grey;">WAITING</span>'},
-					{search: 'WARNING', replace: '<span style="color: yellow;">WARNING</span>'},					
-					{search: 'GIN-debug', replace: '<span style="color: purple;">GIN-debug</span>'},
-					{search: 'waiting', replace: '<span style="color: yellow;">waiting</span>'}
+					{search: 'FAIL', replace: '<span style="color: brown;">FAIL</span>'},
+					{search: 'WAITING', replace: '<span style="color: gray;">WAITING</span>'},
+					{search: 'WARNING', replace: '<span style="color: darkorange;">WARNING</span>'},
+					{search: 'EXECUTE', replace: '<span style="color: teal;">EXECUTE</span>'},
+					{search: 'STOPPING', replace: '<span style="color: orange;">STOPPING</span>'},
+					{search: 'CONNECTING', replace: '<span style="color: darkcyan;">CONNECTING</span>'},
+					{search: 'TUNEIN', replace: '<span style="color: dodgerblue;">TUNEIN</span>'},
+					{search: 'STATS', replace: '<span style="color: steelblue;">STATS</span>'},
+					{search: 'GIN-debug', replace: '<span style="color: darkviolet;">GIN-debug</span>'},
+					{search: 'waiting', replace: '<span style="color: darkkhaki;">waiting</span>'}
 				];
 				// For each item in the array, replace in the data
 				replaceItems.forEach(function(item) {
@@ -76,7 +81,7 @@
 				autoScroll = $(this).scrollTop() + $(this).innerHeight() >= $(this)[0].scrollHeight;
 			});
 			fetchLogs();
-			setInterval(fetchLogs, 1000);  // fetch every 2 seconds
+			setInterval(fetchLogs, 1000);
 		});
 	</script>
 </body>
