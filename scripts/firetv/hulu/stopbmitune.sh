@@ -38,11 +38,7 @@ trap finish EXIT
 
 is_ip_address $TUNERIP && adb connect $TUNERIP
 
-HULU=$(find_provider hulu)
-YOUTUBE=$(find_provider youtube)
-
-is_running hulu && adb -s $TUNERIP shell am force-stop $HULU
-is_running youtube && adb -s $TUNERIP shell am force-stop $YOUTUBE
+stop_provider
 
 adb -s $TUNERIP shell input keyevent KEYCODE_HOME
 

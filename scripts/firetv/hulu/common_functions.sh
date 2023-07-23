@@ -42,9 +42,9 @@ fi
 function is_media_playing() {
 	ms=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
 	if ((ms > 0)); then
-		return 1
-	else
 		return 0
+	else
+		return 1
 	fi
 }
 
@@ -78,25 +78,34 @@ function find_provider() {
 }
 
 function is_running() {
-	RUNNING=$(adb -s $TUNERIP shell ps  | grep "$1" | awk '{ print $9 }' | wc -l)
+	RUNNING=$(adb -s $TUNERIP shell ps  | grep "$1" | wc -l)
 	if [ "$RUNNING" -gt 0 ]; then
-		return 1
-	else
 		return 0
+	else
+		return 1
 	fi
 }
 
 function start_provider() {
 	if [ "$PROVIDER" = "hulu" ]; then
 		HULU=$(find_provider hulu)
+		echo "Stopping $HULU"
 		adb shell monkey -p $HULU 1
 		sleep 10
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		YOUTUBE=$(find_provider youtube)
+		echo "Stopping $YOUTUBE"
 		adb shell monkey -p $YOUTUBE 1
 		sleep 10
 	fi
+}
+
+function stop_provider() {
+	HULU=$(find_provider hulu)
+	YOUTUBE=$(find_provider youtube)
+	is_running hulu && adb -s $TUNERIP shell am force-stop $HULU
+	is_running youtube && adb -s $TUNERIP shell am force-stop $YOUTUBE
 }
 
 function tunein() {
