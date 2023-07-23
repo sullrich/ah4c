@@ -36,8 +36,35 @@ if [ -f './env' ]; then
 		fi
 	done < ./env
 else
-	echo "!!! Warning: could not locate ../../../env.  Docker users can ignore this warning."
+	echo "!!! Warning: could not locate ./env.  Docker users can ignore this warning."
 fi
+
+function setup_provider() {
+	echo "$STATION" > /tmp/$TUNERIP.playing
+	if [ $(echo "$STATION" | grep "youtube__" | wc -l) -gt 0 ]; then
+	    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
+	    PROVIDER="youtube"
+	elif [ $(echo "$STATION" | grep "hulu__" | wc -l) -gt 0 ]; then
+	    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
+	    PROVIDER="hulu"
+	elif [ $(echo "$STATION" | grep "www" | wc -l) -gt 0 ]; then
+	    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
+	    PROVIDER="www"
+	elif [ $(echo "$STATION" | grep "weatherscan" | wc -l) -gt 0 ]; then
+	    CONTENT_ID="http://weatherscan.net"
+	    PROVIDER="weatherscan"
+	elif [ $(echo "$STATION" | grep "tunein" | wc -l) -gt 0 ]; then
+	    # Simply tune into device and do not run any apps
+	    exit 0
+	else
+	    PROVIDER="hulu"
+	    if [ -f "$CONTENT_FILE" ]; then
+			CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
+	    fi    
+	fi
+	echo "$PROVIDER" > /tmp/$TUNERIP.provider
+	echo "$CONTENT_ID" > /tmp/$TUNERIP.contentid
+}
 
 function is_media_playing() {
 	ms=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
@@ -134,13 +161,6 @@ function tunein() {
 	fi
 }
 
-function killtunein() {
-	HULU=$(find_provider hulu)
-	YOUTUBE=$(find_provider youtube)
-	is_running hulu && adb -s $TUNERIP shell am force-stop $HULU
-	is_running youtube && adb -s $TUNERIP shell am force-stop $YOUTUBE
-}
-
 function adb_connect() {
 	echo ">>> Connecting ADB to $TUNERIP"
 	local -i ADBCOUNTER=0
@@ -209,7 +229,7 @@ check() {
 			adb -s $IPADDR shell dumpsys appops --op TOAST_WINDOW > /tmp/fail.$IPADDR.txt
 			failcounter=1
 			updatefailcounter $IPADDR $failcounter
-			rm /tmp/$IPADDR*.*
+			rm /tmp/$IPADDR.*
 			echo "!!! Giving up trying to stream $IPADDR."
 			return
 		fi	

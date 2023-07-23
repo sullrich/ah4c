@@ -59,34 +59,9 @@ trap finish EXIT
 
 . ./scripts/firetv/hulu/common_functions.sh
 
-echo "$STATION" > /tmp/$TUNERIP.playing
-
 is_ip_address $TUNERIP && adb_connect
 
-if [ $(echo "$STATION" | grep "youtube__" | wc -l) -gt 0 ]; then
-    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
-    PROVIDER="youtube"
-elif [ $(echo "$STATION" | grep "hulu__" | wc -l) -gt 0 ]; then
-    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
-    PROVIDER="hulu"
-elif [ $(echo "$STATION" | grep "www" | wc -l) -gt 0 ]; then
-    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
-    PROVIDER="www"
-elif [ $(echo "$STATION" | grep "weatherscan" | wc -l) -gt 0 ]; then
-    CONTENT_ID="http://weatherscan.net"
-    PROVIDER="weatherscan"
-elif [ $(echo "$STATION" | grep "tunein" | wc -l) -gt 0 ]; then
-    # Simply tune into device and do not run any apps
-    exit 0
-else
-    PROVIDER="hulu"
-    if [ -f "$CONTENT_FILE" ]; then
-		CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
-    fi    
-fi
-
-echo "$PROVIDER" > /tmp/$TUNERIP.provider
-echo "$CONTENT_ID" > /tmp/$TUNERIP.contentid
+setup_provider
 
 # Check if CONTENT_ID is empty
 if [ -z "$CONTENT_ID" ]; then
@@ -104,8 +79,7 @@ tunein
 /bin/echo -n ">>> Waiting for stream to start..."
 while [ "$STATUS" == "notplaying" ]; do
 	sleep 1
-	MS=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
-	if ((MS > 0)); then
+	if is_media_playing; then
 		STATUS="playing"
 		echo ""
 		echo ">>> Stream $CONTENT_ID has started."
@@ -115,8 +89,10 @@ while [ "$STATUS" == "notplaying" ]; do
 			((FAILSAFE++))
 			/bin/echo ""
 			/bin/echo ">>> Stream timeout.  Killing PID $PID & Sending intent again ($FAILSAFE) "
-			killtunein
+			stop_provider
 			sleep 1
+			start_provider
+			sleep 7
 			tunein
 			COUNTER=0
 		fi
@@ -142,7 +118,7 @@ while [ "$STATUS" == "notplaying" ]; do
 		fi
 		if ((GIVEUP > 2)); then
 			/bin/echo -n ">>> Cannot stream after rebooting $TUNERIP Android device. Giving up." 
-			rm -f /tmp/$TUNERIP.lock
+			rm /tmp/$TUNERIP.*
 			exit 1
 		fi
 		((COUNTER++))

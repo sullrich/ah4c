@@ -43,7 +43,7 @@ is_ip_address $TUNERIP && adb_connect
 # Wake up
 adb -s $TUNERIP shell input keyevent 224
 
-killtunein
+stop_provider
 
 # Back
 adb -s $TUNERIP shell input keyevent 4
