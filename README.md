@@ -1,5 +1,7 @@
 ### This is a fork of https://github.com/tmm1/androidhdmi-for-channels with these features:
 
+![image](static/status_ss.png)
+
 0. ENV variable support
 1. Standardize and improve script durability / reliability
 2. Allow multiple tuners from one set of scripts
