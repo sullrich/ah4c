@@ -123,14 +123,14 @@ function tunein() {
 		echo ">>> Sending media intent for $CONTENT_ID"
 		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$CONTENT_ID"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$CONTENT_ID"
-		exit
+		exit 0
 	fi
 	if [ "$PROVIDER" = "www" ]; then
 		echo ">>> Sending media intent for $CONTENT_ID"
 		URL=$(echo "$CONTENT_ID" | tr '\\' '/')
 		echo adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "$URL"
-		exit
+		exit 0
 	fi
 }
 
@@ -184,7 +184,9 @@ check() {
 	if [ $(cat /tmp/$IPADDR.playing) == "weatherscan" ]; then
 		return
 	fi
-	status=$(./isconnected.sh $IPADDR)
+	status=$(./$STREAMER_APP/isconnected.sh $IPADDR)
+	echo status=$(./$STREAMER_APP/isconnected.sh $IPADDR)
+	echo $status
 	if [ "$status" == "true" ]; then
 		failcounter=0
 		updatefailcounter $IPADDR $failcounter
@@ -204,7 +206,7 @@ check() {
 		fi	
 		station=$(cat /tmp/$IPADDR.playing)
 		echo "!!! Performing rescue of $IPADDR $station"
-		./bmitune.sh "$station" "$IPADDR"
+		./$STREAMER_APP/bmitune.sh "$station" "$IPADDR"
 	fi
 }
 
