@@ -122,13 +122,13 @@ function start_provider() {
 	if [ "$PROVIDER" = "hulu" ]; then
 		HULU=$(find_provider hulu)
 		logger "[STOPPING] $HULU"
-		adb shell monkey -p $HULU 1
+		adb -s $TUNERIP shell monkey -p $HULU 1
 		sleep 10
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		YOUTUBE=$(find_provider youtube)
 		logger "[STOPPING] $YOUTUBE"
-		adb shell monkey -p $YOUTUBE 1
+		adb -s $TUNERIP shell monkey -p $YOUTUBE 1
 		sleep 10
 	fi
 }
@@ -148,8 +148,8 @@ function tunein() {
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
-		logger adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
-		adb shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
+		logger adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
+		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 	fi
 	if [ "$PROVIDER" = "weatherscan" ]; then
 		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
