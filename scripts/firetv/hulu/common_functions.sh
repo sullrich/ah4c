@@ -285,7 +285,6 @@ function adb_connect() {
 	done
 }
 
-
 updatefailcounter() {
 	if [ ! -f /tmp/$1.failcounter ]; then
 		echo 1 > /tmp/$1.failcounter
@@ -306,8 +305,9 @@ getfailcounter() {
 rebootall(){
 	logger "[INFO] Rebooting devices..."
 	for ip in $tunerArray; do 
-		adb connect $ip
-		adb -s $ip shell reboot
+		adb connect "$ip"
+		logger "[INFO] Rebooting $ip"
+		adb -s "$ip" shell reboot
 	done
 	adb kill-server
 	killall adb
@@ -316,7 +316,7 @@ rebootall(){
 
 keepalive(){
 	ip="$1"
-	is_ip_address $ip && adb connect $ip
-	adb -s $ip shell input keyevent 25
-	adb -s $ip shell input keyevent 24
+	is_ip_address "$ip" && adb connect $ip
+	adb -s "$ip" shell input keyevent 25
+	adb -s "$ip" shell input keyevent 24
 }

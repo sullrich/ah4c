@@ -69,7 +69,6 @@ numTuners=$NUMBER_TUNERS
 
 # Loop through the tuner environment variables
 for i in $(seq 1 $numTuners); do
-	# Use indirect variable reference to access the environment variable
 	varName="TUNER${i}_IP"
 	cmdvarName="CMD${i}_DEVICE"
 	encoderVarName="ENCODER${i}_URL"
@@ -89,7 +88,7 @@ fi
 while [ /bin/true ]; do
 	echo ""
 	date
-	for index in $(seq 1 $numTuners); do 
+	for index in ${!tuneripArray[@]}; do 
 		ip=${tuneripArray[$index]}
 		device=${tunerDeviceArray[$index]}
 		encoderurl=${tunerURLArray[$index]}
@@ -109,7 +108,7 @@ while [ /bin/true ]; do
 			rebootall
 		fi
 	done
-	sleep 15
+	sleep 5
 done
 
 
