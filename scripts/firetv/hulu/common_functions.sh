@@ -209,6 +209,7 @@ getfailcounter() {
 
 check() {
 	IPADDR="$1"
+	DEVICEORURL="$2"
 	if [ -f /tmp/$IPADDR.lock ]; then 
 		return
 	fi
@@ -226,6 +227,24 @@ check() {
 		updatefailcounter $IPADDR $failcounter
 		return
 	else
+		if [ "$DEVICEORURL" != "" ]; then
+			# XXX: this is linux.  also support macos, freebsd (md5).  windows?
+			ffmpeg -i $DEVICEORURL -frames:v 1 "/tmp/$IPADDR-current.jpg"
+			CMD5=$(md5sum /tmp/$IPADDR-current.jpg | awk '{ print $1 }')
+			PMD5=$(md5sum /tmp/$IPADDR-previous.jpg | awk '{ print $1 }')
+			if [ "$CMD5" == "$PMD5" ]; then
+				# screen is frozen. attempt restart
+				STATION=$(cat /tmp/$IPADDR.playing)
+				TUNERIP="$IPADDR"
+				PROVIDER=$(cat /tmp/$IPADDR.provider)
+				CONTENT_ID=$(cat /tmp/$IPADDR.contentid)
+				logger "[ERROR] Detected pixel lockup ($DEVICEORURL).  Sending intent $STATION."
+				stop_provider
+				sleep 1
+				start_provider
+			fi
+			ffmpeg -i $DEVICEORURL -frames:v 1 "/tmp/$IPADDR-previous.jpg"
+		fi
 		getfailcounter $IPADDR
 		((failcounter++))
 		updatefailcounter $IPADDR $failcounter

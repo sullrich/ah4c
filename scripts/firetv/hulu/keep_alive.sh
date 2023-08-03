@@ -21,6 +21,11 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 
+STATION=""
+TUNERIP=""
+PROVIDER=""
+CONTENT_ID=""
+
 function finish {
 	date
 	echo "keep_alive.sh is exiting."
@@ -34,6 +39,8 @@ declare -i i=0
 
 # Array to hold the encoders
 declare -a tunerArray
+declare -a tunerDeviceArray
+declare -a tunerURLArray
 
 # Get the number of tuners
 numTuners=$NUMBER_TUNERS
@@ -44,9 +51,15 @@ numTuners=$NUMBER_TUNERS
 for i in $(seq 1 $numTuners); do
 	# Use indirect variable reference to access the environment variable
 	varName="TUNER${i}_IP"
+	cmdvarName="CMD${i}_DEVICE"
 	TUNERIP=${!varName}
-	# Add the IP address to the array
+	CMDDEVICE=""
+	CMDDEVICE=${!cmdvarName}
+	ENCODERURL=""
+	ENCODERURL="ENCODER${i}_URL"
 	tunerArray+=($TUNERIP)
+	tunerDeviceArray+=($CMDDEVICE)
+	tunerURLArray+=($ENCODERURL)
 done
 
 if [ "$i" -lt 1 ]; then
@@ -57,12 +70,20 @@ fi
 while [ /bin/true ]; do
 	echo ""
 	date
-	for ip in $tunerArray; do 
+	for index in ${!tunerArray[@]}; do 
+		ip=${tunerArray[$index]}
+		device=${tunerDeviceArray[$index]}
+		encoderurl=${tunerURLArray[$index]}
 		if ((counter > 60)); then
-			keepalive $ip
+			keepalive $ip $device
 			counter=0
 		fi
-		check $ip
+		if [ "$encoderurl" != "" ]; then 
+			check $ip $encoderurl
+		fi
+		if [ "$device" != "" ]; then 
+			check $ip $device
+		fi
 		((counter++))
 		TIMEA=$(/bin/date "+%H:%M")
 		if [ "$TIMEA" = "05:00" ]; then
@@ -71,4 +92,5 @@ while [ /bin/true ]; do
 	done
 	sleep 15
 done
+
 
