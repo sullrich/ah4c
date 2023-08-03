@@ -31,8 +31,6 @@ TUNERIP="$1"
 
 . ./scripts/firetv/hulu/common_functions.sh
 
-adb kill-server
-
 is_ip_address $TUNERIP && adb -s $TUNERIP disconnect
 is_ip_address $TUNERIP && adb connect $TUNERIP
 
