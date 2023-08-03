@@ -89,7 +89,7 @@ fi
 while [ /bin/true ]; do
 	echo ""
 	date
-	for index in ${!tuneripArray[@]}; do 
+	for index in $(seq 1 $numTuners); do 
 		ip=${tuneripArray[$index]}
 		device=${tunerDeviceArray[$index]}
 		encoderurl=${tunerURLArray[$index]}
