@@ -35,9 +35,13 @@ if [ -f './env' ]; then
 	while IFS= read -r line; do
 		# Check if the line contains a variable assignment
 		if [[ $line == *=* ]]; then
-			# Export the variable
+			# Extract the variable name and value
 			varName="${line%%=*}"
-			export "$varName"
+			varValue="${line#*=}"
+			# Remove the quotes around the variable value if any
+			varValue=$(echo $varValue | tr -d '"')
+			# Export the variable
+			export "$varName=$varValue"
 		fi
 	done < ./env
 else
@@ -71,13 +75,105 @@ function setup_provider() {
 	echo "$CONTENT_ID" > /tmp/$TUNERIP.contentid
 }
 
+check() {
+	IPADDR="$1"
+	DEVICEORURL="$2"
+	if [ -f /tmp/$IPADDR.lock ]; then 
+		return
+	fi
+	if [ ! -f /tmp/$IPADDR.playing ]; then
+		return
+	fi
+	if [ $(cat /tmp/$IPADDR.playing) == "weatherscan" ]; then
+		return
+	fi
+	if [ $(cat /tmp/$IPADDR.playing) == "www" ]; then
+		return
+	fi
+	station=$(cat /tmp/$IPADDR.playing)	
+	if is_media_frozen $DEVICEORURL $IPADDR $station; then
+		failcounter=0
+		updatefailcounter $IPADDR $failcounter
+		return
+	else
+		logger "[ERROR] Performing pixel lockup rescue of $IPADDR $station"
+		./$STREAMER_APP/bmitune.sh "$station" "$IPADDR"
+		return
+	fi
+	if is_media_playing; then
+		failcounter=0
+		updatefailcounter $IPADDR $failcounter
+		return
+	else
+		getfailcounter $IPADDR
+		((failcounter++))
+		updatefailcounter $IPADDR $failcounter
+		if ((failcounter > 3)); then
+			is_ip_address $IPADDR && adb connect $IPADDR
+			adb -s $IPADDR shell dumpsys appops --op TOAST_WINDOW > /tmp/fail.$IPADDR.txt
+			failcounter=1
+			updatefailcounter $IPADDR $failcounter
+			rm /tmp/$IPADDR.*
+			logger "[FAIL] Giving up trying to stream $IPADDR."
+			return
+		fi	
+		logger "[ERROR] Performing rescue of $IPADDR $station"
+		./$STREAMER_APP/bmitune.sh "$station" "$IPADDR"
+	fi
+}
+
+function check_vid_md5() {
+	IPADDR=$1
+	PLATFORM=$(uname)
+	if [ "$PLATFORM" == "Linux" ]; then
+		CMD5=$(md5sum /tmp/$IPADDR-current.jpg | awk '{ print $1 }')
+		PMD5=$(md5sum /tmp/$IPADDR-previous.jpg | awk '{ print $1 }')
+	fi
+	if [ "$PLATFORM" == "Darwin" ]; then
+		CMD5=$(md5 /tmp/$IPADDR-current.jpg | awk '{ print $4 }')
+		PMD5=$(md5 /tmp/$IPADDR-previous.jpg | awk '{ print $4 }')
+	fi
+	if [ "$CMD5" == "$PMD5" ]; then
+		return 1
+	fi
+	return 0
+}
+
 function is_media_playing() {
-	ms=$(adb -s $TUNERIP shell dumpsys media_session | grep  "state=PlaybackState {state=3" | wc -l)
+	RESULT=$(adb -s $TUNERIP shell dumpsys media_session)
+	ms=$(echo "$RESULT" | grep  "state=PlaybackState {state=3" | wc -l)
 	if ((ms > 0)); then
 		return 0
 	else
 		return 1
 	fi
+}
+
+function is_media_frozen() {
+	DEVICEORURL=$1
+	IPADDR=$2
+	STATION=$3
+	if [ "$DEVICEORURL" != "" ]; then
+		rm -f "/tmp/$IPADDR-current.jpg"
+		if [ ! -f /tmp/$IPADDR-previous.jpg ]; then
+			ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
+			sleep 5 
+		fi
+		ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-current.jpg" -loglevel quiet
+		check_vid_md5 $IPADDR
+		if [ $? = 1 ]; then
+			# screen is frozen. attempt restart
+			STATION=$(cat /tmp/$IPADDR.playing)
+			TUNERIP="$IPADDR"
+			PROVIDER=$(cat /tmp/$IPADDR.provider)
+			CONTENT_ID=$(cat /tmp/$IPADDR.contentid)
+			logger "[ERROR] Detected pixel lockup ($DEVICEORURL).  Sending intent $STATION."
+			return 1
+		fi
+		rm -f "/tmp/$IPADDR-previous.jpg"
+		ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
+	fi
+	return 0
 }
 
 function is_ip_address() {
@@ -204,62 +300,6 @@ getfailcounter() {
 		failcounter=1
 	else
 		failcounter=$(cat /tmp/$1.failcounter)
-	fi
-}
-
-check() {
-	IPADDR="$1"
-	DEVICEORURL="$2"
-	if [ -f /tmp/$IPADDR.lock ]; then 
-		return
-	fi
-	if [ ! -f /tmp/$IPADDR.playing ]; then
-		return
-	fi
-	if [ $(cat /tmp/$IPADDR.playing) == "weatherscan" ]; then
-		return
-	fi
-	if [ $(cat /tmp/$IPADDR.playing) == "www" ]; then
-		return
-	fi
-	if is_media_playing; then
-		failcounter=0
-		updatefailcounter $IPADDR $failcounter
-		return
-	else
-		if [ "$DEVICEORURL" != "" ]; then
-			# XXX: this is linux.  also support macos, freebsd (md5).  windows?
-			ffmpeg -i $DEVICEORURL -frames:v 1 "/tmp/$IPADDR-current.jpg"
-			CMD5=$(md5sum /tmp/$IPADDR-current.jpg | awk '{ print $1 }')
-			PMD5=$(md5sum /tmp/$IPADDR-previous.jpg | awk '{ print $1 }')
-			if [ "$CMD5" == "$PMD5" ]; then
-				# screen is frozen. attempt restart
-				STATION=$(cat /tmp/$IPADDR.playing)
-				TUNERIP="$IPADDR"
-				PROVIDER=$(cat /tmp/$IPADDR.provider)
-				CONTENT_ID=$(cat /tmp/$IPADDR.contentid)
-				logger "[ERROR] Detected pixel lockup ($DEVICEORURL).  Sending intent $STATION."
-				stop_provider
-				sleep 1
-				start_provider
-			fi
-			ffmpeg -i $DEVICEORURL -frames:v 1 "/tmp/$IPADDR-previous.jpg"
-		fi
-		getfailcounter $IPADDR
-		((failcounter++))
-		updatefailcounter $IPADDR $failcounter
-		if ((failcounter > 3)); then
-			is_ip_address $IPADDR && adb connect $IPADDR
-			adb -s $IPADDR shell dumpsys appops --op TOAST_WINDOW > /tmp/fail.$IPADDR.txt
-			failcounter=1
-			updatefailcounter $IPADDR $failcounter
-			rm /tmp/$IPADDR.*
-			logger "[FAIL] Giving up trying to stream $IPADDR."
-			return
-		fi	
-		station=$(cat /tmp/$IPADDR.playing)
-		logger "[ERROR] Performing rescue of $IPADDR $station"
-		./$STREAMER_APP/bmitune.sh "$station" "$IPADDR"
 	fi
 }
 

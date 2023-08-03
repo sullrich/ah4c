@@ -36,11 +36,31 @@ trap finish EXIT
 declare -i counter=0
 declare -i failcounter=0
 declare -i i=0
+declare -i numTuners=0
 
 # Array to hold the encoders
 declare -a tunerArray
 declare -a tunerDeviceArray
 declare -a tunerURLArray
+
+if [ -f './env' ]; then
+	source ./env
+	# Read each line in the file
+	while IFS= read -r line; do
+		# Check if the line contains a variable assignment
+		if [[ $line == *=* ]]; then
+			# Extract the variable name and value
+			varName="${line%%=*}"
+			varValue="${line#*=}"
+			# Remove the quotes around the variable value if any
+			varValue=$(echo $varValue | tr -d '"')
+			# Export the variable
+			export "$varName=$varValue"
+		fi
+	done < ./env
+else
+	logger "[WARNING] Could not locate ./env.  Docker users can ignore this warning."
+fi
 
 # Get the number of tuners
 numTuners=$NUMBER_TUNERS
@@ -52,12 +72,11 @@ for i in $(seq 1 $numTuners); do
 	# Use indirect variable reference to access the environment variable
 	varName="TUNER${i}_IP"
 	cmdvarName="CMD${i}_DEVICE"
+	encoderVarName="ENCODER${i}_URL"
 	TUNERIP=${!varName}
-	CMDDEVICE=""
 	CMDDEVICE=${!cmdvarName}
-	ENCODERURL=""
-	ENCODERURL="ENCODER${i}_URL"
-	tunerArray+=($TUNERIP)
+	ENCODERURL=${!encoderVarName}
+	tuneripArray+=($TUNERIP)
 	tunerDeviceArray+=($CMDDEVICE)
 	tunerURLArray+=($ENCODERURL)
 done
@@ -70,8 +89,8 @@ fi
 while [ /bin/true ]; do
 	echo ""
 	date
-	for index in ${!tunerArray[@]}; do 
-		ip=${tunerArray[$index]}
+	for index in ${!tuneripArray[@]}; do 
+		ip=${tuneripArray[$index]}
 		device=${tunerDeviceArray[$index]}
 		encoderurl=${tunerURLArray[$index]}
 		if ((counter > 60)); then
