@@ -156,10 +156,10 @@ function is_media_frozen() {
 	if [ "$DEVICEORURL" != "" ]; then
 		rm -f "/tmp/$IPADDR-current.jpg"
 		if [ ! -f /tmp/$IPADDR-previous.jpg ]; then
-			ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
+			ffmpeg -i "$DEVICEORURL" -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
 			sleep 5 
 		fi
-		ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-current.jpg" -loglevel quiet
+		ffmpeg -i "$DEVICEORURL" -frames:v 1 -y "/tmp/$IPADDR-current.jpg" -loglevel quiet
 		check_vid_md5 $IPADDR
 		if [ $? = 1 ]; then
 			# screen is frozen. attempt restart
@@ -171,7 +171,7 @@ function is_media_frozen() {
 			return 1
 		fi
 		rm -f "/tmp/$IPADDR-previous.jpg"
-		ffmpeg -i $DEVICEORURL -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
+		ffmpeg -i "$DEVICEORURL" -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
 	fi
 	return 0
 }
