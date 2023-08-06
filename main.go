@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"net"
@@ -113,7 +112,7 @@ type Entry struct {
 	Id          string `json:"id"`
 	StationId   string `json:"stationId"`
 	ChannelName string `json:"channelName"`
-	StreamURL   string `json:"streamURL"` // added this line
+	StreamURL   string `json:"streamURL"`
 }
 
 type ConfigEnvVariable struct {
@@ -177,7 +176,7 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	cmd := exec.Command(cmdparts[0], cmdparts[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("Failed to get stdin pipe for TEECMD: %v", err)
+		return fmt.Errorf("failed to get stdin pipe for TEECMD: %v", err)
 	}
 	r.teecmdIn = stdin
 	r.teecmd = cmd
@@ -187,7 +186,7 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("Failed to start TEECMD: %v", err)
+		return fmt.Errorf("[ERR] Failed to start TEECMD: %v", err)
 	}
 	// Monitor TEECMD process and restart if needed
 	go func() {
@@ -239,7 +238,7 @@ func (r *reader) Read(p []byte) (int, error) {
 	}
 	if r.t.teecmd != "" {
 		if err := r.startTeeCMD(); err != nil {
-			return 0, fmt.Errorf("Failed to start TEECMD: %v", err)
+			return 0, fmt.Errorf("[ERR] Failed to start TEECMD: %v", err)
 		}
 	}
 	// Read from the source
@@ -603,7 +602,7 @@ func run() error {
 	})
 	// Show raw logs
 	r.GET("/logs/text", func(c *gin.Context) {
-		content, err := ioutil.ReadFile("/tmp/androidhdmi-for-channels.log")
+		content, err := os.ReadFile("/tmp/androidhdmi-for-channels.log")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -696,7 +695,7 @@ func run() error {
 			return
 		}
 		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -706,7 +705,7 @@ func run() error {
 	r.GET("/edit", func(c *gin.Context) {
 		// Read the contents of the file
 		filePath := "./env"
-		content, err := ioutil.ReadFile(filePath)
+		content, err := os.ReadFile(filePath)
 		if err != nil {
 			c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to read file: %s", err.Error()))
 			return
@@ -720,7 +719,7 @@ func run() error {
 		content := c.PostForm("content")
 		// Write the modified content to the file
 		filePath := "./env"
-		err := ioutil.WriteFile(filePath, []byte(content), 0644)
+		err := os.WriteFile(filePath, []byte(content), 0644)
 		if err != nil {
 			c.String(http.StatusInternalServerError, fmt.Sprintf("Failed to write file: %s", err.Error()))
 			return
@@ -774,7 +773,7 @@ func run() error {
 	})
 
 	r.GET("/m3us", func(c *gin.Context) {
-		files, err := ioutil.ReadDir("./m3u")
+		files, err := os.ReadDir("./m3u")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1196,7 +1195,7 @@ func removeReader(r *reader) {
 }
 
 func parseEnvFile(filePath string) ConfigData {
-	file, err := ioutil.ReadFile(filePath)
+	file, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Printf("Failed to open file: %s", err)
 		os.Exit(1)
@@ -1258,7 +1257,7 @@ func saveConfigToFile(filePath string, configData ConfigData) {
 		lines = append(lines, "ENCODER"+tuner.Number+"_URL="+"\""+tuner.EncoderUrl+"\"")
 		lines = append(lines, "TUNER"+tuner.Number+"_IP="+"\""+tuner.TunerIp+"\"\n")
 	}
-	err := ioutil.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+	err := os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
 	if err != nil {
 		log.Printf("Failed to write to file: %s", err)
 		os.Exit(1)
