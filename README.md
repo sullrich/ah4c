@@ -22,7 +22,8 @@
 14. Web graphs of cpu, mem, gpu (nvidia)
 15. Tee support (sending feed to a secondary target)
 16. Application based tuning! Just send the feed to stdout
-99. ... and more to come!
+17. Dead video feeds restart - video locking up but audio working
+
 
 #### Docker Instructions
 
