@@ -13,7 +13,7 @@
 5. Test each pre script and if fails move on to next tuner before giving up
 6. M3U file serving with templating for IP Address
 7. Docker support
-8. Application based tuners (IE: hauppauge colossus 2)
+8. Application based tuners (IE: magewell, hauppauge colossus 2 & anything ffmpeg supports!)
 9. E-Mail alerts on failures
 10. Global logging to disk with rotation
 11. Logging endpoint /logs for moments you do not have access to console with dynamic refresh!
