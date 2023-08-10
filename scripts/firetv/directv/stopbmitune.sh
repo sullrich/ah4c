@@ -5,7 +5,18 @@
 set -x
 
 streamerIP="$1"
+streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
+
+#Check if bmitune.sh is done running
+bmituneDone() {
+  bmitunePID=$(<"$streamerNoPort/bmitune_pid")
+
+  while ps -p $bmitunePID > /dev/null; do
+    echo "Waiting for bmitune.sh to complete..."
+    sleep 2
+  done
+}
 
 #Stop stream
 adbStop() {
@@ -18,15 +29,15 @@ adbStop() {
 #Device sleep
 adbSleep() {
   sleep="input keyevent KEYCODE_SLEEP"
-  streamerNoPort="$(echo "$streamerIP" | awk -F: '{print $1}')"
 
   $adbTarget shell $sleep
   echo "Sleep initiated for $streamerIP"
-  date +%s > /tmp/$streamerNoPort/stream_stopped
-  echo "/tmp/$streamerNoPort/stream_stopped written with epoch stop time"
+  date +%s > $streamerNoPort/stream_stopped
+  echo "$streamerNoPort/stream_stopped written with epoch stop time"
 }
 
 main() {
+  bmituneDone
   adbStop
   adbSleep
 }
