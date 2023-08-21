@@ -92,7 +92,7 @@ while [ /bin/true ]; do
 		ip=${tuneripArray[$index]}
 		device=${tunerDeviceArray[$index]}
 		encoderurl=${tunerURLArray[$index]}
-		if ((counter > 60)); then
+		if ((counter > 3600)); then
 			keepalive $ip $device
 			counter=0
 		fi

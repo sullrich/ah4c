@@ -62,6 +62,9 @@ function setup_provider() {
 	elif [ $(echo "$STATION" | grep "weatherscan" | wc -l) -gt 0 ]; then
 	    CONTENT_ID="http://weatherscan.net"
 	    PROVIDER="weatherscan"
+	elif [ $(echo "$STATION" | grep "silicondust" | wc -l) -gt 0 ]; then
+	    CONTENT_ID=$(echo "$STATION" | awk -F '__' '{print $2}')
+	    PROVIDER="silicondust"
 	elif [ $(echo "$STATION" | grep "tunein" | wc -l) -gt 0 ]; then
 	    # Simply tune into device and do not run any apps
 	    exit 0
@@ -141,6 +144,14 @@ function check_vid_md5() {
 
 function is_media_playing() {
 	RESULT=$(adb -s $TUNERIP shell dumpsys media_session)
+	if [ "$PROVIDER" = "silicondust" ]; then
+		ms=$(echo "$RESULT" | grep "packages=com.silicondust.view" | wc -l)
+		if ((ms > 0)); then
+			return 0
+		else
+			return 1
+		fi	
+	fi
 	ms=$(echo "$RESULT" | grep  "state=PlaybackState {state=3" | wc -l)
 	if ((ms > 0)); then
 		return 0
@@ -217,23 +228,51 @@ function is_running() {
 function start_provider() {
 	if [ "$PROVIDER" = "hulu" ]; then
 		HULU=$(find_provider hulu)
-		logger "[STOPPING] $HULU"
+		logger "[STARTING] $HULU"
 		adb -s $TUNERIP shell monkey -p $HULU 1
 		sleep 10
 	fi
 	if [ "$PROVIDER" = "youtube" ]; then
 		YOUTUBE=$(find_provider youtube)
-		logger "[STOPPING] $YOUTUBE"
+		logger "[STARTING] $YOUTUBE"
 		adb -s $TUNERIP shell monkey -p $YOUTUBE 1
 		sleep 10
+	fi
+	if [ "$PROVIDER" = "silicondust" ]; then
+		SILICONDUST=$(find_provider silicondust)
+		logger "[STARTING] $SILICONDUST"
+		adb -s $TUNERIP shell monkey -p $SILICONDUST 1
 	fi
 }
 
 function stop_provider() {
 	HULU=$(find_provider hulu)
 	YOUTUBE=$(find_provider youtube)
+	SILICONDUST=$(find_provider silicondust)
 	is_running hulu && adb -s $TUNERIP shell am force-stop $HULU
 	is_running youtube && adb -s $TUNERIP shell am force-stop $YOUTUBE
+	is_running silicondust && adb -s $TUNERIP shell am force-stop $SILICONDUST
+}
+
+function tunein_silicondust() {
+	sleep 2
+	logger "[TUNEIN] Navigating to channel $CONTENT_ID"
+	adb -s $TUNERIP shell input keyevent KEYCODE_DPAD_CENTER
+	adb -s $TUNERIP shell input keyevent KEYCODE_DPAD_RIGHT
+	adb -s $TUNERIP shell input keyevent KEYCODE_DPAD_RIGHT
+	adb -s $TUNERIP shell input keyevent KEYCODE_DPAD_DOWN
+	CONTENT=$CONTENT_ID
+	for ((i=0; i<${#CONTENT}; i++)); do
+		char="${CONTENT:$i:1}"
+		if [ "$char" = "!" ]; then
+			logger "Sending KEYCODE_DPAD_UP"
+			adb -s $TUNERIP shell input keyevent KEYCODE_DPAD_UP
+		else
+			logger "Sending $char"
+			adb -s $TUNERIP shell input text $char		
+		fi
+	done
+	adb -s $TUNERIP shell input keyevent KEYCODE_ENTER
 }
 
 function tunein() {
@@ -246,6 +285,12 @@ function tunein() {
 		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
 		logger adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
 		adb -s $TUNERIP shell am start -a android.intent.action.VIEW -d "https://www.youtube.com/watch?v=$CONTENT_ID&t=1s"
+	fi
+	if [ "$PROVIDER" = "silicondust" ]; then
+		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
+		logger adb -s $TUNERIP am start -W -n com.silicondust.view/.App
+		adb -s $TUNERIP am start -W -n com.silicondust.view/.App
+		tunein_silicondust $CONTENT_ID
 	fi
 	if [ "$PROVIDER" = "weatherscan" ]; then
 		logger "[TUNEIN] Sending media intent for $CONTENT_ID"
@@ -318,5 +363,6 @@ keepalive(){
 	ip="$1"
 	is_ip_address "$ip" && adb connect $ip
 	adb -s "$ip" shell input keyevent 25
+	adb -s "$ip" shell input keyevent 24
 	adb -s "$ip" shell input keyevent 24
 }

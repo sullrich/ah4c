@@ -1,0 +1,22 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="nbc" tvc-guide-stationid="",NBC
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__3.1!
+
+#EXTINF:-1 channel-id="abc" tvc-guide-stationid="",ABC
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__11.1
+
+#EXTINF:-1 channel-id="keth" tvc-guide-stationid="",KET
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__15.1
+
+#EXTINF:-1 channel-id="cbs" tvc-guide-stationid="",CBS
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__32.1
+
+#EXTINF:-1 channel-id="fox" tvc-guide-stationid="",Fox
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__41.1
+
+#EXTINF:-1 channel-id="cw" tvc-guide-stationid="",CW
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__58.1
+
+#EXTINF:-1 channel-id="ket2" tvc-guide-stationid="",KET2
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__68.1
