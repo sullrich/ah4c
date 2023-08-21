@@ -6,7 +6,7 @@ http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__3.1!
 #EXTINF:-1 channel-id="abc" tvc-guide-stationid="",ABC
 http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__11.1
 
-#EXTINF:-1 channel-id="keth" tvc-guide-stationid="",KET
+#EXTINF:-1 channel-id="ket" tvc-guide-stationid="",KET
 http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__15.1
 
 #EXTINF:-1 channel-id="cbs" tvc-guide-stationid="",CBS
