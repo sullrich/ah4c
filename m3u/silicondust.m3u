@@ -1,7 +1,7 @@
 #EXTM3U
 
 #EXTINF:-1 channel-id="nbc" tvc-guide-stationid="",NBC
-http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__3.1!
+http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__3.1! # ! scrolls up - bug in GUI.
 
 #EXTINF:-1 channel-id="abc" tvc-guide-stationid="",ABC
 http://{{ .IPADDRESS }}:7654/play/tuner/silicondust__11.1
