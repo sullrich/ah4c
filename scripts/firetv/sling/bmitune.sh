@@ -20,6 +20,7 @@ finish() {
 trap finish EXIT
 
 updateReferenceFiles() {
+
   # Handle cases where stream_stopped or last_channel don't exist
   mkdir -p $streamerNoPort
   [[ -f "$streamerNoPort/stream_stopped" ]] || echo 0 > "$streamerNoPort/stream_stopped"
@@ -32,6 +33,7 @@ updateReferenceFiles() {
 
 #Set encoderURL based on the value of streamerIP
 matchEncoderURL() {
+
   case "$streamerIP" in
     "$TUNER1_IP")
         encoderURL=$ENCODER1_URL
@@ -54,7 +56,7 @@ matchEncoderURL() {
 #Check for active audio stream
 activeAudioCheck() {
   local startTime=$(date +%s)
-  local maxDuration=50
+  local maxDuration=60
   local minimumLoudness=-50
   local sleepDuration=0.5
   
@@ -78,7 +80,7 @@ activeAudioCheck() {
       echo "No active audio stream detected and app is not in focus after $(($(date +%s) - $startTime)) seconds -- attempting to tune again..."
       tuneChannel
     fi
-    
+
   done
 }
 
@@ -93,7 +95,8 @@ appFocusCheck() {
 }
 
 #Special channels to kill DirecTV app or reboot FireStick
-specialChannels() {    
+specialChannels() {
+    
     if [ $specialID = "exit" ]; then
       echo "Exit $packageName requested on $streamerIP"
       rm $streamerNoPort/last_channel $streamerNoPort/adbAppRunning
@@ -146,7 +149,7 @@ launchDelay() {
 
 #Tuning is based on channel name values from sling.m3u.
 tuneChannel() {
-    $adbTarget shell am start -a android.intent.action.VIEW -d https://watch.sling.com/1/channel/$channelID/watch
+  $adbTarget shell am start -a android.intent.action.VIEW -d https://watch.sling.com/1/channel/$channelID/watch
 }
 
 main() {

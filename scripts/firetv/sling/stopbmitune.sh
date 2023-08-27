@@ -21,10 +21,10 @@ bmituneDone() {
 
 #Stop stream
 adbStop() {
-  # stop="input keyevent KEYCODE_BACK; \
-  #       input keyevent KEYCODE_BACK; \
-  #       input keyevent KEYCODE_HOME"
-  stop="am force-stop $packageName"
+  stop="input keyevent KEYCODE_BACK; \
+        input keyevent KEYCODE_BACK; \
+        input keyevent KEYCODE_HOME"
+  #stop="am force-stop $packageName"
   $adbTarget shell $stop; sleep 2
   echo "Streaming stopped for $streamerIP"
 }

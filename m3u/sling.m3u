@@ -1,44 +1,55 @@
 #EXTM3U
-#EXTINF:-1 channel-id="526" tvc-guide-stationid="34949",Starz HD West
+#EXTINF:-1 channel-id="STZHD" tvc-guide-stationid="34941",Starz HD
+http://{{ .IPADDRESS }}/play/tuner/1a3c345b84b149918e0bad8f797df70a
+#EXTINF:-1 channel-id="STZHDP" tvc-guide-stationid="34949",Starz HD West
 http://{{ .IPADDRESS }}/play/tuner/8a84458592844ff5849712ef7766fb4e
-#EXTINF:-1 channel-id="527" tvc-guide-stationid="57581",Starz Kids & Family HD
+#EXTINF:-1 channel-id="STZKHD" tvc-guide-stationid="57581",Starz Kids & Family HD
 http://{{ .IPADDRESS }}/play/tuner/148a1e391db94edf96bf25e25beb307d
-#EXTINF:-1 channel-id="529" tvc-guide-stationid="57573",Starz Edge HD
+#EXTINF:-1 channel-id="STZCHD" tvc-guide-stationid="57569",Starz Comedy HD
+http://{{ .IPADDRESS }}/play/tuner/d96b102ac5c54967bf56b8b57e20c84e
+#EXTINF:-1 channel-id="STZEHD" tvc-guide-stationid="57573",Starz Edge HD
 http://{{ .IPADDRESS }}/play/tuner/1535e572f07348159d8924d58200690e
-#EXTINF:-1 channel-id="530" tvc-guide-stationid="67235",Starz in Black HD
+#EXTINF:-1 channel-id="STRZIBH" tvc-guide-stationid="67235",Starz in Black HD
 http://{{ .IPADDRESS }}/play/tuner/23a6ea3c163a47f390f73900ccc76bc1
-#EXTINF:-1 channel-id="531" tvc-guide-stationid="67236",Starz Cinema HD
+#EXTINF:-1 channel-id="STRZCIH" tvc-guide-stationid="67236",Starz Cinema HD
 http://{{ .IPADDRESS }}/play/tuner/0eedb59656d243da914fef990a8db903
-#EXTINF:-1 channel-id="535" tvc-guide-stationid="36225",Starz Encore HD
+#EXTINF:-1 channel-id="STZENHD" tvc-guide-stationid="36225",Starz Encore HD
 http://{{ .IPADDRESS }}/play/tuner/ed5d0f85928f45249f8a67c9746a80b7
-#EXTINF:-1 channel-id="536" tvc-guide-stationid="17125",Starz Encore West
+#EXTINF:-1 channel-id="STZENCP" tvc-guide-stationid="17125",Starz Encore West
 http://{{ .IPADDRESS }}/play/tuner/a0515fde0c074dc389981e8881874aae
-#EXTINF:-1 channel-id="537" tvc-guide-stationid="14764",Starz Encore Classic
+#EXTINF:-1 channel-id="STZENCL" tvc-guide-stationid="14764",Starz Encore Classic
 http://{{ .IPADDRESS }}/play/tuner/2230d31d16d541c08e654d4a11863d2c
-#EXTINF:-1 channel-id="538" tvc-guide-stationid="102906",Starz Encore Westerns
+#EXTINF:-1 channel-id="STZEWSS" tvc-guide-stationid="102906",Starz Encore Westerns
 http://{{ .IPADDRESS }}/play/tuner/73ab11e5664241a9811e7e22602bfda9
-#EXTINF:-1 channel-id="539" tvc-guide-stationid="14766",Starz Encore Suspense
+#EXTINF:-1 channel-id="STZENSU" tvc-guide-stationid="14766",Starz Encore Suspense
 http://{{ .IPADDRESS }}/play/tuner/04e4a4f1e0ec4dfba961414197e57d7f
-#EXTINF:-1 channel-id="540" tvc-guide-stationid="14870",Starz Encore Black
+#EXTINF:-1 channel-id="STZENBK" tvc-guide-stationid="14870",Starz Encore Black
 http://{{ .IPADDRESS }}/play/tuner/1ec67d324b564a528f6901ed8e09334e
-#EXTINF:-1 channel-id="541" tvc-guide-stationid="72015",Starz Encore Action HD
+#EXTINF:-1 channel-id="SZEAHD" tvc-guide-stationid="72015",Starz Encore Action HD
 http://{{ .IPADDRESS }}/play/tuner/8aed8223a6104b53b24f03555fc933a9
-#EXTINF:-1 channel-id="542" tvc-guide-stationid="102903",Starz Encore Family
+#EXTINF:-1 channel-id="STZENFS" tvc-guide-stationid="102903",Starz Encore Family
 http://{{ .IPADDRESS }}/play/tuner/22076462a8124832967e30e0f9f92213
-#EXTINF:-1 channel-id="545" tvc-guide-stationid="21868",Showtime HD
+#EXTINF:-1 channel-id="SHOWHD" tvc-guide-stationid="21868",Showtime HD
 http://{{ .IPADDRESS }}/play/tuner/7f5f5993457648d68db2fa5d5103cbcc
-#EXTINF:-1 channel-id="546" tvc-guide-stationid="22532",Showtime HD West
+#EXTINF:-1 channel-id="SHOWHDP" tvc-guide-stationid="22532",Showtime HD West
 http://{{ .IPADDRESS }}/play/tuner/f8ee74606d2a47ec8ca14842b2762b9b
-#EXTINF:-1 channel-id="547" tvc-guide-stationid="58533",Showtime 2 HD
+#EXTINF:-1 channel-id="SHO2HD" tvc-guide-stationid="58533",Showtime 2 HD
 http://{{ .IPADDRESS }}/play/tuner/30b674a6204f4d9b8ec053e0f6381a28
-#EXTINF:-1 channel-id="548" tvc-guide-stationid="68340",Showtime BET HD
+#EXTINF:-1 channel-id="SHOBETH" tvc-guide-stationid="68340",Showtime BET HD
 http://{{ .IPADDRESS }}/play/tuner/df9f6f06051d4681938a627be72a4cf9
-#EXTINF:-1 channel-id="549" tvc-guide-stationid="60947",Showtime Extreme HD
+#EXTINF:-1 channel-id="SHOXHD" tvc-guide-stationid="60947",Showtime Extreme HD
 http://{{ .IPADDRESS }}/play/tuner/ea47544f20394a4b83a2c0678c078d66
-#EXTINF:-1 channel-id="550" tvc-guide-stationid="61001",Showtime Showcase HD
+#EXTINF:-1 channel-id="SHOCSHD" tvc-guide-stationid="61001",Showtime Showcase HD
 http://{{ .IPADDRESS }}/play/tuner/b24b20f009e94eb1ad2441a19f98b7ff
-#EXTINF:-1 channel-id="551" tvc-guide-stationid="68342",Showtime NextHD
+#EXTINF:-1 channel-id="NEXTHD" tvc-guide-stationid="68342",Showtime NextHD
 http://{{ .IPADDRESS }}/play/tuner/b5540f5fb9b542aeb0f253d9854c174f
-#EXTINF:-1 channel-id="552" tvc-guide-stationid="103892",Showtime Familyzone HD
+#EXTINF:-1 channel-id="FAMZHD" tvc-guide-stationid="103892",Showtime Familyzone HD
 http://{{ .IPADDRESS }}/play/tuner/7b21fc1766304e268ef4757d56b3ac44
-
+#EXTINF:-1 channel-id="WOMNHD" tvc-guide-stationid="68338",Showtime Women
+http://{{ .IPADDRESS }}/play/tuner/1157b0988f29416485ce768e33f3c396
+#EXTINF:-1 channel-id="INDIEHD" tvc-guide-stationid="65795",IndiePlex HD
+http://{{ .IPADDRESS }}/play/tuner/7a17fd0c15754658885b368a0b273565
+#EXTINF:-1 channel-id="RETROHD" tvc-guide-stationid="65791",RetroPlex HD
+http://{{ .IPADDRESS }}/play/tuner/9ad3916eb22d4c169c7713afa5ee0f2b
+#EXTINF:-1 channel-id="MPLEXHD" tvc-guide-stationid="83075",MoviePlex HD
+http://{{ .IPADDRESS }}/play/tuner/deba2421b6ff44478320b2c60051f1d7
