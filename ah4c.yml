@@ -28,6 +28,8 @@ services:
       #- ALERT_EMAIL_PASS=""
       #- ALERT_EMAIL_TO=""
       #- ALERT_WEBHOOK_URL=""
+      #- UPDATE_SCRIPTS=${UPDATE_SCRIPTS} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist of not
+      #- UPDATE_M3US=${UPDATE_M3US} # Set to true if you'd like the sample m3us updated whether they exist of not
       - TZ=${TZ} # Your local timezone in Linux "tz" format
     volumes:
       - /data/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
