@@ -1,0 +1,197 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="206" tvc-guide-stationid="67237",SZENHP
+http://{{ .IPADDRESS }}:7654/play/tuner/206
+
+#EXTINF:-1 channel-id="265" tvc-guide-stationid="39305",FS2
+http://{{ .IPADDRESS }}:7654/play/tuner/265
+
+#EXTINF:-1 channel-id="275" tvc-guide-stationid="89714",SEC
+http://{{ .IPADDRESS }}:7654/play/tuner/275
+
+#EXTINF:-1 channel-id="277" tvc-guide-stationid="11871",AAC
+http://{{ .IPADDRESS }}:7654/play/tuner/277
+
+#EXTINF:-1 channel-id="702" tvc-guide-stationid="66379",FXXHD
+http://{{ .IPADDRESS }}:7654/play/tuner/702
+
+#EXTINF:-1 channel-id="717" tvc-guide-stationid="59250",CBSSNHD
+http://{{ .IPADDRESS }}:7654/play/tuner/717
+
+#EXTINF:-1 channel-id="719" tvc-guide-stationid="59976",ESPNNEWS
+http://{{ .IPADDRESS }}:7654/play/tuner/719
+
+#EXTINF:-1 channel-id="720" tvc-guide-stationid="32645",ESPNHD
+http://{{ .IPADDRESS }}:7654/play/tuner/720
+
+#EXTINF:-1 channel-id="721" tvc-guide-stationid="45507",ESPN2HD
+http://{{ .IPADDRESS }}:7654/play/tuner/721
+
+#EXTINF:-1 channel-id="723" tvc-guide-stationid="45399",NFLHD
+http://{{ .IPADDRESS }}:7654/play/tuner/723
+
+#EXTINF:-1 channel-id="724" tvc-guide-stationid="61854",GOLFHD
+http://{{ .IPADDRESS }}:7654/play/tuner/724
+
+#EXTINF:-1 channel-id="726" tvc-guide-stationid="45526",NBAHD
+http://{{ .IPADDRESS }}:7654/play/tuner/726
+
+#EXTINF:-1 channel-id="728" tvc-guide-stationid="82547",FS1HD
+http://{{ .IPADDRESS }}:7654/play/tuner/728
+
+#EXTINF:-1 channel-id="730" tvc-guide-stationid="42642",TNTHD
+http://{{ .IPADDRESS }}:7654/play/tuner/730
+
+#EXTINF:-1 channel-id="731" tvc-guide-stationid="58515",TBSHD
+http://{{ .IPADDRESS }}:7654/play/tuner/731
+
+#EXTINF:-1 channel-id="731" tvc-guide-stationid="58452",USAHD
+http://{{ .IPADDRESS }}:7654/play/tuner/732
+
+#EXTINF:-1 channel-id="735" tvc-guide-stationid="56905",DSCHD
+http://{{ .IPADDRESS }}:7654/play/tuner/735
+
+#EXTINF:-1 channel-id="737" tvc-guide-stationid="49788",HGTVD
+http://{{ .IPADDRESS }}:7654/play/tuner/737
+
+#EXTINF:-1 channel-id="739" tvc-guide-stationid="57394",APLHD
+http://{{ .IPADDRESS }}:7654/play/tuner/739
+
+#EXTINF:-1 channel-id="740" tvc-guide-stationid="31046",MTHD
+http://{{ .IPADDRESS }}:7654/play/tuner/740
+
+#EXTINF:-1 channel-id="741" tvc-guide-stationid="49438",NGCHD
+http://{{ .IPADDRESS }}:7654/play/tuner/741
+
+#EXTINF:-1 channel-id="744" tvc-guide-stationid="59303",TRAVHD
+http://{{ .IPADDRESS }}:7654/play/tuner/744
+
+#EXTINF:-1 channel-id="752" tvc-guide-stationid="58623",SYFYHD
+http://{{ .IPADDRESS }}:7654/play/tuner/752
+
+#EXTINF:-1 channel-id="753" tvc-guide-stationid="58574",FXHD
+http://{{ .IPADDRESS }}:7654/play/tuner/753
+
+#EXTINF:-1 channel-id="754" tvc-guide-stationid="59186",PARHD
+http://{{ .IPADDRESS }}:7654/play/tuner/754
+
+#EXTINF:-1 channel-id="755" tvc-guide-stationid="62420",CCHD
+http://{{ .IPADDRESS }}:7654/play/tuner/755
+
+#EXTINF:-1 channel-id="761" tvc-guide-stationid="65342",IDHD
+http://{{ .IPADDRESS }}:7654/play/tuner/761
+
+#EXTINF:-1 channel-id="762" tvc-guide-stationid="64492",BBCAHD
+http://{{ .IPADDRESS }}:7654/play/tuner/762
+
+#EXTINF:-1 channel-id="767" tvc-guide-stationid="61812",EHD
+http://{{ .IPADDRESS }}:7654/play/tuner/767
+
+#EXTINF:-1 channel-id="769" tvc-guide-stationid="66268",HALLHD
+http://{{ .IPADDRESS }}:7654/play/tuner/769
+
+#EXTINF:-1 channel-id="771" tvc-guide-stationid="59432",NIKHD
+http://{{ .IPADDRESS }}:7654/play/tuner/771
+
+#EXTINF:-1 channel-id="774" tvc-guide-stationid="60048",TOONHD
+http://{{ .IPADDRESS }}:7654/play/tuner/774
+
+#EXTINF:-1 channel-id="775" tvc-guide-stationid="59615",FREFMHD
+http://{{ .IPADDRESS }}:7654/play/tuner/775
+
+#EXTINF:-1 channel-id="776" tvc-guide-stationid="67331",NGWLHD
+http://{{ .IPADDRESS }}:7654/play/tuner/776
+
+#EXTINF:-1 channel-id="777" tvc-guide-stationid="67375",MAGNHD
+http://{{ .IPADDRESS }}:7654/play/tuner/777
+
+#EXTINF:-1 channel-id="782" tvc-guide-stationid="73541",TVLNDHD
+http://{{ .IPADDRESS }}:7654/play/tuner/782
+
+#EXTINF:-1 channel-id="786" tvc-guide-stationid="68796",POPHD
+http://{{ .IPADDRESS }}:7654/play/tuner/782
+
+#EXTINF:-1 channel-id="795" tvc-guide-stationid="59337",AMCHD
+http://{{ .IPADDRESS }}:7654/play/tuner/795
+
+#EXTINF:-1 channel-id="796" tvc-guide-stationid="46710",HMMHD
+http://{{ .IPADDRESS }}:7654/play/tuner/796
+
+#EXTINF:-1 channel-id="798" tvc-guide-stationid="65687",MGMHD
+http://{{ .IPADDRESS }}:7654/play/tuner/798
+
+#EXTINF:-1 channel-id="800" tvc-guide-stationid="36225",STZENHD
+http://{{ .IPADDRESS }}:7654/play/tuner/800
+
+#EXTINF:-1 channel-id="801" tvc-guide-stationid="83404",SZECLHD
+http://{{ .IPADDRESS }}:7654/play/tuner/801
+
+#EXTINF:-1 channel-id="806" tvc-guide-stationid="71280",SUNDHD
+http://{{ .IPADDRESS }}:7654/play/tuner/806
+
+#EXTINF:-1 channel-id="810" tvc-guide-stationid="19548",HBOHD
+http://{{ .IPADDRESS }}:7654/play/tuner/810
+
+#EXTINF:-1 channel-id="811" tvc-guide-stationid="59368",HBO2HD
+http://{{ .IPADDRESS }}:7654/play/tuner/811
+
+#EXTINF:-1 channel-id="812" tvc-guide-stationid="59363",HBOSGHD
+http://{{ .IPADDRESS }}:7654/play/tuner/812
+
+#EXTINF:-1 channel-id="813" tvc-guide-stationid="59357",HBOFHD
+http://{{ .IPADDRESS }}:7654/play/tuner/813
+
+#EXTINF:-1 channel-id="815" tvc-guide-stationid="59845",HBOZHD
+http://{{ .IPADDRESS }}:7654/play/tuner/815
+
+#EXTINF:-1 channel-id="842" tvc-guide-stationid="34941",STZHD
+http://{{ .IPADDRESS }}:7654/play/tuner/842
+
+#EXTINF:-1 channel-id="843" tvc-guide-stationid="57573",STZEHD
+http://{{ .IPADDRESS }}:7654/play/tuner/843
+
+#EXTINF:-1 channel-id="844" tvc-guide-stationid="34949",STZHDP
+http://{{ .IPADDRESS }}:7654/play/tuner/844
+
+#EXTINF:-1 channel-id="845" tvc-guide-stationid="67235",STRZIBH
+http://{{ .IPADDRESS }}:7654/play/tuner/845
+
+#EXTINF:-1 channel-id="846" tvc-guide-stationid="57581",STZKHD
+http://{{ .IPADDRESS }}:7654/play/tuner/846
+
+#EXTINF:-1 channel-id="847" tvc-guide-stationid="57569",STZCHD
+http://{{ .IPADDRESS }}:7654/play/tuner/847
+
+#EXTINF:-1 channel-id="848" tvc-guide-stationid="67236",STRZCIH
+http://{{ .IPADDRESS }}:7654/play/tuner/848
+
+#EXTINF:-1 channel-id="852" tvc-guide-stationid="70225",UKIDSH
+http://{{ .IPADDRESS }}:7654/play/tuner/852
+
+#EXTINF:-1 channel-id="858" tvc-guide-stationid="82654",NIKTNHD
+http://{{ .IPADDRESS }}:7654/play/tuner/858
+
+#EXTINF:-1 channel-id="863" tvc-guide-stationid="70253",FXMHD
+http://{{ .IPADDRESS }}:7654/play/tuner/863
+
+#EXTINF:-1 channel-id="890" tvc-guide-stationid="14886",STZENFM
+http://{{ .IPADDRESS }}:7654/play/tuner/890
+
+#EXTINF:-1 channel-id="891" tvc-guide-stationid="72014",SZEBHD
+http://{{ .IPADDRESS }}:7654/play/tuner/891
+
+#EXTINF:-1 channel-id="892" tvc-guide-stationid="72015",SZEAHD
+http://{{ .IPADDRESS }}:7654/play/tuner/892
+
+#EXTINF:-1 channel-id="894" tvc-guide-stationid="14765",STZENWS
+http://{{ .IPADDRESS }}:7654/play/tuner/894
+
+#EXTINF:-1 channel-id="895" tvc-guide-stationid="67929",MGMHTH
+http://{{ .IPADDRESS }}:7654/play/tuner/895
+
+#EXTINF:-1 channel-id="896" tvc-guide-stationid="74073",MGMMRHD
+http://{{ .IPADDRESS }}:7654/play/tuner/896
+
+#EXTINF:-1 channel-id="897" tvc-guide-stationid="103828",MGMDRHD
+http://{{ .IPADDRESS }}:7654/play/tuner/897
+
