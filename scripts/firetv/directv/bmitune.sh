@@ -18,6 +18,53 @@ finish() {
 
 trap finish EXIT
 
+#Set encoderURL based on the value of streamerIP
+matchEncoderURL() {
+
+  case "$streamerIP" in
+    "$TUNER1_IP")
+        encoderURL=$ENCODER1_URL
+        ;;
+    "$TUNER2_IP")
+        encoderURL=$ENCODER2_URL
+        ;;
+    "$TUNER3_IP")
+        encoderURL=$ENCODER3_URL
+        ;;
+    "$TUNER4_IP")
+        encoderURL=$ENCODER4_URL
+        ;;
+    *)
+        exit 1
+        ;;
+  esac
+}
+
+#Check for active audio stream
+activeAudioCheck() {
+  local startTime=$(date +%s)
+  local maxDuration=50
+  local minimumLoudness=-50
+  local sleepDuration=1
+  
+  while true; do
+    checkLoudness=$(ffmpeg -t 1 -i $encoderURL -filter:a ebur128 -map 0:a -f null -hide_banner - 2>&1 | awk '/I:        /{print $2}')
+
+    if (( $(date +%s) - $startTime > $maxDuration )); then
+      echo "Active audio stream not detected in $maxDuration seconds."
+      exit 1
+    fi
+
+    if (( $(echo "$checkLoudness > $minimumLoudness" | bc -l) )); then
+      echo "Active audio stream detected with $checkLoudness LUF."
+      break
+    fi
+
+    echo "Active audio stream not yet detected -- loudness is $checkLoudness LUF. Continuing..."
+    sleep $sleepDuration
+  done
+}
+
 #Special channels to kill DirecTV app or reboot FireStick
 specialChannels() {
     packageName=com.att.tv
@@ -37,6 +84,8 @@ specialChannels() {
       exit 1
     else
       echo "Not a special channel (exit nor reboot)"
+      appFocus=$($adbTarget shell dumpsys window windows | grep -E 'mCurrentFocus' | cut -d '/' -f1 | sed 's/.* //g')
+      echo "Current app in focus is $appFocus" 
     fi
 }
 
@@ -67,11 +116,13 @@ launchDelay() {
     echo "Last channel selected on this tuner, no channel change required"
     exit 0
   elif [ -f $streamerNoPort/adbAppRunning ] && (( $timeElapsed < $maxTime )); then
-    sleep 14
+    activeAudioCheck
+    #sleep 14
     rm $streamerNoPort/adbAppRunning
     echo $specialID > "$streamerNoPort/last_channel"
   else
-    sleep 32
+    activeAudioCheck
+    #sleep 32
     echo $specialID > "$streamerNoPort/last_channel"
   fi
 }
@@ -105,6 +156,7 @@ tuneChannel() {
 }
 
 main() {
+  matchEncoderURL
   specialChannels
   launchDelay
   tuneChannel
