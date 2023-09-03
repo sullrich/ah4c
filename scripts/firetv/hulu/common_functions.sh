@@ -201,10 +201,10 @@ function is_media_frozen() {
 		/usr/bin/tesseract  --tessdata-dir /usr/share/tesseract-ocr/4.00/tessdata /tmp/$IPADDR-current.jpg /tmp/$IPADDR-ocr.txt -l eng
 		RESULT=$(cat /tmp/$IPADDR-ocr.txt)
 		if [ -f /tmp/$IPADDR-ocr.txt ]; then
-			if string_exists_in $RESULT "Who's watching?"; then
+			if string_exists_in "$RESULT" "Who's watching?"; then
 				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
 			fi
-			if string_exists_in $RESULT "Still there?"; then
+			if string_exists_in "$RESULT" "Still there?"; then
 				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
 			fi
 			rm /tmp/$IPADDR-ocr.txt
