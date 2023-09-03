@@ -160,6 +160,18 @@ function is_media_playing() {
 	fi
 }
 
+string_exists_in() {
+    local needle="$1"
+    local haystack="$2"
+
+    # Check if needle exists in haystack
+    if [[ "$haystack" == *"$needle"* ]]; then
+        return 0  # true, needle exists in haystack
+    else
+        return 1  # false, needle does not exist in haystack
+    fi
+}
+
 function is_media_frozen() {
 	DEVICEORURL=$1
 	IPADDR=$2
@@ -183,6 +195,20 @@ function is_media_frozen() {
 		fi
 		rm -f "/tmp/$IPADDR-previous.jpg"
 		ffmpeg -i "$DEVICEORURL" -frames:v 1 -y "/tmp/$IPADDR-previous.jpg" -loglevel quiet
+	fi
+	# Run OCR
+	if [ -f /usr/bin/tesseract ]; then
+		/usr/bin/tesseract  --tessdata-dir /usr/share/tesseract-ocr/4.00/tessdata /tmp/$IPADDR-current.jpg /tmp/$IPADDR-ocr.txt -l eng
+		RESULT=$(cat /tmp/$IPADDR-ocr.txt)
+		if [ -/tmp/$IPADDR-ocr.txt ]; then
+			if string_exists_in $RESULT "Who's watching?"; then
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
+			fi
+			if string_exists_in $RESULT "Still there?"; then
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
+			fi
+			rm /tmp/$IPADDR-ocr.txt
+		fi
 	fi
 	return 0
 }
