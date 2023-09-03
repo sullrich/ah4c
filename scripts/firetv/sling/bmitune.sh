@@ -1,15 +1,16 @@
 #!/bin/bash
-#bmitune.sh for firetv/directv
+#bmitune.sh for firetv/sling
 
 #Debug on if uncommented
 set -x
 
 #Global
-channelID=\""$1\""
+channelID="$1"
 specialID="$1"
 streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
+packageName=com.sling
 
 #Trap end of script run
 finish() {
@@ -17,6 +18,18 @@ finish() {
 }
 
 trap finish EXIT
+
+updateReferenceFiles() {
+
+  # Handle cases where stream_stopped or last_channel don't exist
+  mkdir -p $streamerNoPort
+  [[ -f "$streamerNoPort/stream_stopped" ]] || echo 0 > "$streamerNoPort/stream_stopped"
+  [[ -f "$streamerNoPort/last_channel" ]] || echo 0 > "$streamerNoPort/last_channel"
+
+  # Write PID for this script to bmitune_pid for use in stopbmitune.sh
+  echo $$ > "$streamerNoPort/bmitune_pid"
+  echo "Current PID for this script is $$"
+}
 
 #Set encoderURL based on the value of streamerIP
 matchEncoderURL() {
@@ -43,9 +56,9 @@ matchEncoderURL() {
 #Check for active audio stream
 activeAudioCheck() {
   local startTime=$(date +%s)
-  local maxDuration=50
+  local maxDuration=60
   local minimumLoudness=-50
-  local sleepDuration=1
+  local sleepDuration=0.5
   
   while true; do
     checkLoudness=$(ffmpeg -t 1 -i $encoderURL -filter:a ebur128 -map 0:a -f null -hide_banner - 2>&1 | awk '/I:        /{print $2}')
@@ -60,15 +73,30 @@ activeAudioCheck() {
       break
     fi
 
-    echo "Active audio stream not yet detected -- loudness is $checkLoudness LUF. Continuing..."
-    sleep $sleepDuration
+    if appFocusCheck 0; then
+      echo "Active audio stream not yet detected -- loudness is $checkLoudness LUF. Continuing..."
+      sleep $sleepDuration
+    else
+      echo "No active audio stream detected and app is not in focus after $(($(date +%s) - $startTime)) seconds -- attempting to tune again..."
+      tuneChannel
+    fi
+
   done
+}
+
+appFocusCheck() {
+  appFocus=$($adbTarget shell dumpsys window windows | grep -E 'mCurrentFocus' | cut -d '/' -f1 | sed 's/.* //g')
+
+  if [[ $appFocus == $packageName ]]; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 #Special channels to kill DirecTV app or reboot FireStick
 specialChannels() {
-    packageName=com.att.tv
-
+    
     if [ $specialID = "exit" ]; then
       echo "Exit $packageName requested on $streamerIP"
       rm $streamerNoPort/last_channel $streamerNoPort/adbAppRunning
@@ -84,8 +112,9 @@ specialChannels() {
       exit 1
     else
       echo "Not a special channel (exit nor reboot)"
-      appFocus=$($adbTarget shell dumpsys window windows | grep -E 'mCurrentFocus' | cut -d '/' -f1 | sed 's/.* //g')
-      echo "Current app in focus is $appFocus" 
+      #if appFocusCheck; then
+        #echo "$packageName is the app in focus, OK to tune"
+      #fi      
     fi
 }
 
@@ -97,15 +126,6 @@ launchDelay() {
   local timeNow
   local timeElapsed
   local maxTime=14400
-
-  # Handle cases where stream_stopped or last_channel don't exist
-  mkdir -p $streamerNoPort
-  [[ -f "$streamerNoPort/stream_stopped" ]] || echo 0 > "$streamerNoPort/stream_stopped"
-  [[ -f "$streamerNoPort/last_channel" ]] || echo 0 > "$streamerNoPort/last_channel"
-
-  # Write PID for this script to bmitune_pid for use in stopbmitune.sh
-  echo $$ > "$streamerNoPort/bmitune_pid"
-  echo "Current PID for this script is $$"
 
   lastChannel=$(<"$streamerNoPort/last_channel")
   lastAwake=$(<"$streamerNoPort/stream_stopped")
@@ -127,39 +147,18 @@ launchDelay() {
   fi
 }
 
-#Tuning is based on channel name values from directv.m3u.
+#Tuning is based on channel name values from sling.m3u.
 tuneChannel() {
-  channelName=$(awk -F, '/channel-id='"$channelID"'/ {print $2}' m3u/directv.m3u)
-  channelName=$(echo $channelName | sed 's/^/"/;s/$/"/')
-  
-  directvMenu="input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU"
-
-  directvSearch="input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT;
-        input keyevent KEYCODE_DPAD_DOWN; sleep 3; \
-        input keyevent KEYCODE_DPAD_CENTER; sleep 3"
-
-  directvTune="input keyevent KEYCODE_MEDIA_PLAY_PAUSE; sleep 3; \
-        input keyevent KEYCODE_DPAD_DOWN; \
-        input keyevent KEYCODE_DPAD_DOWN; \
-        input keyevent KEYCODE_DPAD_CENTER"
-
-  $adbTarget shell $directvMenu
-  $adbTarget shell $directvSearch
-  $adbTarget shell input text $channelName
-  $adbTarget shell $directvTune
+  $adbTarget shell am start -a android.intent.action.VIEW -d https://watch.sling.com/1/channel/$channelID/watch
 }
 
 main() {
+  updateReferenceFiles
   matchEncoderURL
   specialChannels
-  launchDelay
+  #launchDelay
   tuneChannel
+  activeAudioCheck
 }
 
 main

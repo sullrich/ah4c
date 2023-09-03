@@ -44,6 +44,53 @@
    Use re-pull image and redeploy slider if the container has been updated since the last time you downloaded it.
 7. Check Portainer log for running container using Quick Actions button from Container list to check for errors.
 
+#### Recommended Docker Compose for Portainer-Stacks:
+
+```yml
+version: '3.9'
+services:
+  ah4c:
+    image: bnhf/ah4c:testlatest
+    container_name: ah4c
+    hostname: ah4c
+    dns_search: localdomain # Specify the name of your LAN's domain, usually local or localdomain
+    ports:
+      - 5037:5037 # Port used by adb-server
+      - 7654:7654 # Port used by this androidhdmi-for-channels proxy
+      - 7655:8000 # Port used by ws-scrcpy
+    environment:
+      - IPADDRESS=${IPADDRESS} # Hostname or IP address of this androidhdmi-for-channels extension to be used in M3U file (also add port number if not in M3U)
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined 1, 2, 3 or 4 supported
+      - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
+      - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
+      - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
+      - TUNER4_IP=${TUNER4_IP} # Streaming device #4 with adb port in the form hostname:port or ip:port
+      - ENCODER1_URL=${ENCODER1_URL} # Full URL for tuner #1 in the form http://hostname/stream or http://ip/stream
+      - ENCODER2_URL=${ENCODER2_URL} # Full URL for tuner #2 in the form http://hostname/stream or http://ip/stream
+      - ENCODER3_URL=${ENCODER3_URL} # Full URL for tuner #3 in the form http://hostname/stream or http://ip/stream
+      - ENCODER4_URL=${ENCODER4_URL} # Full URL for tuner #4 in the form http://hostname/stream or http://ip/stream
+      - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
+      - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
+      #- ALERT_SMTP_SERVER="smtp.gmail.com:587"
+      #- ALERT_AUTH_SERVER="smtp.gmail.com"
+      #- ALERT_EMAIL_FROM=""
+      #- ALERT_EMAIL_PASS=""
+      #- ALERT_EMAIL_TO=""
+      #- ALERT_WEBHOOK_URL=""
+      #- UPDATE_SCRIPTS=${UPDATE_SCRIPTS} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist of not
+      #- UPDATE_M3US=${UPDATE_M3US} # Set to true if you'd like the sample m3us updated whether they exist of not
+      - TZ=${TZ} # Your local timezone in Linux "tz" format
+    volumes:
+      - /data/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
+      - /data/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
+      - /data/ah4c/adb:/root/.android # Persistent data directory for adb keys
+    restart: unless-stopped
+```
+
+#### And, here's a sample of the environment variables that you'll need to provide:
+
+![screencapture-htpc6-9000-2023-08-16-16_33_04](https://github.com/bnhf/ah4c/assets/41088895/f7d5a59f-ca49-4c2b-a40a-617c3e0a516c)
+
 #### Developer Instructions
-First see https://github.com/sullrich/androidhdmi-for-channels/blob/main/getting_started.txt
+First see https://github.com/sullrich/ah4c/blob/main/getting_started.txt
 
