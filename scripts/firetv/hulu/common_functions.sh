@@ -161,15 +161,14 @@ function is_media_playing() {
 }
 
 string_exists_in() {
-    local needle="$1"
-    local haystack="$2"
-
-    # Check if needle exists in haystack
-    if [[ "$haystack" == *"$needle"* ]]; then
-        return 0  # true, needle exists in haystack
-    else
-        return 1  # false, needle does not exist in haystack
-    fi
+	local needle="$1"
+	local haystack="$2"
+	# Check if needle exists in haystack
+	if [[ "$haystack" == *"$needle"* ]]; then
+		return 0  # true, needle exists in haystack
+	else
+		return 1  # false, needle does not exist in haystack
+	fi
 }
 
 function is_media_frozen() {
@@ -202,10 +201,17 @@ function is_media_frozen() {
 		RESULT=$(cat /tmp/$IPADDR-ocr.txt)
 		if [ -f /tmp/$IPADDR-ocr.txt ]; then
 			if string_exists_in "$RESULT" "Who's watching?"; then
-				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_CENTER
 			fi
 			if string_exists_in "$RESULT" "Still there?"; then
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_CENTER
+			fi
+			if string_exists_in "$RESULT" "Not now"; then
 				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_DOWN
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_CENTER
+			fi
+			if string_exists_in "$RESULT" "Upcoming price"; then
+				adb -s $IPADDR shell input keyevent KEYCODE_DPAD_CENTER
 			fi
 			rm /tmp/$IPADDR-ocr.txt
 		fi
