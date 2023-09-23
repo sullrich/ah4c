@@ -145,7 +145,7 @@ func init() {
 	http.DefaultClient.Transport = transport
 	// Intitalize logging subsystem
 	loggerhandle = log.New(&lumberjack.Logger{
-		Filename:   "/tmp/androidhdmi-for-channels.log",
+		Filename:   "/tmp/ah4c.log",
 		MaxSize:    25,   // megabytes
 		MaxBackups: 3,    // maximum backups
 		MaxAge:     28,   // days
@@ -274,9 +274,9 @@ func (r *reader) Close() error {
 			logger("[ERR] Failed to kill command: %v", err)
 		}
 	}
-	if err := execute(r.t.stop, r.t.tunerip); err != nil {
+	if err := execute(r.t.stop, r.t.tunerip, r.channel); err != nil {
 		logger("[ERR] Failed to run stop script: %v", err)
-		execute(r.t.reboot, r.t.tunerip)
+		execute(r.t.reboot, r.t.tunerip, r.channel)
 	}
 	tunerLock.Lock()
 	r.t.active = false
@@ -365,7 +365,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 					cmd.Wait()
 					pipeWriter.Close()
 				}()
-				if err := execute(t.pre, t.tunerip); err != nil {
+				if err := execute(t.pre, t.tunerip, channel); err != nil {
 					logger("[ERR] Failed to run pre script: %v", err)
 					continue
 				}
@@ -388,7 +388,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				logger("[ERR] Failed to fetch source: %v", resp.Status)
 				continue
 			}
-			if err := execute(t.pre, t.tunerip); err != nil {
+			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				continue
 			}
@@ -604,7 +604,7 @@ func run() error {
 	})
 	// Show raw logs
 	r.GET("/logs/text", func(c *gin.Context) {
-		content, err := os.ReadFile("/tmp/androidhdmi-for-channels.log")
+		content, err := os.ReadFile("/tmp/ah4c.log")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -620,7 +620,7 @@ func run() error {
 	})
 	// Show logs in json
 	r.GET("/logs/json", func(c *gin.Context) {
-		file, err := os.Open("/tmp/androidhdmi-for-channels.log")
+		file, err := os.Open("/tmp/ah4c.log")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not open log file: %v", err)})
 			return
@@ -681,7 +681,7 @@ func run() error {
 	})
 	// Route for /test/email
 	r.GET("/test/email", func(c *gin.Context) {
-		sendEmail("This is a test email from androidhdmi-for-channels")
+		sendEmail("This is a test email from ah4c")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte("Attempting email testemail"))
 	})
 	r.GET("/status/channelsactivity", func(c *gin.Context) {
@@ -898,7 +898,7 @@ func run() error {
 			}
 		}()
 	}
-	logger("[START] androidhdmi-for-channels is ready")
+	logger("[START] ah4c is ready")
 	return r.Run(":7654")
 }
 
@@ -983,7 +983,7 @@ func loadenv() {
 
 // Almighty main function
 func main() {
-	logger("[START] androidhdmi-for-channels is starting")
+	logger("[START] ah4c is starting")
 	loadenv()
 	// Start GIN
 	errrun := run()
@@ -1057,7 +1057,7 @@ func sendEmail(message string) {
 		}
 		msg := "From: " + from + "\n" +
 			"To: " + to + "\n" +
-			"Subject: androidhdmi-for-channels error Detected\n\n" +
+			"Subject: ah4c error Detected\n\n" +
 			message
 		err := smtp.SendMail(smtpServer, auth, from, []string{to}, []byte(msg))
 		if err != nil {
