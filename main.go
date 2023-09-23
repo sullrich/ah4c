@@ -113,6 +113,8 @@ type Entry struct {
 	StationId   string `json:"stationId"`
 	ChannelName string `json:"channelName"`
 	StreamURL   string `json:"streamURL"`
+	Logo        string `json:"Logo"`
+	Group       string `json:"Group"`
 }
 
 type ConfigEnvVariable struct {
@@ -735,6 +737,8 @@ func run() error {
 			return
 		}
 
+		log.Println("Received entries:", entries)
+
 		filename := c.Param("file")
 		file, err := os.Create("./m3u/" + filename)
 		if err != nil {
@@ -751,7 +755,15 @@ func run() error {
 		}
 
 		for _, entry := range entries {
-			_, err = writer.WriteString(fmt.Sprintf("#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\",%s\n", entry.Id, entry.StationId, entry.ChannelName))
+			extinfLine := fmt.Sprintf(
+				"#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+				entry.Id,
+				entry.StationId,
+				entry.Group, // Added the tvg-group field
+				entry.Logo,  // Added the tvg-logo field
+				entry.ChannelName,
+			)
+			_, err = writer.WriteString(extinfLine)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -813,25 +825,29 @@ func run() error {
 				currentEntry = Entry{}
 				currentEntry.ChannelName = extinfParts[1]
 
-				idParts := strings.SplitN(extinfParts[0], "channel-id=\"", 2)
-				if len(idParts) != 2 {
-					continue
+				// channel-id
+				idParts := extractAttribute(extinfParts[0], "channel-id")
+				if idParts != nil {
+					currentEntry.Id = idParts[0]
 				}
-				idParts = strings.SplitN(idParts[1], "\"", 2)
-				if len(idParts) != 2 {
-					continue
-				}
-				currentEntry.Id = idParts[0]
 
-				stationIdParts := strings.SplitN(extinfParts[0], "tvc-guide-stationid=\"", 2)
-				if len(stationIdParts) != 2 {
-					continue
+				// tvc-guide-stationid
+				stationIdParts := extractAttribute(extinfParts[0], "tvc-guide-stationid")
+				if stationIdParts != nil {
+					currentEntry.StationId = stationIdParts[0]
 				}
-				stationIdParts = strings.SplitN(stationIdParts[1], "\"", 2)
-				if len(stationIdParts) != 2 {
-					continue
+
+				// tvg-group
+				groupParts := extractAttribute(extinfParts[0], "tvg-group")
+				if groupParts != nil {
+					currentEntry.Group = groupParts[0]
 				}
-				currentEntry.StationId = stationIdParts[0]
+
+				// tvg-logo
+				logoParts := extractAttribute(extinfParts[0], "tvg-logo")
+				if logoParts != nil {
+					currentEntry.Logo = logoParts[0]
+				}
 			} else if len(line) > 0 && line[0] != '#' {
 				currentEntry.StreamURL = line
 				entries = append(entries, currentEntry)
@@ -884,6 +900,19 @@ func run() error {
 	}
 	logger("[START] androidhdmi-for-channels is ready")
 	return r.Run(":7654")
+}
+
+// Helper function to extract attribute from a line
+func extractAttribute(line, attribute string) []string {
+	parts := strings.SplitN(line, attribute+"=\"", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	parts = strings.SplitN(parts[1], "\"", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	return parts
 }
 
 func loadenv() {
