@@ -759,7 +759,7 @@ func run() error {
 			if strings.HasPrefix(entry.ChannelName, "#") {
 				// Adjust the #EXTINF line and entry.ChannelName
 				extinfLine := fmt.Sprintf(
-					"# EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",#%s\n",
+					"## EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",## %s\n",
 					entry.Id,
 					entry.StationId,
 					entry.Group, // Added the tvg-group field
