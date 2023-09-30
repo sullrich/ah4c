@@ -755,18 +755,37 @@ func run() error {
 		}
 
 		for _, entry := range entries {
-			extinfLine := fmt.Sprintf(
-				"#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
-				entry.Id,
-				entry.StationId,
-				entry.Group, // Added the tvg-group field
-				entry.Logo,  // Added the tvg-logo field
-				entry.ChannelName,
-			)
-			_, err = writer.WriteString(extinfLine)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
+			// Check if entry.ChannelName begins with #
+			if strings.HasPrefix(entry.ChannelName, "#") {
+				// Adjust the #EXTINF line and entry.ChannelName
+				extinfLine := fmt.Sprintf(
+					"# EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",#%s\n",
+					entry.Id,
+					entry.StationId,
+					entry.Group, // Added the tvg-group field
+					entry.Logo,  // Added the tvg-logo field
+					entry.ChannelName,
+				)
+				_, err = writer.WriteString(extinfLine)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+			} else {
+				// Original code for entries without # at the beginning of ChannelName
+				extinfLine := fmt.Sprintf(
+					"#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+					entry.Id,
+					entry.StationId,
+					entry.Group, // Added the tvg-group field
+					entry.Logo,  // Added the tvg-logo field
+					entry.ChannelName,
+				)
+				_, err = writer.WriteString(extinfLine)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
 			}
 			_, err = writer.WriteString(fmt.Sprintf("%s\n\n", entry.StreamURL)) // use StreamURL here
 			if err != nil {
