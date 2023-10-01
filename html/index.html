@@ -1,25 +1,46 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>AndroidHTMI-For-Channels</title>
-	<style>
-		.styled-input {
-			border: 1px solid #000;
-			padding: 5px;
-		}
-	</style>
+    <title>AndroidHTMI-For-Channels</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <style>
+        body {
+            padding: 20px;
+        }
+        .navbar-brand img {
+            max-height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+    </style>
 </head>
 <body>
-	<img src="static/logos/androidhdmi-for-channels.jpeg" width="400" alt="Androidhdmi For Channels">
-	<h1>AndroidHDMI-For-Channels</h1>
-	<a href="/status">Activity</a><br/>
-	<a href="/status/andlogs">Activity & logs</a><br/>
-	<a href="/logs">Logs</a><br/>
-	<a href="/config">Edit ENV configuration & tuners</a><br/>
-	<a href='/m3us'>Edit channel M3Us</a><br/>
-	<a href='/routes'>Show API routes</a><br/>
-	<a href='/env'>Show ENV variables and current loaded config</a><br/>
-	<a href='/test/webhook'>Test alert WebHook</a><br/>
-	<a href='/test/email'>Test alert E-Mail</a><br/>	
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <a class="navbar-brand" href="/">
+            <img src="static/logos/androidhdmi-for-channels.jpeg" width="200" alt="Androidhdmi For Channels">
+            AndroidHDMI-For-Channels
+        </a>
+    </nav>
+
+    <div class="list-group">
+        <a href="/status" class="list-group-item list-group-item-action">Activity</a>
+        <a href="/status/andlogs" class="list-group-item list-group-item-action">Activity & logs</a>
+        <a href="/logs" class="list-group-item list-group-item-action">Logs</a>
+        <a href="/config" class="list-group-item list-group-item-action">Edit ENV configuration & tuners</a>
+        <a href="/m3us" class="list-group-item list-group-item-action">Edit channel M3Us</a>
+        <a href="/routes" class="list-group-item list-group-item-action">Show API routes</a>
+        <a href="/env" class="list-group-item list-group-item-action">Show ENV variables and current loaded config</a>
+        <a href="/test/webhook" class="list-group-item list-group-item-action">Test alert WebHook</a>
+        <a href="/test/email" class="list-group-item list-group-item-action">Test alert E-Mail</a>
+    </div>
+
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+
 </body>
 </html>

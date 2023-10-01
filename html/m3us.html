@@ -1,14 +1,37 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>M3U Files</title>
+    <title>M3U Files</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
 </head>
-<body>
-	<h1>M3U Files</h1>
-	<ul>
-		{{range .m3us}}
-		<li><a href="/editm3u/{{.}}">{{.}}</a></li>
-		{{end}}
-	</ul>
+<body class="container mt-4">
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <a class="navbar-brand" href="/">M3U Files</a>
+    </nav>
+
+    <div class="list-group mb-4">
+        {{range .m3us}}
+        <a href="/editm3u/{{.}}" class="list-group-item list-group-item-action">{{.}}</a>
+        {{end}}
+    </div>
+
+	
+    <button class="btn btn-danger" onclick="cancel()">Cancel</button> 
+
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+
+	<script>
+
+        function cancel() {
+            window.location.href = "/";
+        }
+	</script>
+	
 </body>
 </html>

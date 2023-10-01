@@ -1,24 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="UTF-8">
-	<title>Available Routes</title>
+    <meta charset="UTF-8">
+    <title>Available Routes</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
 </head>
-<body>
-This is the androidhdmi-for-channels server. Available api endpoints are:<p/>
-	<table border="1" style="border-collapse: collapse;">
-		<tr>
-			<th>HTTP Method</th>
-			<th>Path</th>
-			<th>Handler</th>
-		</tr>
-		{{ range . }}
-		<tr>
-			<td>{{ .Method }}</td>
-			<td>{{ .Path }}</td>
-			<td>{{ .Handler }}</td>
-		</tr>
-		{{ end }}
-	</table>
+<body class="container mt-4">
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <a class="navbar-brand" href="/">Available Routes</a>
+    </nav>
+
+    <table class="table table-striped table-bordered">
+        <thead>
+            <tr>
+                <th>HTTP Method</th>
+                <th>Path</th>
+                <th>Handler</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range . }}
+            <tr>
+                <td>{{ .Method }}</td>
+                <td>{{ .Path }}</td>
+                <td>{{ .Handler }}</td>
+            </tr>
+            {{ end }}
+        </tbody>
+    </table>
+
+    <button class="btn btn-danger mt-4" onclick="cancel()">Cancel</button>
+
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+
+    <script>
+        function cancel() {
+            window.location.href = "/";
+        }
+    </script>
 </body>
 </html>
