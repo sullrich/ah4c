@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"math"
@@ -593,14 +594,13 @@ func run() error {
 	// Show registered env variables
 	r.GET("/env", func(c *gin.Context) {
 		env := os.Environ()
-		var builder strings.Builder
-		builder.WriteString("<pre>\n")
+		var envData string
 		for _, val := range env {
-			builder.WriteString(val)
-			builder.WriteString("\n")
+			envData += val + "\n"
 		}
-		builder.WriteString("</pre>")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(builder.String()))
+		c.HTML(http.StatusOK, "env.html", gin.H{
+			"EnvData": template.HTML("<pre>" + template.HTMLEscapeString(envData) + "</pre>"),
+		})
 	})
 	// Show raw logs
 	r.GET("/logs/text", func(c *gin.Context) {
