@@ -91,7 +91,9 @@
                     <label>Tuner IP</label>
                     <input type="text" class="form-control" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}">
                 </div>
-                <button type="button" class="btn btn-danger" onclick="deleteTuner(this)">Delete</button>
+				<div style="display: flex;">
+				    <button type="button" class="btn btn-danger ml-auto" onclick="deleteTuner(this)">Delete</button>
+				</div>
             </div>
             {{end}}
         </div>
