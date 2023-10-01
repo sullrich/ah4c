@@ -755,12 +755,17 @@ func run() error {
 		}
 
 		for _, entry := range entries {
+			disabledTxt := ""
+			if strings.HasPrefix(entry.Id, "#") {
+				disabledTxt = "#"
+			}
 			extinfLine := fmt.Sprintf(
-				"#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+				"#%sEXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+				disabledTxt,
 				entry.Id,
 				entry.StationId,
-				entry.Group, // Added the tvg-group field
-				entry.Logo,  // Added the tvg-logo field
+				entry.Group,
+				entry.Logo,
 				entry.ChannelName,
 			)
 			_, err = writer.WriteString(extinfLine)
@@ -768,7 +773,7 @@ func run() error {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			_, err = writer.WriteString(fmt.Sprintf("%s\n\n", entry.StreamURL)) // use StreamURL here
+			_, err = writer.WriteString(fmt.Sprintf("%s%s\n\n", disabledTxt, entry.StreamURL)) // use StreamURL here
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -816,7 +821,10 @@ func run() error {
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "#EXTINF:") {
+			if strings.HasPrefix(line, "#http") {
+				line = strings.TrimPrefix(line, "#")
+			}
+			if strings.HasPrefix(line, "#EXTINF:") || strings.HasPrefix(line, "##EXTINF:") {
 				extinfParts := strings.SplitN(line, ",", 2)
 				if len(extinfParts) != 2 {
 					continue
