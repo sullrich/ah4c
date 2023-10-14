@@ -1,5 +1,5 @@
 #!/bin/bash
-#prebmitune.sh for firetv/sling
+#prebmitune.sh for firetv/fubo
 
 #Debug on if uncommented
 set -x

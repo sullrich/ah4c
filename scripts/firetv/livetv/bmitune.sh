@@ -1,8 +1,8 @@
 #!/bin/bash
-#bmitune.sh for firetv/directv
+#bmitune.sh for firetv/livetv
 
 #Debug on if uncommented
-set -x
+#set -x
 
 #Global
 channelID=\""$1\""
@@ -163,37 +163,118 @@ tuneChannel() {
   channelName=$(awk -F, '/channel-id='"$channelID"'/ {print $2}' m3u/$m3uName)
   channelName=$(echo $channelName | sed 's/^/"/;s/$/"/')
   
-  directvMenu="input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU; \
-        input keyevent KEYCODE_MENU"
+  livetvMenu="input keyevent KEYCODE_SEARCH; sleep 1"
 
-  directvSearch="input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_RIGHT; \
-        input keyevent KEYCODE_DPAD_DOWN; sleep 3; \
-        input keyevent KEYCODE_DPAD_CENTER; sleep 3"
+  livetvSearch="input keyevent KEYCODE_DPAD_DOWN; \
+                input keyevent KEYCODE_DPAD_DOWN; \
+                input keyevent KEYCODE_DPAD_DOWN; \
+                input keyevent KEYCODE_DPAD_CENTER"
 
-  directvTune="input keyevent KEYCODE_MEDIA_PLAY_PAUSE; sleep 3; \
-        input keyevent KEYCODE_DPAD_DOWN; \
-        input keyevent KEYCODE_DPAD_DOWN; \
-        input keyevent KEYCODE_DPAD_DOWN; \
-        input keyevent KEYCODE_DPAD_LEFT; \
-        input keyevent KEYCODE_DPAD_CENTER"
+  livetvTune="input keyevent KEYCODE_DPAD_CENTER"
 
-  $adbTarget shell $directvMenu
-  $adbTarget shell $directvSearch
+  livetvAlternateTune="input keyevent KEYCODE_DPAD_DOWN; \
+                       input keyevent KEYCODE_DPAD_DOWN; \
+                       input keyevent KEYCODE_DPAD_CENTER"
+
+  $adbTarget shell $livetvMenu
   $adbTarget shell input text $channelName
-  $adbTarget shell $directvTune
+  $adbTarget shell $livetvSearch
+        case "$specialID" in
+          "STRZIBH")
+            $adbTarget shell $livetvAlternateTune
+            ;; 
+          "STZENHD")
+            $adbTarget shell $livetvAlternateTune
+            ;;
+          "STZEAHD")
+            $adbTarget shell $livetvAlternateTune
+            ;;
+          "STZKHD")
+            $adbTarget shell $livetvAlternateTune
+            ;; 
+          *)
+            $adbTarget shell $livetvTune
+            ;;
+        esac
+}
+
+tuneLiveTV() {
+  channelName=$(awk '/tuner\/'"$specialID"'/ {print prev} {prev = $0}' m3u/$m3uName)
+  channelName=$(echo $channelName | awk -F, '{print $2}')
+  specialID=$(awk -F'["/]' '/'"$channelID"'/{getline; print $6}' m3u/$streamerNoPort.m3u)
+  topGuideChannel=$(grep -m 1 "/play/tuner" m3u/$streamerNoPort.m3u | awk -F/ '{print$6}')
+  local maxLoops=$LIVETV_ATTEMPTS
+  local loopCount=0
+
+  firstLetterChannel="${channelName:0:1}" && echo "Channel name begins with $firstLetterChannel"
+  [[ "$firstLetterChannel" == [A-La-l0-9] ]] && dpadDirection="KEYCODE_DPAD_DOWN"
+  [[ "$firstLetterChannel" == [M-Zm-z] ]] && dpadDirection="KEYCODE_DPAD_UP"
+  
+  # Move to top of Live TV guide, and confirm that its ID matches the top channel in the M3U
+  $adbTarget shell input keyevent KEYCODE_LIVE_TV; sleep 2
+  startingGuideChannel=$($adbTarget shell "input keyevent KEYCODE_LIVE_TV && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+  confirmTopGuidePosition
+  #[ -z $startingGuideChannel ] && startingGuideChannel=$(grep -m 1 "/play/tuner" m3u/$m3uName | awk -F/ '{print$6}')
+  currentGuideChannel=$startingGuideChannel
+  
+  while [ "$loopCount" -lt "$maxLoops" ]; do
+    #[[ $currentGuideChannel == $startingGuideChannel ]] && [ "$loopCount" -gt 0 ] \
+      #&& echo "No channels in the Live TV Guide match $specialID, exiting..." && exit 1
+    [[ $currentGuideChannel == $specialID ]] \
+      && $adbTarget shell input keyevent KEYCODE_DPAD_CENTER \
+      && echo "Live TV ID $currentGuideChannel is the desired $specialID" && break
+    echo "Live TV ID $currentGuideChannel is not the desired $specialID, continuing..."
+    currentGuideChannel=$($adbTarget shell "input keyevent ${dpadDirection} && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+    [ -z $currentGuideChannel ] && $adbTarget shell input keyevent KEYCODE_DPAD_DOWN \
+      && currentGuideChannel=$($adbTarget shell "input keyevent KEYCODE_DPAD_UP && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+    ((loopCount++))
+  done
+}
+
+confirmTopGuidePosition() {
+  local maxLoops=5
+  local loopCount=0
+
+  while [ -z "$startingGuideChannel" ] || [ "$topGuideChannel" != "$startingGuideChannel" ] && [ "$loopCount" -lt "$maxLoops" ]; do
+    redEcho "Starting guide channel returned is null or not equal to the top of guide channel, retrying..."
+    $adbTarget shell input keyevent KEYCODE_DPAD_UP
+    startingGuideChannel=$($adbTarget shell "input keyevent KEYCODE_LIVE_TV && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+    [[ "$startingGuideChannel" == "$topGuideChannel" ]] && break
+    ((loopCount++))
+  done
+
+  # while true; do
+  #   if [ "$topGuideChannel" != "$currentGuideChannel" ]; then
+  #     redEcho "Current guide channel returned is null or not equal to the top of guide channel, retrying..."
+  #     currentGuideChannel=$($adbTarget shell "input keyevent KEYCODE_LIVE_TV && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+  #       # if [ "$topGuideChannel" != "$currentGuideChannel" ]; then
+  #       #   redEcho "Current guide channel is still null or not equal to the top of guide channel, executing up/down move..."
+  #       #   $adbTarget shell input keyevent KEYCODE_DPAD_DOWN
+  #       #   currentGuideChannel=$($adbTarget shell "input keyevent KEYCODE_DPAD_UP && logcat -d" | grep GuideManager | tail -n 1 | awk -F? '{print$3}')
+  #       #     if [ "$topGuideChannel" != "$currentGuideChannel" ]; then
+  #       #       redEcho "Can't confirm position at top of guide, exiting..."
+  #       #       exit 1
+  #       #     fi
+  #       # else
+  #       #   break
+  #       # fi
+  #   else
+  #     break
+  #   fi
+  # done
+}
+
+redEcho() {
+  echo -e "\e[31m $1 \e[0m\n"
 }
 
 main() {
   updateReferenceFiles
   matchEncoderURL
-  specialChannels
-  launchDelay
-  tuneChannel
+  #specialChannels
+  #launchDelay
+  #tuneChannel
+  tuneLiveTV
   activeAudioCheck 24 false 5 1 # (maxDuration, preTuneAudioCheck, sleepBeforeAudioCheck, sleepAfterAudioCheck)
 }
 

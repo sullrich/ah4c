@@ -1,5 +1,5 @@
 #!/bin/bash
-#bmitune.sh for firetv/sling
+#bmitune.sh for firetv/fubo
 
 #Debug on if uncommented
 set -x
@@ -10,7 +10,7 @@ specialID="$1"
 streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
-packageName=com.sling
+packageName=com.fubo.firetv.screen
 
 #Trap end of script run
 finish() {
@@ -78,7 +78,8 @@ activeAudioCheck() {
       sleep $sleepDuration
     else
       echo "No active audio stream detected and app is not in focus after $(($(date +%s) - $startTime)) seconds -- attempting to tune again..."
-      tuneChannel
+      #tuneChannel
+      $adbTarget shell input keyevent KEYCODE_CENTER
     fi
 
   done
@@ -147,9 +148,9 @@ launchDelay() {
   fi
 }
 
-#Tuning is based on channel name values from sling.m3u.
+#Tuning is based on channel name values from fubo.m3u.
 tuneChannel() {
-  #channelName=$(awk '/channel-id='"$channelID"'/ {getline; print}' m3u/sling.m3u | cut -d'/' -f6)
+  #channelName=$(awk '/channel-id='"$channelID"'/ {getline; print}' m3u/fubo.m3u | cut -d'/' -f6)
   #channelName=$(echo $channelName | sed 's/^/"/;s/$/"/')
   
   #livetvMenu="input keyevent KEYCODE_HOME"
@@ -164,7 +165,7 @@ tuneChannel() {
   #$adbTarget shell input text $channelName
   #$adbTarget shell $livetvTune
   #livetvTune
-  $adbTarget shell am start -a android.intent.action.VIEW -d https://watch.sling.com/1/channel/$channelID/watch
+  $adbTarget shell am start -a android.intent.action.VIEW -d https://link.fubo.tv/al1%3Fv%3D1%26a%3Dplay%26t%3Dchannel%26channel_id%3D$channelID
 }
 
 main() {

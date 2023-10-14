@@ -1,14 +1,16 @@
 #!/bin/bash
-#prebmitune.sh for firetv/sling
+#prebmitune.sh for firetv/livetv
 
 #Debug on if uncommented
-set -x
+#set -x
 
+specialID="$2"
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 
 mkdir -p $streamerNoPort
+echo "Beginning tuning for $specialID"
 
 #Trap end of script run
 finish() {
@@ -20,7 +22,7 @@ trap finish EXIT
 adbConnect() {
   adb connect $streamerIP
 
-  local -i adbMaxRetries=2
+  local -i adbMaxRetries=25
   local -i adbCounter=0
 
   while true; do
@@ -42,22 +44,22 @@ adbConnect() {
   done
 }
 
-# adbWake() {
-#   #packageLaunch="tv.youi.clientapp.AppActivity"
-#   packageName="com.sling"
-#   packagePID=$($adbTarget shell pidof $packageName)
+adbWake() {
+  packageLaunch="com.clientapp.MainActivity"
+  packageName="com.att.tv"
+  packagePID=$($adbTarget shell pidof $packageName)
   
-#   if [ ! -z $packagePID ]; then
-#     $adbTarget shell input keyevent KEYCODE_WAKEUP
-#     $adbTarget shell am start -n $packageName/$packageLaunch
-#     echo "Waking $streamerIP"
-#     touch $streamerNoPort/adbAppRunning
-#   else
-#     $adbTarget shell input keyevent KEYCODE_WAKEUP
-#     $adbTarget shell am start -n $packageName/$packageLaunch
-#     echo "Starting $packageName on $streamerIP"
-#   fi
-# }
+  if [ ! -z $packagePID ]; then
+    $adbTarget shell input keyevent KEYCODE_WAKEUP
+    $adbTarget shell am start -n $packageName/$packageLaunch
+    echo "Waking $streamerIP"
+    touch $streamerNoPort/adbAppRunning
+  else
+    $adbTarget shell input keyevent KEYCODE_WAKEUP
+    $adbTarget shell am start -n $packageName/$packageLaunch
+    echo "Starting $packageName on $streamerIP"
+  fi
+}
 
 main() {
   adbConnect

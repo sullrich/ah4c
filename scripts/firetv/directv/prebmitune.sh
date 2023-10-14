@@ -43,7 +43,7 @@ adbConnect() {
 }
 
 adbWake() {
-  packageLaunch="tv.youi.clientapp.AppActivity"
+  packageLaunch="com.clientapp.MainActivity"
   packageName="com.att.tv"
   packagePID=$($adbTarget shell pidof $packageName)
   
