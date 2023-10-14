@@ -1,67 +1,112 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>Config</title>
-	<script>
-		let tunerCount = {{len .Tuners}};
-		function addTuner() {
-			tunerCount++;
-			let html = `<div>
-				<p/><b>Tuner ${tunerCount}</b><br/>
-				<label>CMD</label>
-				<input type="text" name="CMD${tunerCount}" value="" size="40">
-				<label>Encoder IP</label>
-				<input type="text" name="ENCODER${tunerCount}_IP" value="" size="40">
-				<label>Tuner URL</label>
-				<input type="text" name="TUNER${tunerCount}_URL" value="" size="40">
-				<button type="button" onclick="deleteTuner(this)">Delete</button>
-			</div>`;
-			let tunersDiv = document.getElementById('tuners');
-			tunersDiv.insertAdjacentHTML('beforeend', html);
-		}
-		function deleteTuner(button) {
-			let div = button.parentElement;
-			div.parentElement.removeChild(div);
-		}
-		function cancelForm() {
-			window.location.href = "/";
-		}
-	</script>
+    <title>Config</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <style>
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .bordered {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            border: 1px solid #dee2e6;
+            border-radius: .5rem;
+        }
+        .tuner {
+            margin-bottom: 2rem;  /* Increased margin-bottom */
+            padding: 1rem;
+            padding-bottom: 2rem;
+            border: 1px solid #dee2e6;
+            border-radius: .5rem;
+        }
+        .tuner-header {
+            font-weight: bold;
+            margin-bottom: .5rem;
+            font-size: 1.25rem;  /* Increased font size */
+        }
+    </style>
+    <script>
+        let tunerCount = {{len .Tuners}};
+        function addTuner() {
+            tunerCount++;
+            let html = `
+            <div class="tuner">
+                <div class="tuner-header">Tuner ${tunerCount}</div>
+                <div class="form-group">
+                    <label>CMD</label>
+                    <input type="text" class="form-control" name="CMD${tunerCount}" value="">
+                </div>
+                <div class="form-group">
+                    <label>Encoder IP</label>
+                    <input type="text" class="form-control" name="ENCODER${tunerCount}_IP" value="">
+                </div>
+                <div class="form-group">
+                    <label>Tuner URL</label>
+                    <input type="text" class="form-control" name="TUNER${tunerCount}_URL" value="">
+                </div>
+                <button type="button" class="btn btn-danger" onclick="deleteTuner(this)">Delete</button>
+            </div>`;
+            let tunersDiv = document.getElementById('tuners');
+            tunersDiv.insertAdjacentHTML('beforeend', html);
+        }
+        function deleteTuner(button) {
+            let div = button.parentElement;
+            div.parentElement.removeChild(div);
+        }
+        function cancelForm() {
+            window.location.href = "/";
+        }
+    </script>
 </head>
-<body>
-	<h2>Global Variables</h2>
-	<form action="/configsave" method="post">
-		<table>
-			{{range .EnvVariables}}
-			<tr>
-				<td align="right">
-					<label>{{.Key}}</label>
-				</td>
-				<td>
-					<input type="text" name="{{.Key}}" value="{{.Value}}">
-				</td>
-			</tr>
-			{{end}}
-		</table>
-		<h2>Tuners</h2>
-		<div id="tuners">
-		{{range .Tuners}}
-		<div>
-			<p/><b>Tuner {{.Number}}</b><br/>
-			<label>CMD</label>
-			<input type="text" name="CMD{{.Number}}" value="{{.Cmd}}" size="40">
-			<label>Encoder URL</label>
-			<input type="text" name="ENCODER{{.Number}}_URL" value="{{.EncoderUrl}}" size="40">
-			<label>Tuner IP</label>
-			<input type="text" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}" size="40">
-			<button type="button" onclick="deleteTuner(this)">Delete</button>
-		</div>
-		{{end}}
-		</div>
-		<p/>&nbsp;<br/>
-		<button type="button" onClick="addTuner()">Add Tuner</button> 
-		<button type="submit">Save</button> 
-		<button type="button" onClick="cancelForm()">Cancel</button> 
-	</form>
+<body class="container mt-4">
+    <h2>Global Variables</h2>
+    <form action="/configsave" method="post">
+        <div class="bordered">
+            {{range .EnvVariables}}
+            <div class="form-group row">
+                <label class="col-sm-3 col-form-label">{{.Key}}</label>  <!-- Adjusted column size -->
+                <div class="col-sm-9">
+                    <input type="text" class="form-control" name="{{.Key}}" value="{{.Value}}">
+                </div>
+            </div>
+            {{end}}
+        </div>
+        <div class="mb-4"></div>
+        <h2>Tuners</h2>
+        <div id="tuners">
+            {{range .Tuners}}
+            <div class="tuner">
+                <div class="tuner-header">Tuner {{.Number}}</div>
+                <div class="form-group">
+                    <label>CMD</label>
+                    <input type="text" class="form-control" name="CMD{{.Number}}" value="{{.Cmd}}">
+                </div>
+                <div class="form-group">
+                    <label>Encoder URL</label>
+                    <input type="text" class="form-control" name="ENCODER{{.Number}}_URL" value="{{.EncoderUrl}}">
+                </div>
+                <div class="form-group">
+                    <label>Tuner IP</label>
+                    <input type="text" class="form-control" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}">
+                </div>
+				<div style="display: flex;">
+				    <button type="button" class="btn btn-danger ml-auto" onclick="deleteTuner(this)">Delete</button>
+				</div>
+            </div>
+            {{end}}
+        </div>
+        <div class="mb-4">
+            <button type="button" class="btn btn-primary" onClick="addTuner()">Add Tuner</button>
+            <button type="submit" class="btn btn-success">Save</button>
+            <button type="button" class="btn btn-danger" onClick="cancelForm()">Cancel</button>
+        </div>
+    </form>
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
 </body>
 </html>

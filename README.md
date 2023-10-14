@@ -23,7 +23,7 @@
 15. Tee support (sending feed to a secondary target)
 16. Application based tuning! Just send the feed to stdout
 17. Dead video feeds restart - video locking up but audio working
-
+18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
 
 #### Docker Instructions
 

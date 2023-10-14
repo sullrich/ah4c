@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"math"
@@ -113,6 +114,8 @@ type Entry struct {
 	StationId   string `json:"stationId"`
 	ChannelName string `json:"channelName"`
 	StreamURL   string `json:"streamURL"`
+	Logo        string `json:"Logo"`
+	Group       string `json:"Group"`
 }
 
 type ConfigEnvVariable struct {
@@ -143,7 +146,7 @@ func init() {
 	http.DefaultClient.Transport = transport
 	// Intitalize logging subsystem
 	loggerhandle = log.New(&lumberjack.Logger{
-		Filename:   "/tmp/androidhdmi-for-channels.log",
+		Filename:   "/tmp/ah4c.log",
 		MaxSize:    25,   // megabytes
 		MaxBackups: 3,    // maximum backups
 		MaxAge:     28,   // days
@@ -272,9 +275,9 @@ func (r *reader) Close() error {
 			logger("[ERR] Failed to kill command: %v", err)
 		}
 	}
-	if err := execute(r.t.stop, r.t.tunerip); err != nil {
+	if err := execute(r.t.stop, r.t.tunerip, r.channel); err != nil {
 		logger("[ERR] Failed to run stop script: %v", err)
-		execute(r.t.reboot, r.t.tunerip)
+		execute(r.t.reboot, r.t.tunerip, r.channel)
 	}
 	tunerLock.Lock()
 	r.t.active = false
@@ -363,7 +366,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 					cmd.Wait()
 					pipeWriter.Close()
 				}()
-				if err := execute(t.pre, t.tunerip); err != nil {
+				if err := execute(t.pre, t.tunerip, channel); err != nil {
 					logger("[ERR] Failed to run pre script: %v", err)
 					continue
 				}
@@ -386,7 +389,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				logger("[ERR] Failed to fetch source: %v", resp.Status)
 				continue
 			}
-			if err := execute(t.pre, t.tunerip); err != nil {
+			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				continue
 			}
@@ -591,18 +594,17 @@ func run() error {
 	// Show registered env variables
 	r.GET("/env", func(c *gin.Context) {
 		env := os.Environ()
-		var builder strings.Builder
-		builder.WriteString("<pre>\n")
+		var envData string
 		for _, val := range env {
-			builder.WriteString(val)
-			builder.WriteString("\n")
+			envData += val + "\n"
 		}
-		builder.WriteString("</pre>")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(builder.String()))
+		c.HTML(http.StatusOK, "env.html", gin.H{
+			"EnvData": template.HTML("<pre>" + template.HTMLEscapeString(envData) + "</pre>"),
+		})
 	})
 	// Show raw logs
 	r.GET("/logs/text", func(c *gin.Context) {
-		content, err := os.ReadFile("/tmp/androidhdmi-for-channels.log")
+		content, err := os.ReadFile("/tmp/ah4c.log")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -618,7 +620,7 @@ func run() error {
 	})
 	// Show logs in json
 	r.GET("/logs/json", func(c *gin.Context) {
-		file, err := os.Open("/tmp/androidhdmi-for-channels.log")
+		file, err := os.Open("/tmp/ah4c.log")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not open log file: %v", err)})
 			return
@@ -679,7 +681,7 @@ func run() error {
 	})
 	// Route for /test/email
 	r.GET("/test/email", func(c *gin.Context) {
-		sendEmail("This is a test email from androidhdmi-for-channels")
+		sendEmail("This is a test email from ah4c")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte("Attempting email testemail"))
 	})
 	r.GET("/status/channelsactivity", func(c *gin.Context) {
@@ -735,6 +737,8 @@ func run() error {
 			return
 		}
 
+		log.Println("Received entries:", entries)
+
 		filename := c.Param("file")
 		file, err := os.Create("./m3u/" + filename)
 		if err != nil {
@@ -751,12 +755,25 @@ func run() error {
 		}
 
 		for _, entry := range entries {
-			_, err = writer.WriteString(fmt.Sprintf("#EXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\",%s\n", entry.Id, entry.StationId, entry.ChannelName))
+			disabledTxt := ""
+			if strings.HasPrefix(entry.Id, "#") {
+				disabledTxt = "#"
+			}
+			extinfLine := fmt.Sprintf(
+				"#%sEXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+				disabledTxt,
+				entry.Id,
+				entry.StationId,
+				entry.Group,
+				entry.Logo,
+				entry.ChannelName,
+			)
+			_, err = writer.WriteString(extinfLine)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			_, err = writer.WriteString(fmt.Sprintf("%s\n\n", entry.StreamURL)) // use StreamURL here
+			_, err = writer.WriteString(fmt.Sprintf("%s%s\n\n", disabledTxt, entry.StreamURL)) // use StreamURL here
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -804,7 +821,10 @@ func run() error {
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "#EXTINF:") {
+			if strings.HasPrefix(line, "#http") {
+				line = strings.TrimPrefix(line, "#")
+			}
+			if strings.HasPrefix(line, "#EXTINF:") || strings.HasPrefix(line, "##EXTINF:") {
 				extinfParts := strings.SplitN(line, ",", 2)
 				if len(extinfParts) != 2 {
 					continue
@@ -813,25 +833,29 @@ func run() error {
 				currentEntry = Entry{}
 				currentEntry.ChannelName = extinfParts[1]
 
-				idParts := strings.SplitN(extinfParts[0], "channel-id=\"", 2)
-				if len(idParts) != 2 {
-					continue
+				// channel-id
+				idParts := extractAttribute(extinfParts[0], "channel-id")
+				if idParts != nil {
+					currentEntry.Id = idParts[0]
 				}
-				idParts = strings.SplitN(idParts[1], "\"", 2)
-				if len(idParts) != 2 {
-					continue
-				}
-				currentEntry.Id = idParts[0]
 
-				stationIdParts := strings.SplitN(extinfParts[0], "tvc-guide-stationid=\"", 2)
-				if len(stationIdParts) != 2 {
-					continue
+				// tvc-guide-stationid
+				stationIdParts := extractAttribute(extinfParts[0], "tvc-guide-stationid")
+				if stationIdParts != nil {
+					currentEntry.StationId = stationIdParts[0]
 				}
-				stationIdParts = strings.SplitN(stationIdParts[1], "\"", 2)
-				if len(stationIdParts) != 2 {
-					continue
+
+				// tvg-group
+				groupParts := extractAttribute(extinfParts[0], "tvg-group")
+				if groupParts != nil {
+					currentEntry.Group = groupParts[0]
 				}
-				currentEntry.StationId = stationIdParts[0]
+
+				// tvg-logo
+				logoParts := extractAttribute(extinfParts[0], "tvg-logo")
+				if logoParts != nil {
+					currentEntry.Logo = logoParts[0]
+				}
 			} else if len(line) > 0 && line[0] != '#' {
 				currentEntry.StreamURL = line
 				entries = append(entries, currentEntry)
@@ -882,8 +906,21 @@ func run() error {
 			}
 		}()
 	}
-	logger("[START] androidhdmi-for-channels is ready")
+	logger("[START] ah4c is ready")
 	return r.Run(":7654")
+}
+
+// Helper function to extract attribute from a line
+func extractAttribute(line, attribute string) []string {
+	parts := strings.SplitN(line, attribute+"=\"", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	parts = strings.SplitN(parts[1], "\"", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	return parts
 }
 
 func loadenv() {
@@ -954,7 +991,7 @@ func loadenv() {
 
 // Almighty main function
 func main() {
-	logger("[START] androidhdmi-for-channels is starting")
+	logger("[START] ah4c is starting")
 	loadenv()
 	// Start GIN
 	errrun := run()
@@ -1028,7 +1065,7 @@ func sendEmail(message string) {
 		}
 		msg := "From: " + from + "\n" +
 			"To: " + to + "\n" +
-			"Subject: androidhdmi-for-channels error Detected\n\n" +
+			"Subject: ah4c error Detected\n\n" +
 			message
 		err := smtp.SendMail(smtpServer, auth, from, []string{to}, []byte(msg))
 		if err != nil {
