@@ -1,0 +1,94 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="PPLUSLAUGH" tvc-guide-stationid="121815",24/7 Laughs
+http://{{ .IPADDRESS }}/play/tuner/PPLUSLAUGH
+
+#EXTINF:-1 channel-id="5MAXHD" tvc-guide-stationid="59961",5StarMAX East
+http://{{ .IPADDRESS }}/play/tuner/5MAXHD
+
+#EXTINF:-1 channel-id="ACMAXHD" tvc-guide-stationid="59948",ActionMAX HD East
+http://{{ .IPADDRESS }}/play/tuner/ACMAXHD
+
+#EXTINF:-1 channel-id="MAXHD" tvc-guide-stationid="34933",Cinemax HD East
+http://{{ .IPADDRESS }}/play/tuner/MAXHD
+
+#EXTINF:-1 channel-id="MAXHDP" tvc-guide-stationid="35975",Cinemax HD West
+http://{{ .IPADDRESS }}/play/tuner/MAXHDP
+
+#EXTINF:-1 channel-id="SZEAHD" tvc-guide-stationid="72015",Encore Action HD East
+http://{{ .IPADDRESS }}/play/tuner/SZEAHD
+
+#EXTINF:-1 channel-id="STZENHD" tvc-guide-stationid="36225",Encore HD East
+http://{{ .IPADDRESS }}/play/tuner/STZENHD
+
+#EXTINF:-1 channel-id="HBOHD" tvc-guide-stationid="19548",HBO
+http://{{ .IPADDRESS }}/play/tuner/HBOHD
+
+#EXTINF:-1 channel-id="HBO2HD" tvc-guide-stationid="59368",HBO 2
+http://{{ .IPADDRESS }}/play/tuner/HBO2HD
+
+#EXTINF:-1 channel-id="HBOCHD" tvc-guide-stationid="59839",HBO Comedy
+http://{{ .IPADDRESS }}/play/tuner/HBOCHD
+
+#EXTINF:-1 channel-id="HBOFHD" tvc-guide-stationid="59357",HBO Family
+http://{{ .IPADDRESS }}/play/tuner/HBOFHD
+
+#EXTINF:-1 channel-id="HBOSGHD" tvc-guide-stationid="59363",HBO Signature
+http://{{ .IPADDRESS }}/play/tuner/HBOSGHD
+
+#EXTINF:-1 channel-id="HBOHDP" tvc-guide-stationid="19566",HBO West
+http://{{ .IPADDRESS }}/play/tuner/HBOHDP
+
+#EXTINF:-1 channel-id="HBOZHD" tvc-guide-stationid="59845",HBO Zone
+http://{{ .IPADDRESS }}/play/tuner/HBOZHD
+
+#EXTINF:-1 channel-id="MGMHD" tvc-guide-stationid="65669",MGM+
+http://{{ .IPADDRESS }}/play/tuner/MGMHD
+
+#EXTINF:-1 channel-id="MGMDRHD" tvc-guide-stationid="103828",MGM+ DRIVE-IN
+http://{{ .IPADDRESS }}/play/tuner/MGMDRHD
+
+#EXTINF:-1 channel-id="MGMHTH" tvc-guide-stationid="67929",MGM+ HITS
+http://{{ .IPADDRESS }}/play/tuner/MGMHTH
+
+#EXTINF:-1 channel-id="MGMMRHD" tvc-guide-stationid="74073",MGM+ MARQUEE
+http://{{ .IPADDRESS }}/play/tuner/MGMMRHD
+
+#EXTINF:-1 channel-id="MOMAXHD" tvc-guide-stationid="59373",MoreMAX HD East
+http://{{ .IPADDRESS }}/play/tuner/MOMAXHD
+
+#EXTINF:-1 channel-id="MOVIEHD" tvc-guide-stationid="59963",MovieMAX HD East
+http://{{ .IPADDRESS }}/play/tuner/MOVIEHD
+
+#EXTINF:-1 channel-id="OUTMAXHD" tvc-guide-stationid="59952",OuterMAX HD East
+http://{{ .IPADDRESS }}/play/tuner/OUTMAXHD
+
+#EXTINF:-1 channel-id="SHOWHD" tvc-guide-stationid="21868",Showtime
+http://{{ .IPADDRESS }}/play/tuner/SHOWHD
+
+#EXTINF:-1 channel-id="SHOWHDP" tvc-guide-stationid="22532",Showtime West
+http://{{ .IPADDRESS }}/play/tuner/SHOWHDP
+
+#EXTINF:-1 channel-id="STRZCIH" tvc-guide-stationid="67236",Starz Cinema HD East
+http://{{ .IPADDRESS }}/play/tuner/STRZCIH
+
+#EXTINF:-1 channel-id="STZCHD" tvc-guide-stationid="57569",Starz Comedy HD East
+http://{{ .IPADDRESS }}/play/tuner/STZCHD
+
+#EXTINF:-1 channel-id="STZEHD" tvc-guide-stationid="57573",Starz Edge HD East
+http://{{ .IPADDRESS }}/play/tuner/STZEHD
+
+#EXTINF:-1 channel-id="STZHD" tvc-guide-stationid="34941",Starz HD East
+http://{{ .IPADDRESS }}/play/tuner/STZHD
+
+#EXTINF:-1 channel-id="STZHDP" tvc-guide-stationid="34949",Starz HD West
+http://{{ .IPADDRESS }}/play/tuner/STZHDP
+
+#EXTINF:-1 channel-id="STRZIBH" tvc-guide-stationid="67235",Starz inBlack HD East
+http://{{ .IPADDRESS }}/play/tuner/STRZIBH
+
+#EXTINF:-1 channel-id="STZKHD" tvc-guide-stationid="57581",Starz Kids & Family HD East
+http://{{ .IPADDRESS }}/play/tuner/STZKHD
+
+#EXTINF:-1 channel-id="THMAXHD" tvc-guide-stationid="59954",ThrillerMAX East
+http://{{ .IPADDRESS }}/play/tuner/THMAXHD
