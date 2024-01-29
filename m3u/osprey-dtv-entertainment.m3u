@@ -1,0 +1,251 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="265" channel-number="265",A&E
+http://192.168.149.252:7654/play/tuner/265
+
+#EXTINF:-1 channel-id="361" channel-number="361",AccuWeather
+http://192.168.149.252:7654/play/tuner/361
+
+#EXTINF:-1 channel-id="254" channel-number="254",AMC
+http://192.168.149.252:7654/play/tuner/254
+
+#EXTINF:-1 channel-id="282" channel-number="282",Animal Planet
+http://192.168.149.252:7654/play/tuner/282
+
+#EXTINF:-1 channel-id="340" channel-number="340",AXS TV
+http://192.168.149.252:7654/play/tuner/340
+
+#EXTINF:-1 channel-id="293" channel-number="293",BabyFirst HD
+http://192.168.149.252:7654/play/tuner/293
+
+#EXTINF:-1 channel-id="264" channel-number="264",BBC America
+http://192.168.149.252:7654/play/tuner/264
+
+#EXTINF:-1 channel-id="329" channel-number="329",BET
+http://192.168.149.252:7654/play/tuner/329
+
+#EXTINF:-1 channel-id="353" channel-number="353",Bloomberg TV
+http://192.168.149.252:7654/play/tuner/353
+
+#EXTINF:-1 channel-id="298" channel-number="298",Boomerang
+http://192.168.149.252:7654/play/tuner/298
+
+#EXTINF:-1 channel-id="237" channel-number="237",Bravo
+http://192.168.149.252:7654/play/tuner/237
+
+#EXTINF:-1 channel-id="296" channel-number="296",Cartoon Network East
+http://192.168.149.252:7654/play/tuner/296
+
+#EXTINF:-1 channel-id="341" channel-number="341",CleoTV
+http://192.168.149.252:7654/play/tuner/341
+
+#EXTINF:-1 channel-id="327" channel-number="327",CMT
+http://192.168.149.252:7654/play/tuner/327
+
+#EXTINF:-1 channel-id="355" channel-number="355",CNBC
+http://192.168.149.252:7654/play/tuner/355
+
+#EXTINF:-1 channel-id="202" channel-number="202",CNN
+http://192.168.149.252:7654/play/tuner/202
+
+#EXTINF:-1 channel-id="419" channel-number="419",CNN En Español
+http://192.168.149.252:7654/play/tuner/419
+
+#EXTINF:-1 channel-id="358" channel-number="358",CNNi
+http://192.168.149.252:7654/play/tuner/358
+
+#EXTINF:-1 channel-id="249" channel-number="249",Comedy Central
+http://192.168.149.252:7654/play/tuner/249
+
+#EXTINF:-1 channel-id="350" channel-number="350",C-SPAN
+http://192.168.149.252:7654/play/tuner/350
+
+#EXTINF:-1 channel-id="351" channel-number="351",C-SPAN2
+http://192.168.149.252:7654/play/tuner/351
+
+#EXTINF:-1 channel-id="369" channel-number="369",Daystar
+http://192.168.149.252:7654/play/tuner/369
+
+#EXTINF:-1 channel-id="278" channel-number="278",Discovery
+http://192.168.149.252:7654/play/tuner/278
+
+#EXTINF:-1 channel-id="290" channel-number="290",Disney Channel
+http://192.168.149.252:7654/play/tuner/290
+
+#EXTINF:-1 channel-id="289" channel-number="289",Disney Junior
+http://192.168.149.252:7654/play/tuner/289
+
+#EXTINF:-1 channel-id="292" channel-number="292",Disney XD
+http://192.168.149.252:7654/play/tuner/292
+
+#EXTINF:-1 channel-id="236" channel-number="236",E!
+http://192.168.149.252:7654/play/tuner/236
+
+#EXTINF:-1 channel-id="267" channel-number="267",EarthxTV
+http://192.168.149.252:7654/play/tuner/267
+
+#EXTINF:-1 channel-id="206" channel-number="206",ESPN
+http://192.168.149.252:7654/play/tuner/206
+
+#EXTINF:-1 channel-id="209" channel-number="209",ESPN2
+http://192.168.149.252:7654/play/tuner/209
+
+#EXTINF:-1 channel-id="314" channel-number="314",Family Movie Classics (FMC)
+http://192.168.149.252:7654/play/tuner/314
+
+#EXTINF:-1 channel-id="231" channel-number="231",Food Network
+http://192.168.149.252:7654/play/tuner/231
+
+#EXTINF:-1 channel-id="359" channel-number="359",FOX Business Network
+http://192.168.149.252:7654/play/tuner/359
+
+#EXTINF:-1 channel-id="360" channel-number="360",FOX News Channel
+http://192.168.149.252:7654/play/tuner/360
+
+#EXTINF:-1 channel-id="219" channel-number="219",FOX Sports 1
+http://192.168.149.252:7654/play/tuner/219
+
+#EXTINF:-1 channel-id="363" channel-number="363",FOX Weather
+http://192.168.149.252:7654/play/tuner/363
+
+#EXTINF:-1 channel-id="311" channel-number="311",Freeform
+http://192.168.149.252:7654/play/tuner/311
+
+#EXTINF:-1 channel-id="248" channel-number="248",FX
+http://192.168.149.252:7654/play/tuner/248
+
+#EXTINF:-1 channel-id="259" channel-number="259",FXX
+http://192.168.149.252:7654/play/tuner/259
+
+#EXTINF:-1 channel-id="404" channel-number="404",Galavisión
+http://192.168.149.252:7654/play/tuner/404
+
+#EXTINF:-1 channel-id="312" channel-number="312",Hallmark Channel
+http://192.168.149.252:7654/play/tuner/312
+
+#EXTINF:-1 channel-id="565" channel-number="565",Hallmark Movies & Mysteries
+http://192.168.149.252:7654/play/tuner/565
+
+#EXTINF:-1 channel-id="229" channel-number="229",HGTV
+http://192.168.149.252:7654/play/tuner/229
+
+#EXTINF:-1 channel-id="204" channel-number="204",HLN
+http://192.168.149.252:7654/play/tuner/204
+
+#EXTINF:-1 channel-id="240" channel-number="240",HSN
+http://192.168.149.252:7654/play/tuner/240
+
+#EXTINF:-1 channel-id="333" channel-number="333",IFC
+http://192.168.149.252:7654/play/tuner/333
+
+#EXTINF:-1 channel-id="285" channel-number="285",Investigation Discovery
+http://192.168.149.252:7654/play/tuner/285
+
+#EXTINF:-1 channel-id="305" channel-number="305",ION
+http://192.168.149.252:7654/play/tuner/305
+
+#EXTINF:-1 channel-id="252" channel-number="252",Lifetime
+http://192.168.149.252:7654/play/tuner/252
+
+#EXTINF:-1 channel-id="281" channel-number="281",MotorTrend
+http://192.168.149.252:7654/play/tuner/281
+
+#EXTINF:-1 channel-id="356" channel-number="356",MSNBC
+http://192.168.149.252:7654/play/tuner/356
+
+#EXTINF:-1 channel-id="331" channel-number="331",MTV
+http://192.168.149.252:7654/play/tuner/331
+
+#EXTINF:-1 channel-id="332" channel-number="332",MTV2
+http://192.168.149.252:7654/play/tuner/332
+
+#EXTINF:-1 channel-id="276" channel-number="276",National Geographic Channel
+http://192.168.149.252:7654/play/tuner/276
+
+#EXTINF:-1 channel-id="349" channel-number="349",Newsmax
+http://192.168.149.252:7654/play/tuner/349
+
+#EXTINF:-1 channel-id="299" channel-number="299",Nickelodeon
+http://192.168.149.252:7654/play/tuner/299
+
+#EXTINF:-1 channel-id="274" channel-number="274",Ovation
+http://192.168.149.252:7654/play/tuner/274
+
+#EXTINF:-1 channel-id="241" channel-number="241",Paramount Network
+http://192.168.149.252:7654/play/tuner/241
+
+#EXTINF:-1 channel-id="288" channel-number="288",PBS Kids
+http://192.168.149.252:7654/play/tuner/288
+
+#EXTINF:-1 channel-id="275" channel-number="275",QVC
+http://192.168.149.252:7654/play/tuner/275
+
+#EXTINF:-1 channel-id="315" channel-number="315",QVC2
+http://192.168.149.252:7654/play/tuner/315
+
+#EXTINF:-1 channel-id="318" channel-number="318",QVC3
+http://192.168.149.252:7654/play/tuner/318
+
+#EXTINF:-1 channel-id="238" channel-number="238",Reelz
+http://192.168.149.252:7654/play/tuner/238
+
+#EXTINF:-1 channel-id="384" channel-number="384",Revolt
+http://192.168.149.252:7654/play/tuner/384
+
+#EXTINF:-1 channel-id="345" channel-number="345",RFD-TV
+http://192.168.149.252:7654/play/tuner/345
+
+#EXTINF:-1 channel-id="320" channel-number="320",Scientology Network
+http://192.168.149.252:7654/play/tuner/320
+
+#EXTINF:-1 channel-id="226" channel-number="226",Shop LC
+http://192.168.149.252:7654/play/tuner/226
+
+#EXTINF:-1 channel-id="239" channel-number="239",SundanceTV
+http://192.168.149.252:7654/play/tuner/239
+
+#EXTINF:-1 channel-id="244" channel-number="244",Syfy
+http://192.168.149.252:7654/play/tuner/244
+
+#EXTINF:-1 channel-id="247" channel-number="247",TBS
+http://192.168.149.252:7654/play/tuner/247
+
+#EXTINF:-1 channel-id="256" channel-number="256",TCM
+http://192.168.149.252:7654/play/tuner/256
+
+#EXTINF:-1 channel-id="303" channel-number="303",TeenNick
+http://192.168.149.252:7654/play/tuner/303
+
+#EXTINF:-1 channel-id="347" channel-number="347",The First
+http://192.168.149.252:7654/play/tuner/347
+
+#EXTINF:-1 channel-id="269" channel-number="269",The HISTORY Channel
+http://192.168.149.252:7654/play/tuner/269
+
+#EXTINF:-1 channel-id="342" channel-number="342",TheGrio
+http://192.168.149.252:7654/play/tuner/342
+
+#EXTINF:-1 channel-id="280" channel-number="280",TLC
+http://192.168.149.252:7654/play/tuner/280
+
+#EXTINF:-1 channel-id="245" channel-number="245",TNT
+http://192.168.149.252:7654/play/tuner/245
+
+#EXTINF:-1 channel-id="246" channel-number="246",truTV
+http://192.168.149.252:7654/play/tuner/246
+
+#EXTINF:-1 channel-id="304" channel-number="304",TV Land
+http://192.168.149.252:7654/play/tuner/304
+
+#EXTINF:-1 channel-id="242" channel-number="242",USA Network
+http://192.168.149.252:7654/play/tuner/242
+
+#EXTINF:-1 channel-id="335" channel-number="335",VH1
+http://192.168.149.252:7654/play/tuner/335
+
+#EXTINF:-1 channel-id="271" channel-number="271",VICE
+http://192.168.149.252:7654/play/tuner/271
+
+#EXTINF:-1 channel-id="260" channel-number="260",WE tv
+http://192.168.149.252:7654/play/tuner/260
+
