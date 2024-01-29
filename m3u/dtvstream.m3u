@@ -1,0 +1,81 @@
+#EXTM3U
+#EXTINF:-1 channel-id="3" tvc-guide-stationid="19611",CBS-KYW
+http://{{ .IPADDRESS }}/play/tuner/3
+#EXTINF:-1 channel-id="6" tvc-guide-stationid="19612",ABC-WPVI
+http://{{ .IPADDRESS }}/play/tuner/6
+#EXTINF:-1 channel-id="10" tvc-guide-stationid="19613",NBC-WCAU
+http://{{ .IPADDRESS }}/play/tuner/10
+#EXTINF:-1 channel-id="12" tvc-guide-stationid="24114",PBS-WHYY
+http://{{ .IPADDRESS }}/play/tuner/12
+#EXTINF:-1 channel-id="17" tvc-guide-stationid="32619",CW-WPHL
+http://{{ .IPADDRESS }}/play/tuner/17
+#EXTINF:-1 channel-id="23" tvc-guide-stationid="43689",PBS-WNJS
+http://{{ .IPADDRESS }}/play/tuner/23
+#EXTINF:-1 channel-id="29" tvc-guide-stationid="19614",FOX-WTXF-TV
+http://{{ .IPADDRESS }}/play/tuner/29
+#EXTINF:-1 channel-id="39" tvc-guide-stationid="24783",PBS-WLVT
+http://{{ .IPADDRESS }}/play/tuner/39
+#EXTINF:-1 channel-id="57" tvc-guide-stationid="34628",WPSG
+http://{{ .IPADDRESS }}/play/tuner/57
+#EXTINF:-1 channel-id="206" tvc-guide-stationid="32645",ESPN
+http://{{ .IPADDRESS }}/play/tuner/206
+#EXTINF:-1 channel-id="209" tvc-guide-stationid="45507",ESPN2
+http://{{ .IPADDRESS }}/play/tuner/209
+#EXTINF:-1 channel-id="211" tvc-guide-stationid="65025",NFL Red Zone
+http://{{ .IPADDRESS }}/play/tuner/211
+#EXTINF:-1 channel-id="212" tvc-guide-stationid="45399",NFL Network
+http://{{ .IPADDRESS }}/play/tuner/212
+#EXTINF:-1 channel-id="213" tvc-guide-stationid="62081",MLB Network
+http://{{ .IPADDRESS }}/play/tuner/213
+#EXTINF:-1 channel-id="213A" tvc-guide-stationid="62085",MLB Network Alternate
+http://{{ .IPADDRESS }}/play/tuner/213A
+#EXTINF:-1 channel-id="215" tvc-guide-stationid="58690",NHL Network HD
+http://{{ .IPADDRESS }}/play/tuner/215
+#EXTINF:-1 channel-id="216" tvc-guide-stationid="45526",NBA TV
+http://{{ .IPADDRESS }}/play/tuner/216
+#EXTINF:-1 channel-id="217" tvc-guide-stationid="60316",Tennis Channel HD
+http://{{ .IPADDRESS }}/play/tuner/217
+#EXTINF:-1 channel-id="218" tvc-guide-stationid="61854",Golf Channel
+http://{{ .IPADDRESS }}/play/tuner/218
+#EXTINF:-1 channel-id="219" tvc-guide-stationid="82547",FOX Sports 1
+http://{{ .IPADDRESS }}/play/tuner/219
+#EXTINF:-1 channel-id="241" tvc-guide-stationid="59186",Paramount TV
+http://{{ .IPADDRESS }}/play/tuner/241
+#EXTINF:-1 channel-id="242" tvc-guide-stationid="58452",USA Network
+http://{{ .IPADDRESS }}/play/tuner/242
+#EXTINF:-1 channel-id="244" tvc-guide-stationid="11097",Syfy
+http://{{ .IPADDRESS }}/play/tuner/244
+#EXTINF:-1 channel-id="256" tvc-guide-stationid="12852",TCM
+http://{{ .IPADDRESS }}/play/tuner/256
+#EXTINF:-1 channel-id="264" tvc-guide-stationid="18332",BBC America
+http://{{ .IPADDRESS }}/play/tuner/264
+#EXTINF:-1 channel-id="269" tvc-guide-stationid="14771",HISTORY
+http://{{ .IPADDRESS }}/play/tuner/269
+#EXTINF:-1 channel-id="274" tvc-guide-stationid="15807",Ovation HD
+http://{{ .IPADDRESS }}/play/tuner/274
+#EXTINF:-1 channel-id="281" tvc-guide-stationid="31046",MotorTrend
+http://{{ .IPADDRESS }}/play/tuner/281
+#EXTINF:-1 channel-id="345" tvc-guide-stationid="63717",RFD-TV
+http://{{ .IPADDRESS }}/play/tuner/345
+#EXTINF:-1 channel-id="501" tvc-guide-stationid="19548",HBO HD East
+http://{{ .IPADDRESS }}/play/tuner/501
+#EXTINF:-1 channel-id="502" tvc-guide-stationid="59368",HBO2 HD East
+http://{{ .IPADDRESS }}/play/tuner/502
+#EXTINF:-1 channel-id="503" tvc-guide-stationid="59363",HBO Signature HD East
+http://{{ .IPADDRESS }}/play/tuner/503
+#EXTINF:-1 channel-id="504" tvc-guide-stationid="19566",HBO West HD
+http://{{ .IPADDRESS }}/play/tuner/504
+#EXTINF:-1 channel-id="505" tvc-guide-stationid="59368",HBO2 West HD
+http://{{ .IPADDRESS }}/play/tuner/505
+#EXTINF:-1 channel-id="506" tvc-guide-stationid="59839",HBO Comedy HD
+http://{{ .IPADDRESS }}/play/tuner/506
+#EXTINF:-1 channel-id="507" tvc-guide-stationid="59357",HBO Family East HD
+http://{{ .IPADDRESS }}/play/tuner/507
+#EXTINF:-1 channel-id="509" tvc-guide-stationid="59845",HBO Zone HD
+http://{{ .IPADDRESS }}/play/tuner/509
+#EXTINF:-1 channel-id="618" tvc-guide-stationid="59305",FOX Sports 2
+http://{{ .IPADDRESS }}/play/tuner/618
+#EXTINF:-1 channel-id="exit" tvc-guide-stationid="",Exit DirecTV
+http://{{ .IPADDRESS }}/play/tuner/exit
+#EXTINF:-1 channel-id="reboot" tvc-guide-stationid="",Reboot FireTV
+http://{{ .IPADDRESS }}/play/tuner/reboot
