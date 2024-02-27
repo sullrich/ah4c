@@ -1,0 +1,13 @@
+#EXTM3U
+#EXTINF:-1 channel-id="NPO1" tvc-guide-stationid="61014",NPO1
+http://{{ .IPADDRESS }}/play/tuner/NPO1
+#EXTINF:-1 channel-id="NPO2" tvc-guide-stationid="63528",NPO2
+http://{{ .IPADDRESS }}/play/tuner/NPO2
+#EXTINF:-1 channel-id="NPO3" tvc-guide-stationid="63529",NPO3
+http://{{ .IPADDRESS }}/play/tuner/NPO3
+#EXTINF:-1 channel-id="NPO1ex" tvc-guide-stationid="115467",NPO1 Extra
+http://{{ .IPADDRESS }}/play/tuner/NPO1ex
+#EXTINF:-1 channel-id="NPO2ex" tvc-guide-stationid="115564",NPO2 Extra
+http://{{ .IPADDRESS }}/play/tuner/NPO2ex
+#EXTINF:-1 channel-id="NPO3ex" tvc-guide-stationid="115469",NPO3 Extra
+http://{{ .IPADDRESS }}/play/tuner/NPO3ex
