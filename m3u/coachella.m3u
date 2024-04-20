@@ -1,0 +1,29 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="Coachella-Theatre" tvc-guide-stationid="4.1" tvg-group="" tvg-logo="https://i.ytimg.com/vi/M7zW11KC1Nk/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLBvryT7sXTYnNI5nHRwehOyoadtEQ",Coachella Theatre
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__M7zW11KC1Nk
+
+#EXTINF:-1 channel-id="Coachella-Main-Stage" tvc-guide-stationid="4.2" tvg-group="" tvg-logo="https://i.ytimg.com/vi/iYPwEzMm8i4/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLBcPo0QpEdc91EHyTUp2sXz6ktrlw",Coachella Main Stage
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__iYPwEzMm8i4
+
+#EXTINF:-1 channel-id="Coachella-Sahara" tvc-guide-stationid="4.3" tvg-group="" tvg-logo="https://i.ytimg.com/vi/keHf1_peYws/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLB-nIU_UtZCh8uYUWNJWD0nBK-rpw",Coachella Sahara
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__keHf1_peYws
+
+#EXTINF:-1 channel-id="Coachella-Mohave" tvc-guide-stationid="4.4" tvg-group="" tvg-logo="https://i.ytimg.com/vi/qwkyHiPoYY4/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCwj9XhmhFBrfAMASYG7OcynXXk0w",Coachella Mohave
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__qwkyHiPoYY4
+
+#EXTINF:-1 channel-id="Coachella-Gobi" tvc-guide-stationid="4.5" tvg-group="" tvg-logo="https://i.ytimg.com/vi/GSRtPr96hss/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAIufahUWJuod-TH4Y16lGbNGQ19g",Coachella Gobi
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__GSRtPr96hss
+
+#EXTINF:-1 channel-id="Coachella-Yuma" tvc-guide-stationid="4.6" tvg-group="" tvg-logo="https://i.ytimg.com/vi/CN_4koTned0/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAgznCBllCMtpz-2y2NbkGd3Xorqg",Coachella Yuma
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__CN_4koTned0
+
+
+
+
+
+
+
+
+
+
