@@ -1,17 +1,17 @@
 #EXTM3U
 
 #EXTINF:-1 channel-id="foo1" tvc-guide-stationid="" tvg-group="" tvg-logo="https://www.rollingstone.com/wp-content/uploads/2021/06/FF_SNIPE_JUNE_20TH.jpg",Foo Fighters, MSG, 2021
-http://{{ .IPADDRESS }}:7654/play/tuner/youtube_XHsLst7ypR0
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__XHsLst7ypR0
 
 #EXTINF:-1 channel-id="foo2" tvc-guide-stationid="" tvg-group="" tvg-logo="https://k8g7u9q7.stackpathcdn.com/wp-content/uploads/2022/04/foofighters-22lollapalooza-chile1.jpg",Foo Fighters, Lollapalooza, Chile 2022
-http://{{ .IPADDRESS }}:7654/play/tuner/youtube_MhEW7Qb_DXc
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__MhEW7Qb_DXc
 
 #EXTINF:-1 channel-id="foo5" tvc-guide-stationid="" tvg-group="" tvg-logo="https://www.billboard.com/wp-content/uploads/2022/08/Dave-Grohl-of-Foo-Fighters-2022-billboard-1548.jpg?w=1024",FooFighters, Gilford NH, 2023
-http://{{ .IPADDRESS }}:7654/play/tuner/youtube_TLr86SwK1ug
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__TLr86SwK1ug
 
 #EXTINF:-1 channel-id="foo6" tvc-guide-stationid="" tvg-group="" tvg-logo="https://pbs.twimg.com/media/E9vBEHfVUAAwjd8.jpg:large",Foo Fighters, LA, 2021
-http://{{ .IPADDRESS }}:7654/play/tuner/youtube_KlZFS6HR6P8
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__KlZFS6HR6P8
 
 #EXTINF:-1 channel-id="foo7" tvc-guide-stationid="" tvg-group="" tvg-logo="https://jambands.com/wp-content/uploads/2023/06/unnamed-2023-06-19T110834.683-700x459.png",FooFighters Bonnaroo 2023
-http://{{ .IPADDRESS }}:7654/play/tuner/youtube_zK_QVjwQ6Nw
+http://{{ .IPADDRESS }}:7654/play/tuner/youtube__zK_QVjwQ6Nw
 
