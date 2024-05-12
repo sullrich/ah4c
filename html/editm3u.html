@@ -29,7 +29,8 @@
         }
         #entriesTable td:nth-child(4),
         #entriesTable td:nth-child(5),
-        #entriesTable td:nth-child(6) {
+        #entriesTable td:nth-child(6),
+        #entriesTable td:nth-child(7) {
             text-align: left;  /* Left align text */
         }
         table {
@@ -61,6 +62,7 @@
             <tr>
                 <th>Id</th>
                 <th>Station Id</th>
+                <th>Channel Number</th>
                 <th>Channel Name</th>
                 <th>Stream Location</th>
                 <th>Group</th>
@@ -74,26 +76,31 @@
             <tr>
                 <td class="styled-input" contentEditable="true">{{ .Id }}</td>
                 <td class="styled-input" contentEditable="true">{{ .StationId }}</td>
+                <td class="styled-input" contentEditable="true">{{ .ChannelNumber }}</td>
                 <td class="styled-input" contentEditable="true">{{ .ChannelName }}</td>
                 <td class="styled-input" contentEditable="true">{{ .StreamURL }}</td> 
                 <td class="styled-input" contentEditable="true">{{ .Group }}</td>
                 <td class="styled-input" contentEditable="true">{{ .Logo }}</td>
-                <td class="button-container"><button class="btn btn-sm btn-danger smaller-button" onclick="deleteRow(this)">Delete</button></td>
-                <td class="button-container"><button class="btn btn-sm btn-secondary smaller-button" onclick="toggleEnableDisable(this)" data-id="{{ .Id }}"></button></td>
+                <td class="button-container">
+					<button class="btn btn-sm btn-danger smaller-button" onclick="deleteRow(this)">Delete</button>
+				</td>
+                <td class="button-container">
+					<button class="btn btn-sm btn-secondary smaller-button" onclick="toggleEnableDisable(this)" data-id="{{ .Id }}"></button>
+				</td>
             </tr>
             {{end}}
         </tbody>
     </table>
     <div class="flex-container">
-        <p>Total Channels: {{ len .entries }}</p>
+		<div>
+			<button class="btn btn-sm btn-success" onclick="saveData()">Save</button> 
+			<button class="btn btn-sm btn-danger" onclick="cancel()">Cancel</button> 
+		</div>
         <div>
             <button class="btn btn-primary btn-sm" onclick="addRow()">Add Channel</button>
         </div>
     </div>
-    <button class="btn btn-success" onclick="saveData()">Save</button> 
-    <button class="btn btn-danger" onclick="cancel()">Cancel</button> 
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <p style='padding-top: 15px;'>Total Channels: {{ len .entries }}</p>
     <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
     <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
@@ -105,24 +112,21 @@
                 button.innerText = id.startsWith('#') ? 'Enable' : 'Disable';
             });
         });
-
         function deleteRow(btn) {
             var row = btn.parentNode.parentNode;
             row.parentNode.removeChild(row);
         }
-
         function addRow() {
             var table = document.getElementById("entriesTable");
             var row = table.insertRow(-1);
-            for(let i=0; i<8; i++) {
+            for(let i=0; i<9; i++) {
                 var cell = row.insertCell(i);
                 cell.className = "styled-input";
-                if(i < 6) cell.contentEditable = "true";
-                if(i == 6) cell.innerHTML = '<button class="btn btn-danger btn-sm" onclick="deleteRow(this)">Delete</button>';
-                if(i == 7) cell.innerHTML = '<button class="btn btn-secondary btn-sm" onclick="toggleEnableDisable(this)" data-id="">Disable</button>';
+                if(i < 7) cell.contentEditable = "true";
+                if(i == 7) cell.innerHTML = '<button class="btn btn-danger btn-sm" onclick="deleteRow(this)">Delete</button>';
+                if(i == 8) cell.innerHTML = '<button class="btn btn-secondary btn-sm" onclick="toggleEnableDisable(this)" data-id="">Disable</button>';
             }
         }
-
         function saveData() {
             let table = document.getElementById('entriesTable');
             let entries = [];
@@ -130,10 +134,11 @@
                 let entry = {
                     Id: row.cells[0].innerText,
                     StationId: row.cells[1].innerText,
-                    ChannelName: row.cells[2].innerText,
-                    StreamURL: row.cells[3].innerText,
-                    Group: row.cells[4].innerText, 
-                    Logo: row.cells[5].innerText  
+                    ChannelNumber: row.cells[2].innerText,
+                    ChannelName: row.cells[3].innerText,
+                    StreamURL: row.cells[4].innerText,
+                    Group: row.cells[5].innerText, 
+                    Logo: row.cells[6].innerText  
                 };
                 entries.push(entry);
             }
@@ -150,16 +155,13 @@
                 console.error('Error:', error);
             });
         }
-
         function cancel() {
             window.location.href = "/";
         }
-
         function toggleEnableDisable(btn) {
             var row = btn.parentNode.parentNode;
             var idCell = row.cells[0];
             var id = idCell.innerText;
-
             if (id.startsWith('#')) {
                 idCell.innerText = id.substring(1);
                 btn.innerText = 'Disable';

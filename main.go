@@ -110,12 +110,13 @@ type ExportedReader struct {
 }
 
 type Entry struct {
-	Id          string `json:"id"`
-	StationId   string `json:"stationId"`
-	ChannelName string `json:"channelName"`
-	StreamURL   string `json:"streamURL"`
-	Logo        string `json:"Logo"`
-	Group       string `json:"Group"`
+	Id            string `json:"id"`
+	StationId     string `json:"stationId"`
+	ChannelName   string `json:"channelName"`
+	ChannelNumber string `json:"channelNumber"`
+	StreamURL     string `json:"streamURL"`
+	Logo          string `json:"Logo"`
+	Group         string `json:"Group"`
 }
 
 type ConfigEnvVariable struct {
@@ -760,9 +761,10 @@ func run() error {
 				disabledTxt = "#"
 			}
 			extinfLine := fmt.Sprintf(
-				"#%sEXTINF:-1 channel-id=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
+				"#%sEXTINF:-1 channel-id=\"%s\" channel-number=\"%s\" tvc-guide-stationid=\"%s\" tvg-group=\"%s\" tvg-logo=\"%s\",%s\n",
 				disabledTxt,
 				entry.Id,
+				entry.ChannelNumber,
 				entry.StationId,
 				entry.Group,
 				entry.Logo,
@@ -837,6 +839,12 @@ func run() error {
 				idParts := extractAttribute(extinfParts[0], "channel-id")
 				if idParts != nil {
 					currentEntry.Id = idParts[0]
+				}
+
+				// channel-number
+				channelNumParts := extractAttribute(extinfParts[0], "channel-number")
+				if channelNumParts != nil {
+					currentEntry.ChannelNumber = channelNumParts[0]
 				}
 
 				// tvc-guide-stationid
