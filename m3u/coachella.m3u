@@ -17,13 +17,3 @@ http://{{ .IPADDRESS }}:7654/play/tuner/youtube__GSRtPr96hss
 
 #EXTINF:-1 channel-id="Coachella-Yuma" tvc-guide-stationid="4.6" tvg-group="" tvc-guide-placeholders="1800" tvg-logo="https://i.ytimg.com/vi/CN_4koTned0/hqdefault_live.jpg?sqp=-oaymwEcCPYBEIoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAgznCBllCMtpz-2y2NbkGd3Xorqg",Coachella Yuma
 http://{{ .IPADDRESS }}:7654/play/tuner/youtube__CN_4koTned0
-
-
-
-
-
-
-
-
-
-
