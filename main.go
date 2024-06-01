@@ -361,6 +361,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				err := cmd.Start()
 				if err != nil {
 					logger("[ERR] Failed to run command %s", err)
+					t.active = false
 					continue
 				}
 				go func() {
@@ -369,6 +370,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				}()
 				if err := execute(t.pre, t.tunerip, channel); err != nil {
 					logger("[ERR] Failed to run pre script: %v", err)
+					t.active = false
 					continue
 				}
 				t.active = true
@@ -385,13 +387,16 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			resp, err := http.Get(t.url)
 			if err != nil {
 				logger("[ERR] Failed to fetch source: %v", err)
+				t.active = false
 				continue
 			} else if resp.StatusCode != 200 {
 				logger("[ERR] Failed to fetch source: %v", resp.Status)
+				t.active = false
 				continue
 			}
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
+				t.active = false
 				continue
 			}
 			t.active = true

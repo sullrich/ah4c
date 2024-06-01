@@ -1,7 +1,7 @@
 #EXTM3U
 
-#EXTINF:-1 channel-id="EDC-kineticFIELD" tvc-guide-stationid="5.1" tvg-group="" tvc-guide-placeholders="1800" tvg-logo="https://www.billboard.com/wp-content/uploads/2022/05/kineticFIELD-cr-Jose-Murga-for-Insomniac-Events-2022-billboard-1548.jpg",EDC kineticFIELD
+#EXTINF:-1 channel-id="EDC-kineticFIELD" tvc-guide-stationid="5.1" tvg-group="EDC-kineticFIELD" tvc-guide-placeholders="1800" tvg-logo="https://www.billboard.com/wp-content/uploads/2022/05/kineticFIELD-cr-Jose-Murga-for-Insomniac-Events-2022-billboard-1548.jpg",EDC kineticFIELD
 http://{{ .IPADDRESS }}:7654/play/tuner/youtube__IuCF8mr9mYo
 
-#EXTINF:-1 channel-id="EDC-bassPOD" tvc-guide-stationid="5.2" tvg-group="" tvc-guide-placeholders="1800" tvg-logo="https://gistspecialties.com/wp-content/uploads/2015/08/edc-final-1.jpg",EDC bassPOD
+#EXTINF:-1 channel-id="EDC-bassPOD" tvc-guide-stationid="5.2" tvg-group="EDC-bassPOD" tvc-guide-placeholders="1800" tvg-logo="https://gistspecialties.com/wp-content/uploads/2015/08/edc-final-1.jpg",EDC bassPOD
 http://{{ .IPADDRESS }}:7654/play/tuner/youtube__N8aRtjPIoj4
