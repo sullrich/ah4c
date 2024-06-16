@@ -136,4 +136,7 @@ affiliates and need to change your local station before recording.
 
 In my environment, with the default delays, it takes about 30 seconds
 to tune when a station change is required. It takes about 12 seconds
-when a channel change is not required.
+when a channel change is not required. Tested on Google Chromecast HD,
+Tivo Stream 4k, and Onn 2k Stick. I also tested against a fairly old
+Amazon Fire TV stick, though I had to scale the delays a bit for that
+to work.

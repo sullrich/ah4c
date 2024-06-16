@@ -114,9 +114,9 @@ waitForWakeUp() {
 
     while true
     do
-	screenOn=` $ADB_ shell "input keyevent KEYCODE_WAKEUP ; dumpsys deviceidle get screen" `
-	echo "screen on? ${screenOn}"
-	if [ ${screenOn} = "true" ]; then
+	# Fire TV returns dumpsys output with CRLF line endings; what an annoyance
+	displayState=` $ADB_ shell "input keyevent KEYCODE_WAKEUP ; dumpsys display" | grep -e 'mGlobalDisplayState=' -e 'Display State=' -m 1 | cut -d= -f2 | tr -d '\r\n' `
+	if [ ${displayState} = "ON" ]; then
 	    break
 	fi
 
@@ -222,7 +222,8 @@ matchEncoderURL() {
 }
 
 getCurrentFocus() {
-    appFocus=$($ADB_ shell dumpsys window | grep -E 'mCurrentFocus' | sed -e 's/.* //g' -e 's/}$//' )
+    # Fire TV returns dumpsys output with CRLF line endings.
+    appFocus=$($ADB_ shell dumpsys window | grep -E 'mCurrentFocus' | sed -e 's/.* //g' -e 's/}//' -e 's/\r//' )
     echo "${appFocus}"
 }
 
