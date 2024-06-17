@@ -1,0 +1,10 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="WGBH" channel-number="2" tvc-guide-stationid="28055",WGBH
+http://{{ .IPADDRESS }}/play/tuner/WGBH-GBH_01601_1
+
+#EXTINF:-1 channel-id="WSBE" channel-number="36" tvc-guide-stationid="34635",WSBE
+http://{{ .IPADDRESS }}/play/tuner/WSBE-Rhode-Island-PBS_01601_2
+
+#EXTINF:-1 channel-id="WFCR" channel-number="57" tvc-guide-stationid="",WFCR
+http://{{ .IPADDRESS }}/play/tuner/WFCR-New-England-Public-Media_01601_3
