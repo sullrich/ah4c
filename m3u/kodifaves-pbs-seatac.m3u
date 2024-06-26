@@ -1,0 +1,7 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="KCTS" channel-number="9" tvc-guide-stationid="19631",KCTS
+http://{{ .IPADDRESS }}/play/tuner/KCTS_favourites_Cascade%20PBS
+
+#EXTINF:-1 channel-id="KBTC" channel-number="28" tvc-guide-stationid="34635",KBTC
+http://{{ .IPADDRESS }}/play/tuner/KBTC_favorites_KBTC%20Public%20Television
