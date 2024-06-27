@@ -1,4 +1,4 @@
-A tuner for kodi favorites list
+A tuner for kodi favourites list
 
 INTRODUCTION
 
@@ -60,18 +60,18 @@ share the script code. As a special favor (:-)) to Americans, you can
 use "favorites" (without the "u") as an acceptable alias.
 
 The last part is a URL-encoded string that must match an item in your
-favorites list. (Although you have to URL-encode it in your m3u, it's
+favourites list. (Although you have to URL-encode it in your m3u, it's
 already been URL-decoded by the time it gets to these scripts.)
 Here."match" means it's either a complete or substring match done case
 insensitively. For example, "Foo%20Bar" would match a favorite channel
 with the label "My foo barlicious Channel". In the case of multiple
-matches in your favorites list, you don't really have much control
+matches in your favourites list, you don't really have much control
 over which one will be selected, so be as specific as possible. In the
-unlikely event that you have actual ambiguities in your favorites
-list, use the kodi favorites context menu to rename some of them to
+unlikely event that you have actual ambiguities in your favourites
+list, use the kodi favourites context menu to rename some of them to
 ensure uniqueness.
 
-How do you know what the label is for a favorites item? It's not
+How do you know what the label is for a favourites item? It's not
 necessarily the same as whatever text appears in the logo or
 thumbnail. However, in the "WideList" view, it will be the same as the
 text displayed beside the logo or thumbnail. You can look in the
@@ -165,3 +165,7 @@ to handle DRM. That's what got me heading down the path of using kodi
 itself to "tune" the PBS station. kodi's rich API makes moving around
 the GUI pretty straightforward for most things, and that eliminates a
 lot of fiddliness.
+
+Pro tip: If you are having problems with getting kodi to remember that
+you always want subtitles, you are not alone. This thread may help you
+(it helped me): https://www.reddit.com/r/kodi/comments/rrwkko/comment/hqshh81
