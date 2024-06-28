@@ -31,14 +31,6 @@ CONFIG_KODI_JSONRPC_PASSWORD=""
 ##
 CONFIG_KODI_JSONRPC_SCHEME="http"
 
-## Tuning involves looking for a desired item among things on the favourites
-## list. That goes pretty fast, and this is just a backstop in case of a
-## bug for an infinite loop. We shouldn't ever need this. If you really have
-## more than this many items in your favourites list, you'll have to change
-## this config value.
-#
-CONFIG_KODI_FAVOURITES_SIZE_MAX="1000"
-
 ## There can be some kodi startup delay (splash screen, etc) before we can
 ## successfully switch to the favouritesbrowser window. Rather than some
 ## fixed delay, we keep trying until success or this many tries. If we try
@@ -391,11 +383,11 @@ specialChannels() {
 }
 
 kodiGetCurrentControlLabel() {
-    echo `jsonrpc "${J_GUI_GETPROPERTIES}" | jq -r .result.currentcontrol.label | tr '[:upper:]' '[:lower:]'`
+    jsonrpc "${J_GUI_GETPROPERTIES}" | jq -r .result.currentcontrol.label
 }
 
 kodiGetCurrentWindowId() {
-    echo `jsonrpc "${J_GUI_GETPROPERTIES}" | jq -r .result.currentwindow.id | tr '[:upper:]' '[:lower:]'`
+    jsonrpc "${J_GUI_GETPROPERTIES}" | jq -r .result.currentwindow.id
 }
 
 kodiActivateFavourites() {
@@ -434,7 +426,7 @@ kodiFindPositionsInFavourites() {
 	while read title
 	do
 	    ((favdex++)) # one-based
-	    title=`echo "$title" | tr '[:upper:]' '[:lower:]'`
+	    title="${title,,}"
             if [ "${title}" = "${originalSelection}" ]
             then
 		originalPosition=${favdex}
@@ -455,7 +447,7 @@ kodiFindPositionsInFavourites() {
 
 kodiNavigateFavourites() {
     local tuning
-    tuning=`echo "${TUNING_HINT}" | tr  '[:upper:]' '[:lower:]'`
+    tuning="${TUNING_HINT,,}"
     echo "tuning '${tuning}'"
     # it can sometimes happen that nothing is selected; simply move up or down to highlight something
     # the list in kodi wraps around, so we don't have to worry about hitting either end
@@ -463,6 +455,7 @@ kodiNavigateFavourites() {
     jsonrpc "${J_INPUT_UP}"
     local label
     label=`kodiGetCurrentControlLabel`
+    label=${label,,}  # lowercase
     if [ -z "${label}}" ]
     then
         echo "Something is very wrong. Is your kodi favourites list empty?"
@@ -501,59 +494,6 @@ kodiNavigateFavourites() {
 	((moves--))
     done
     jsonrpc "${J_INPUT_SELECT}"
-    #kodiNavigateFavouritesX
-}
-
-kodiNavigateFavouritesX() {
-    local tuning
-    tuning=`echo "${TUNING_HINT}" | tr  '[:upper:]' '[:lower:]'`
-    echo "tuning '${tuning}'"
-    # it can sometimes happen that nothing is selected; simply move up or down to highlight something
-    # the list in kodi wraps around, so we don't have to worry about hitting either end
-    jsonrpc "${J_INPUT_DOWN}"
-    jsonrpc "${J_INPUT_UP}"
-    local label
-    label=`kodiGetCurrentControlLabel`
-    if [ -z "${label}}" ]
-    then
-        echo "Something is very wrong. Is your kodi favourites list empty?"
-        forceStopAndExit 1
-    fi
-    local originalSelection
-    originalSelection="${label}"
-    
-    # This is a simple loop that keeps going down and checking if we are in the right place.
-    # If we get all the way back around to where we started, we know the desired item is
-    # not in the favourites list. That's obviously inefficient if the favourites list is
-    # large; in the worst case we might traverse the entire list. A more efficient way
-    # would be to get the favourites list (see J_GET_FAVES), locate the current item and
-    # desired items in that list, and then move either up or down in the fewest number of
-    # moves to get from current to desired. But that's a lot of bother....
-    local -i tryCounter=0
-    while true
-    do
-        if [[ "${label}" =~ "${tuning}" ]]
-        then
-            echo "Found '${label}' after ${tryCounter} tries. Selecting."
-            jsonrpc "${J_INPUT_SELECT}"
-            break
-        fi
-        jsonrpc "${J_INPUT_DOWN}"
-        label=`kodiGetCurrentControlLabel`
-        if [ "${label}" = "${originalSelection}" ]
-        then
-            # round and round and round she went....
-            echo "The desired item '${tuning}' was not found in the favourites list."
-            forceStopAndExit 1
-        fi
-
-	if ((${tryCounter} > ${CONFIG_KODI_FAVOURITES_SIZE_MAX})); then
-	    touch $STREAMER_NO_PORT/adbCommunicationFail
-	    echo "Communication with ${STREAMER_WITH_PORT} failed after ${CONFIG_KODI_FAVOURITES_SIZE_MAX} tries"
-	    forceStopAndExit 1
-	fi
-	((tryCounter++))
-    done
 }
 
 kodiTune() {
