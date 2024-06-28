@@ -1,3 +1,3 @@
 #!/bin/bash
 . `dirname $0`/common.sh
-stopbmitune "$@"
+stopbmitune "$@" 1>&2

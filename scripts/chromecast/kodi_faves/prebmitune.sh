@@ -1,3 +1,3 @@
 #!/bin/bash
 . `dirname $0`/common.sh
-prebmitune "$@"
+prebmitune "$@" 1>&2
