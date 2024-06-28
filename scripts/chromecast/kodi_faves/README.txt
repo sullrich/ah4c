@@ -21,9 +21,9 @@ PREPARATION
 * Also check that anything you select from the "Favourites" screen starts playing
   with no further input or interaction. Pop-ups or other confirmation things
   are OK if they automatically go away within a short amount of time.
-* TODO: From the "Favourites" window, select "Options" and use a ViewType of "WideList".
+* From the "Favourites" window, select "Options" and use a ViewType of "WideList".
   That's important because we have to move around in the list as if we were
-  using arrow keys, and the scripts only move down and up, not left and right.
+  using arrow keys, and the scripts only move down or up, not left or right.
 * Enable the kodi JSONRPC API via HTTP.
     - Settings > Services > Control
     - Set or edit username and password
@@ -39,8 +39,8 @@ PREPARATION
 NOTE: kodi's spelling is "favourites", not "favorites". That's the
 spelling you should use except as noted specifically below. Also, the
 internal name for what you see as "Favourites" in the GUI is actually
-"favouritesbrowser". We use "favourites" or "favorites" in the channel
-tuning info in an attempt to be less confusing.
+"favouritesbrowser". We accept either "favourites" or "favorites" in
+the channel tuning info in an attempt to be less confusing.
 
 * TUNING AND STATION SELECTION
 
@@ -92,11 +92,11 @@ several common definitions, functions, etc.  Each of the expected
 scripts is a trivial 3-liner that sources "common.sh" and then calls
 the applicable function defined within "common.sh". The intent of that
 arrangement is to achive more consistent naming, simpler editing, and
-so on.
+so on. All of the scripts redirect stdout to be on top of stderr.
 
 At the top of "common.sh" is a collection of variables whose names
 start with "CONFIG_". As you might guess, those are things that
-conditionally control aspects of the scripts behaviors. If you are
+conditionally control aspects of the script behaviors. If you are
 happy with the default values defined in "common.sh", then that's all
 you need to know. If you want to change any of them, you can, of
 course, just modify "common.sh".  A better way is to create a file in
@@ -153,18 +153,20 @@ as short as you can and still have them tune reliably.
 
 * BACKSTORY
 
-(You can stop reading now.) I got involved in this whole ah4c business
-because of a single local PBS station that I can't pick up with my
-antenna. I started out by using the PBS app with remote
-emulation. That works, modulo the occasional loss-of-marbles, but it's
-fiddly at best. I also experimented with a different technique called
-VLC-bridge-PBS. That works really, really well, but I didn't find a
-way to enable closed captions. Sources for VLC-bridge-PBS don't seem
-to be available. In poking around, I saw that it's using a kodi plugin
-to handle DRM. That's what got me heading down the path of using kodi
-itself to "tune" the PBS station. kodi's rich API makes moving around
-the GUI pretty straightforward for most things, and that eliminates a
-lot of fiddliness.
+(You can stop reading now.)
+
+I got involved in this whole ah4c business because of a single local
+PBS station that I can't pick up with my antenna. I started out by
+using the PBS app with remote control emulation. That works, modulo
+the occasional loss-of-marbles, but it's fiddly at best. I also
+experimented with a different technique called VLC-bridge-PBS. That
+works really, really well, but I didn't find a way to enable closed
+captions. Sources for VLC-bridge-PBS don't seem to be available. In
+poking around, I saw that it's using a kodi plugin to handle
+DRM. That's what got me heading down the path of using kodi itself to
+"tune" the PBS station. kodi's rich API makes moving around the GUI
+pretty straightforward for most things, and that eliminates a lot of
+fiddliness.
 
 Pro tip: If you are having problems with getting kodi to remember that
 you always want subtitles, you are not alone. This thread may help you
