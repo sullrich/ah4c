@@ -44,23 +44,10 @@ CONFIG_KODI_FAVOURITES_ITERATING_MAX="20"
 ##
 CONFIG_KODI_RETRY_PLAYING_STREAM_MAX="2"
 
-## After trying or retrying to play a stream, the script waits this long to
-## check to see if it's actually playing. You want this delay to be long
-## enough so that legitimate slow start-ups don't get misintepreted as
-## failures.
-##
-CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY="15"
-
 ## "Quit" here means the kodi graceful exit, as opposed to a force-stop.
 ## The idea is to minimize potential carnage that a force-stop might give.
 ##
-CONFIG_STOP_DOES_KODI_QUIT="false"
-
-## If we do a kodi quit, this gives a little time for it to do its thing
-## before a possible force-stop. (I'm not sure if the quit process has
-## completed by the time the RPC call returns.)
-##
-CONFIG_SETTLE_AFTER_KODI_QUIT="2"
+CONFIG_STOP_DOES_KODI_QUIT="true"
 
 ## I'm not sure what happens if kodi goes into the background without a
 ## quit or force-stop. Is it still streaming something over the network?
@@ -103,6 +90,19 @@ CONFIG_FORCE_STOP_BEFORE_APP_START="false"
 ## See the "DELAYS" section in README.txt for some considerations.
 CONFIG_DELAY_SCALING="1"
 CONFIG_DELAY_OFFSET="0"
+
+## After trying or retrying to play a stream, the script waits this long to
+## check to see if it's actually playing. You want this delay to be long
+## enough so that legitimate slow start-ups don't get misintepreted as
+## failures.
+##
+CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY="15"
+
+## If we do a kodi quit, this gives a little time for it to do its thing
+## before a possible force-stop. (I'm not sure if the quit process has
+## completed by the time the RPC call returns.)
+##
+CONFIG_SETTLE_AFTER_KODI_QUIT="2"
 
 CONFIG_SETTLE_ITERATING_FOR_SCREEN_ON="0.5"
 CONFIG_SETTLE_ITERATING_FOR_BMITUNE_DONE="2"
@@ -496,10 +496,11 @@ kodiTune() {
         local label=`kodiGetCurrentWindowId`
         if [ "${label}" = "${KODI_PLAYER_WINDOW_ID}" ]
         then
-            echo "Stream playing after ${tryCounter} tries."
+	    local -i attempt=$((tryCounter+1))
+            echo "Stream playing after ${attempt} tries."
             break
         fi
-	# do "back" to attempt to cleary any error pop-up
+	# do "back" to attempt to clear any error pop-up
 	jsonrpc "${J_INPUT_BACK}"
 	if ((${tryCounter} > ${CONFIG_KODI_RETRY_PLAYING_STREAM_MAX})); then
 	    touch $STREAMER_NO_PORT/adbCommunicationFail
