@@ -422,76 +422,66 @@ kodiActivateFavourites() {
 }
 
 kodiFindPositionsInFavourites() {
-    echo "${faves}" | jq -r '.result.favourites[].title' |
-	while read title
-	do
-	    ((favdex++)) # one-based
-	    title="${title,,}"
-            if [ "${title}" = "${originalSelection}" ]
-            then
-		originalPosition=${favdex}
-		echo "Found '${originalSelection}' at location ${originalPosition} in favourites list." >&2
-            fi
-            if [[ "${title}" =~ "${tuning}" ]]
-            then
-		tunePosition=${favdex}
-		echo "Found '${tuning}' at location ${tunePosition} in favourites list." >&2
-            fi
-	    if [ ${tunePosition} -gt 0 -a ${originalPosition} -gt 0 ]
-	    then
-		echo "${tunePosition} ${originalPosition}"
-		return
-	    fi
-	done
+    local favouritesList="$1"
+    local originalSelection="$2"
+    local tuningPattern="$3"
+    # complete line, exact match
+    local -i originalPosition=`echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -F -x -n "${originalSelection}" | cut -f1 -d:`
+    # any part of line, case independent match
+    local -i tunePosition=`    echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -i -F -n "${tuningPattern}"     | cut -f1 -d:`
+    echo "${tunePosition} ${originalPosition}"
 }
 
 kodiNavigateFavourites() {
-    local tuning
-    tuning="${TUNING_HINT,,}"
-    echo "tuning '${tuning}'"
-    # it can sometimes happen that nothing is selected; simply move up or down to highlight something
-    # the list in kodi wraps around, so we don't have to worry about hitting either end
-    jsonrpc "${J_INPUT_DOWN}"
-    jsonrpc "${J_INPUT_UP}"
-    local label
-    label=`kodiGetCurrentControlLabel`
-    label=${label,,}  # lowercase
-    if [ -z "${label}}" ]
-    then
-        echo "Something is very wrong. Is your kodi favourites list empty?"
-        forceStopAndExit 1
-    fi
-    local originalSelection
-    originalSelection="${label}"
+    # It would be great to just play the desired item from the favourites list, but I didn't
+    # figure out a way to do that. Instead, navigate to it with up or down motions and select it.
+    local tuningPattern="${TUNING_HINT,,}"
+    echo "tuningPattern '${tuningPattern}'"
+    local originalSelection=`kodiGetCurrentControlLabel`
+    echo "originalSelection '${originalSelection}'"
     
-    local faves=`jsonrpc "${J_GET_FAVES}"`
-    local -i faveCount=`echo "${faves}" | jq '.result.limits.total'`
+    local favouritesList=`jsonrpc "${J_GET_FAVES}"`
     local -i favdex="0"
     local -i originalPosition=0
     local -i tunePosition=0
-    posers=`kodiFindPositionsInFavourites "$faves"`
-    read tunePosition originalPosition <<<"$posers"
-    if [ ${tunePosition} -eq 0 -o ${originalPosition} -eq 0 ]
+    local result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
+    read tunePosition originalPosition <<<${result}
+    if [ -z "${originalSelection}" -o "${originalPosition}" -eq 0 ]
     then
-	echo "Something is horribly wrong is searching the favourites list."
+	# It can sometimes happen that nothing is the current item; simply move down to highlight something.
+	# (I'm not sure how/why that happens.)
+	# The list in kodi wraps around, so we don't have to worry about hitting either end.
+	jsonrpc "${J_INPUT_DOWN}"
+	originalSelectionl=`kodiGetCurrentControlLabel`
+	result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
+	read tunePosition originalPosition <<<${result}
+    fi
+    if [ ${originalPosition} -eq 0 ]
+    then
+	echo "Something is horribly wrong is searching the favourites list. No current selection."
 	forceStopAndExit 3
     fi
+    if [ ${tunePosition} -eq 0 ]
+    then
+	echo "You tried to tune a thing, '${tuningPattern}', that is not in your favourites list."
+	forceStopAndExit 4
+    fi
 
-    local mover="$J_INPUT_DOWN"
-    local -i moves=0
+    local movementCommand="$J_INPUT_DOWN"
+    local -i movesRemaining=0
     if [ ${tunePosition} -gt ${originalPosition} ]
     then
-	mover="$J_INPUT_DOWN"
-	moves=$(($tunePosition - $originalPosition))
+	movementCommand="$J_INPUT_DOWN"
+	movesRemaining=$(($tunePosition - $originalPosition))
     elif [ ${tunePosition} -lt ${originalPosition} ]
     then
-	mover="$J_INPUT_UP"
-	moves=$(($originalPosition - $tunePosition))
+	movementCommand="$J_INPUT_UP"
+	movesRemaining=$(($originalPosition - $tunePosition))
     fi
-    while [ "$moves" -gt 0 ]
+    while [ "$movesRemaining" -gt 0 ]
     do
-	jsonrpc "$mover"
-	((moves--))
+	jsonrpc "$movementCommand"
+	((movesRemaining--))
     done
     jsonrpc "${J_INPUT_SELECT}"
 }
