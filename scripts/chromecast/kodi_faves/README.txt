@@ -13,17 +13,23 @@ quirky adb remote control emulation with finicky delays.
 PREPARATION
 
 * Obviously, install kodi.
+
 * Install whatever kodi add-ons you want to deal with live streams.
+
 * For any stream you want to treat as a "channel", add it to kodi "Favourites"
   (methods for that might vary with different kodi add-ons, but typically
   it will be some kind of context menu with "add to favourites" or similar).
+
 * Test manually to see that you can actually play all the desired stuff in kodi.
+
 * Also check that anything you select from the "Favourites" screen starts playing
   with no further input or interaction. Pop-ups or other confirmation things
   are OK if they automatically go away within a short amount of time.
+
 * From the "Favourites" window, select "Options" and use a ViewType of "WideList".
   That's important because we have to move around in the list as if we were
   using arrow keys, and the scripts only move down or up, not left or right.
+
 * Enable the kodi JSONRPC API via HTTP.
     - Settings > Services > Control
     - Set or edit username and password
@@ -33,15 +39,23 @@ PREPARATION
     - The default port is 8080, but you can change it if you want to or need to
     - Allow remote control from applications on other systems
     - Enable SSL if desired (see kodi docs)
+
 * In the ah4c environment, you must configure the kodi password that you created
   just above. See the configuration stuff below.
+
 * If you are running kodi on Android, you must configure adb access
   from the ah4c server machine. If you are running koid on Linux, you
   must configure ssh access from the ah4c server machine to the box
-  running koid. (If you don't know about SSH keys, this article can help
-  you work through it: https://www.digitalocean.com/community/tutorials/how-to-set-up-ssh-keys-2)
-  Your are creating an SSH key for the Linux account that runs kodi. For LibreELEC,
-  that account is root. The SSH key is NOT for the JSONRPC account.
+  running kodi. Actually, if you don't attempt to do device
+  sleep/wakeup, force stop, or reboot with the Linux flavor, you
+  probably don't need to configure anything for the SSH access at
+  all. That's probably the case for you. You can just give things a
+  try and look for messages about failed SSH operations in the ah4c
+  log. If you need it, you are creating an SSH key for the Linux
+  account that runs kodi. For LibreELEC, that account is root. The SSH
+  key is NOT for the JSONRPC account. (If you don't know about SSH
+  keys, this article can help you work through it:
+  https://www.digitalocean.com/community/tutorials/how-to-set-up-ssh-keys-2)
 
 NOTE: kodi's spelling is "favourites", not "favorites". That's the
 spelling you should use except as noted specifically below. Also, the

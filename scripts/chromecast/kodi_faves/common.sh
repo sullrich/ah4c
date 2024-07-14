@@ -31,45 +31,57 @@ CONFIG_KODI_JSONRPC_USERNAME="kodi"
 ##
 CONFIG_KODI_JSONRPC_PASSWORD=""
 
-## For android kodi, we use adb, but for Linux kodi, we use ssh for a
-## few things to run shell commands remotely. This is the SSH command
-## for such cases. Everything except the target host name. This will
-## typically include "-i" for an SSH key authentication, and "-l" for
-## a username on the remote machine. If you are using a non-standard
-## port, include the options for that here. If you want to use
-## password authentication, you'll have to organize that via SSH
-## ASKPASS, etc.
-##
-## ONLY NEEDED FOR LINUX FLAVOR
-CONFIG_KODI_SSH_COMMAND="ssh -i ./id_linuxkodi -l root -o StrictHostKeyChecking=accept-new"
+if [ ${FLAVOR} = "linux" ]
+then
+    ## For android kodi, we use adb, but for Linux kodi, we use ssh for a
+    ## few things to run shell commands remotely. This is the SSH command
+    ## for such cases. Everything except the target host name. This will
+    ## typically include "-i" for an SSH key authentication, and "-l" for
+    ## a username on the remote machine. If you are using a non-standard
+    ## port, include the options for that here. If you want to use
+    ## password authentication, you'll have to organize that via SSH
+    ## ASKPASS, etc.
+    ##
+    ## ONLY NEEDED FOR LINUX FLAVOR
+    CONFIG_KODI_SSH_COMMAND="ssh -i ./id_linuxkodi -l root -o StrictHostKeyChecking=accept-new"
+fi
 
-## There are lots of ways to start kodi in Linux environments. Instead
-## of guessing, we ask you to tell us the path or command to something
-## we should call to start kodi. This default value is the start-up
-## script used by LibreELEC. This should be the entire shell command
-## to start kodi.
-##
-## ONLY NEEDED FOR LINUX FLAVOR
-#CONFIG_LINUX_KODI_STARTER="/usr/lib/kodi/kodi.sh"
-## Actually, under LibreELEC, kodi should always be running. Even if you kill it,
-## LibreELEC just spawns it again. So, making this a no-op.
-CONFIG_LINUX_KODI_STARTER="echo 'assuming kodi is always running'"
+if [ ${FLAVOR} = "linux" ]
+then
+    ## There are lots of ways to start kodi in Linux environments. Instead
+    ## of guessing, we ask you to tell us the path or command to something
+    ## we should call to start kodi. This default value is the start-up
+    ## script used by LibreELEC. This should be the entire shell command
+    ## to start kodi.
+    ##
+    ## ONLY NEEDED FOR LINUX FLAVOR
+    #CONFIG_LINUX_KODI_STARTER="/usr/lib/kodi/kodi.sh"
+    ## Actually, under LibreELEC, kodi should always be running. Even if you kill it,
+    ## LibreELEC just spawns it again. So, making this a no-op.
+    CONFIG_LINUX_KODI_STARTER="echo 'assuming kodi is always running'"
+fi
 
-## To do the equivalent of a forced stop on Linux, we have to kill
-## some process. Since there are so many different ways to run kodi,
-## we need to be told what to kill. This should be the entire shell
-## command to kill kodi.
-##
-## ONLY NEEDED FOR LINUX FLAVOR
-CONFIG_LINUX_KODI_STOPPER="killall -KILL kodi.sh"
+if [ ${FLAVOR} = "linux" ]
+then
+    ## To do the equivalent of a forced stop on Linux, we have to kill
+    ## some process. Since there are so many different ways to run kodi,
+    ## we need to be told what to kill. This should be the entire shell
+    ## command to kill kodi.
+    ##
+    ## ONLY NEEDED FOR LINUX FLAVOR
+    CONFIG_LINUX_KODI_STOPPER="killall -KILL kodi.sh"
+fi
 
-## For some Linux installs, like LibreELEC, you will be root and all
-## need is a simple reboot command. For others, you may be some less
-## privileged account and need to do it with "sudo" or some other
-## special sauce.
-##
-## ONLY NEEDED FOR LINUX FLAVOR
-CONFIG_LINUX_KODI_REBOOTER="reboot"
+if [ ${FLAVOR} = "linux" ]
+then
+    ## For some Linux installs, like LibreELEC, you will be root and all
+    ## need is a simple reboot command. For others, you may be some less
+    ## privileged account and need to do it with "sudo" or some other
+    ## special sauce.
+    ##
+    ## ONLY NEEDED FOR LINUX FLAVOR
+    CONFIG_LINUX_KODI_REBOOTER="reboot"
+fi
 
 ## There can be some kodi startup delay (splash screen, etc) before we can
 ## successfully switch to the favouritesbrowser window. Rather than some
@@ -128,16 +140,26 @@ then
     CONFIG_STOP_DOES_DEVICE_SLEEP="false"
 fi
 
+## If you opt to put the device to sleep, you may find it useful to
+## wait for the screen to come back on in the prebmitune.sh
+## step. Regardless, we always check for screen on in the bmitune.sh
+## step. For the Linux flavor, "waking up" can mean deactivating the
+## screensaver. It doesn't take long to deactivate the screensaver,
+## so we don't bother with it in pretune for the Linux flavor.
+##
 if [ ${FLAVOR} = "android" ]
 then
-    ## If you opt to put the device to sleep, you may find it useful to
-    ## wait for the screen to come back on in the prebmitune.sh
-    ## step. Regardless, we always check for screen on in the bmitune.sh
-    ## step.
-    ##
-    ## ONLY NEEDED FOR ANDROID FLAVOR
     CONFIG_PRETUNE_WAIT_FOR_SCREEN="true"
+elif [ ${FLAVOR} = "linux" ]
+then
+    CONFIG_PRETUNE_WAIT_FOR_SCREEN="false"
 fi
+
+## If there is a screensaver, it probably consumes the first keypress
+## to deactivate itself. This probably only applies for Linux flavor
+## but no harm done in using it with Android, too.
+##
+CONFIG_SCREENSAVER_EATS_KEY="true"
 
 ## The app navigation should go OK regardless of where it last was
 ## if it's still running. If for some reason that isn't working
@@ -172,6 +194,17 @@ CONFIG_SETTLE_AFTER_FORCE_STOP="0.25"
 ## between retries.
 ##
 CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES="1"
+
+## When using JSONRPCs to move up or down the favourites list, settle
+## this amount of teme after each step. I don't know if this is needed,
+## but the small delay doesn't hurt unless the favourites list is huge.
+##
+CONFIG_SETTLE_ITERATING_FAVORITES="0.3"
+
+## After all of the movement in the favourites list is done, settle
+## this amount of time before finally selecting the highlighted item.
+##
+CONFIG_SETTLE_AFTER_NAVIGATING_FAVORITES="1.5"
 
 ###################################################################
 # end of user configuration options ... don't change things below #
@@ -370,6 +403,14 @@ waitForWakeUp() {
     fi
     
     settle ${CONFIG_SETTLE_AFTER_SCREEN_ON}
+    if [ ${CONFIG_SCREENSAVER_EATS_KEY} = "true" ]
+    then
+        # Try as hard as we can to be idempotent. We don't know if the screensaver is actually active.
+        jsonrpc "${J_INPUT_DOWN}"
+        settle ${CONFIG_SETTLE_ITERATING_FAVORITES}
+        jsonrpc "${J_INPUT_UP}"
+        settle ${CONFIG_SETTLE_ITERATING_FAVORITES}
+    fi
 }
 
 
@@ -604,8 +645,10 @@ kodiNavigateFavourites() {
     while [ "$movesRemaining" -gt 0 ]
     do
         jsonrpc "$movementCommand"
+        settle ${CONFIG_SETTLE_ITERATING_FAVORITES}
         ((movesRemaining--))
     done
+    settle ${CONFIG_SETTLE_AFTER_NAVIGATING_FAVORITES}
     jsonrpc "${J_INPUT_SELECT}"
 }
 
@@ -668,7 +711,7 @@ prebmitune() {
         WAKEUP_EXIT_CODE="$?"
     elif [ ${FLAVOR} = "linux" ]
     then
-        #TODO Linux wakeup not implemented
+        : Linux wakeup not implemented
         WAKEUP_EXIT_CODE="0"
     fi
     if [ "${CONFIG_PRETUNE_WAIT_FOR_SCREEN}" = "true" ]
