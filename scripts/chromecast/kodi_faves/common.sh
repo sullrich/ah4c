@@ -250,6 +250,8 @@ fi
 J_ACTIVATE_FAVOURITES='{"jsonrpc": "2.0", "method": "GUI.ActivateWindow", "params": {"window": "favouritesbrowser"}, "id": 1}'
 J_INPUT_DOWN='{"jsonrpc": "2.0", "method": "Input.Down", "id": 1}'
 J_INPUT_UP='{"jsonrpc": "2.0", "method": "Input.Up", "id": 1}'
+J_INPUT_RIGHT='{"jsonrpc": "2.0", "method": "Input.Right", "id": 1}'
+J_INPUT_LEFT='{"jsonrpc": "2.0", "method": "Input.Left", "id": 1}'
 J_INPUT_SELECT='{"jsonrpc": "2.0", "method": "Input.Select", "id": 1}'
 J_INPUT_BACK='{"jsonrpc": "2.0", "method": "Input.Back", "id": 1}'
 J_APPLICATION_QUIT='{"jsonrpc": "2.0", "method": "Application.Quit", "id": 1}'
@@ -405,11 +407,12 @@ waitForWakeUp() {
     settle ${CONFIG_SETTLE_AFTER_SCREEN_ON}
     if [ ${CONFIG_SCREENSAVER_EATS_KEY} = "true" ]
     then
-        # Try as hard as we can to be idempotent. We don't know if the screensaver is actually active.
-        jsonrpc "${J_INPUT_DOWN}"
-        settle ${CONFIG_SETTLE_ITERATING_FAVORITES}
-        jsonrpc "${J_INPUT_UP}"
-        settle ${CONFIG_SETTLE_ITERATING_FAVORITES}
+        # We don't know if the screensaver is actually active.  By
+        # using "right", which has no effect on the WideList view of
+        # the favourites screen, it avoids a little screen flashing.
+        # If we're on some other screen, we don't care what "right"
+        # does (I hope :-) )
+        jsonrpc "${J_INPUT_RIGHT}"
     fi
 }
 
