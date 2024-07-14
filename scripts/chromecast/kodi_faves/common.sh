@@ -257,6 +257,36 @@ J_INPUT_BACK='{"jsonrpc": "2.0", "method": "Input.Back", "id": 1}'
 J_APPLICATION_QUIT='{"jsonrpc": "2.0", "method": "Application.Quit", "id": 1}'
 J_PLAYER_STOP='{"jsonrpc": "2.0", "method": "Player.Stop", "params": {"playerid": PLAYERID}, "id": 1}'
 
+# NOTE: I recently found out how to directly tune an item from the favourites list, but it's not
+# implemented here. See examples just below. Take the value of the "path" attribute and wrap it in a
+# PlayMedia action. Invoke that via the kodi python API. If the value of the "path" attribute is
+# "PPPPP", it would look like:
+#
+#   kodi-send --action='PlayMedia(PPPPP)'
+#
+# where "kodi-send" is a command for sending things to the python API. "kodi-send" is a standard
+# part of kodi and is python, so it should be available on all platforms, I guess. It took me some
+# sleuthing and guessing, but I finally figured out how to do this in JSONRPC. I had tried that
+# without joy a million years ago, but just today I got it to work by substituting the attribute
+# name "file" where I previously had "path".
+#
+# I'm going to think about implementing this. It's better in the script logic than navigating the
+# favorites menu, but it's not so obvious where a non-technical user would dig out the real values of
+# "PPPPP", nor where is the best way to keep track of things.
+#
+#{
+#    "jsonrpc": "2.0",
+#    "method": "Player.Open",
+#    "params":
+#    {
+#        "item":
+#        {
+#            "file": "PPPPP"
+#        }
+#    },
+#    "id": 1
+#}
+#
 J_GET_FAVES='{"jsonrpc": "2.0", "method": "Favourites.GetFavourites", "id": 1}'
 # {
 #   "id": 1,
