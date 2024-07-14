@@ -15,6 +15,11 @@ trap finish EXIT
 ##
 CONFIG_KODI_JSONRPC_PORT="8080"
 
+## You can access the JSONRPC API over http or https. Change this config if
+## you configured TLS/SSL when turning on HTTP access.
+##
+CONFIG_KODI_JSONRPC_SCHEME="http"
+
 ## kodi uses HTTP basic authentication for JSONRPC API over HTTP. The default
 ## userid is shown here, but you might have changed it when you turned on
 ## HTTP access.
@@ -26,10 +31,45 @@ CONFIG_KODI_JSONRPC_USERNAME="kodi"
 ##
 CONFIG_KODI_JSONRPC_PASSWORD=""
 
-## You can access the JSONRPC API over http or https. Change this config if
-## you configured TLS/SSL when turning on HTTP access.
+## For android kodi, we use adb, but for Linux kodi, we use ssh for a
+## few things to run shell commands remotely. This is the SSH command
+## for such cases. Everything except the target host name. This will
+## typically include "-i" for an SSH key authentication, and "-l" for
+## a username on the remote machine. If you are using a non-standard
+## port, include the options for that here. If you want to use
+## password authentication, you'll have to organize that via SSH
+## ASKPASS, etc.
 ##
-CONFIG_KODI_JSONRPC_SCHEME="http"
+## ONLY NEEDED FOR LINUX FLAVOR
+CONFIG_KODI_SSH_COMMAND="ssh -i ./id_linuxkodi -l root -o StrictHostKeyChecking=accept-new"
+
+## There are lots of ways to start kodi in Linux environments. Instead
+## of guessing, we ask you to tell us the path or command to something
+## we should call to start kodi. This default value is the start-up
+## script used by LibreELEC. This should be the entire shell command
+## to start kodi.
+##
+## ONLY NEEDED FOR LINUX FLAVOR
+#CONFIG_LINUX_KODI_STARTER="/usr/lib/kodi/kodi.sh"
+## Actually, under LibreELEC, kodi should always be running. Even if you kill it,
+## LibreELEC just spawns it again. So, making this a no-op.
+CONFIG_LINUX_KODI_STARTER="echo 'assuming kodi is always running'"
+
+## To do the equivalent of a forced stop on Linux, we have to kill
+## some process. Since there are so many different ways to run kodi,
+## we need to be told what to kill. This should be the entire shell
+## command to kill kodi.
+##
+## ONLY NEEDED FOR LINUX FLAVOR
+CONFIG_LINUX_KODI_STOPPER="killall -KILL kodi.sh"
+
+## For some Linux installs, like LibreELEC, you will be root and all
+## need is a simple reboot command. For others, you may be some less
+## privileged account and need to do it with "sudo" or some other
+## special sauce.
+##
+## ONLY NEEDED FOR LINUX FLAVOR
+CONFIG_LINUX_KODI_REBOOTER="reboot"
 
 ## There can be some kodi startup delay (splash screen, etc) before we can
 ## successfully switch to the favouritesbrowser window. Rather than some
@@ -47,8 +87,14 @@ CONFIG_KODI_RETRY_PLAYING_STREAM_MAX="2"
 ## "Quit" here means the kodi graceful exit, as opposed to a force-stop.
 ## The idea is to minimize potential carnage that a force-stop might give.
 ##
-CONFIG_STOP_DOES_KODI_QUIT="true"
-
+if [ ${FLAVOR} = "android" ]
+then
+    CONFIG_STOP_DOES_KODI_QUIT="true"
+elif [ ${FLAVOR} = "linux" ]
+then
+    CONFIG_STOP_DOES_KODI_QUIT="false"
+fi
+  
 ## I'm not sure what happens if kodi goes into the background without a
 ## quit or force-stop. Is it still streaming something over the network?
 ## This tracks down all the active players and stops them. It can also
@@ -61,25 +107,37 @@ CONFIG_KODI_STOP_DOES_PLAYERS_STOP="true"
 ##
 CONFIG_STOP_DOES_APP_FORCE_STOP="false"
 
-## When done with a stream, should we send a HOME button press to the device?
-##
-CONFIG_STOP_DOES_DEVICE_HOME="true"
+if [ ${FLAVOR} = "android" ]
+then
+    ## When done with a stream, should we send a HOME button press to the device?
+    ##
+    ## ONLY NEEDED FOR ANDROID FLAVOR
+    CONFIG_STOP_DOES_DEVICE_HOME="true"
+fi
 
-## When done with a video stream, should the Android device be put to
-## sleep? I don't know if this saves any significant resources, since
-## there is no screen, but it might ease the burden on the HDMI
-## encoder device; mine switches to a static image. Set this to false
-## if it seems like Channels has problems when the device needs waking
-## up.
-##
-CONFIG_STOP_DOES_DEVICE_SLEEP="false"
+if [ ${FLAVOR} = "android" ]
+then
+    ## When done with a video stream, should the Android device be put to
+    ## sleep? I don't know if this saves any significant resources, since
+    ## there is no screen, but it might ease the burden on the HDMI
+    ## encoder device; mine switches to a static image. Set this to false
+    ## if it seems like Channels has problems when the device needs waking
+    ## up.
+    ##
+    ## ONLY NEEDED FOR ANDROID FLAVOR
+    CONFIG_STOP_DOES_DEVICE_SLEEP="false"
+fi
 
-## If you opt to put the device to sleep, you may find it useful to
-## wait for the screen to come back on in the prebmitune.sh
-## step. Regardless, we always check for screen on in the bmitune.sh
-## step.
-##
-CONFIG_PRETUNE_WAIT_FOR_SCREEN="true"
+if [ ${FLAVOR} = "android" ]
+then
+    ## If you opt to put the device to sleep, you may find it useful to
+    ## wait for the screen to come back on in the prebmitune.sh
+    ## step. Regardless, we always check for screen on in the bmitune.sh
+    ## step.
+    ##
+    ## ONLY NEEDED FOR ANDROID FLAVOR
+    CONFIG_PRETUNE_WAIT_FOR_SCREEN="true"
+fi
 
 ## The app navigation should go OK regardless of where it last was
 ## if it's still running. If for some reason that isn't working
@@ -118,14 +176,17 @@ CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES="1"
 ###################################################################
 # end of user configuration options ... don't change things below #
 ###################################################################
-APP_PACKAGE="org.xbmc.kodi"
-APP_ACTIVITY=".Main"
+if [ ${FLAVOR} = "android" ]
+then
+    APP_PACKAGE="org.xbmc.kodi"
+    APP_ACTIVITY=".Main"
+fi
 
 ## "config-local.sh" is optional and allows for overriding config values without directly editing the scripts.
-LF=`dirname $0`/config-local.sh
-if [ -f "${LF}" ]
+CONFIG_LOCAL=./config-local.sh
+if [ -f "${CONFIG_LOCAL}" ]
 then
-    . "${LF}"
+    source "${CONFIG_LOCAL}"
 fi
 
 # We need jq for JSON fiddling, but the ah4c docker image doesn't have it by default.
@@ -134,13 +195,20 @@ ensureWeHaveJQ() {
     type jq >/dev/null 2>&1 || apk add jq
 }
 
+ensureWeHaveSSH() {
+    type ssh >/dev/null 2>&1 || apk add openssh-client
+}
+
 # Functions with prefix "kodi" are specific to the kodi app. Other functions are more or less generic.
 
-# define a few adb command fragments ("R_" is mnemonic for "remote control" even though some are not buttons on the remote)
-R_SLEEP="shell input keyevent KEYCODE_SLEEP"
-R_HOME="shell input keyevent KEYCODE_HOME"
-R_FORCE_STOP="shell am force-stop"
-R_LAUNCH_APP="shell am start -W -n"
+if [ ${FLAVOR} = "android" ]
+then
+    # define a few adb command fragments ("R_" is mnemonic for "remote control" even though some are not buttons on the remote)
+    R_SLEEP="shell input keyevent KEYCODE_SLEEP"
+    R_HOME="shell input keyevent KEYCODE_HOME"
+    R_FORCE_STOP="shell am force-stop"
+    R_LAUNCH_APP="shell am start -W -n"
+fi
 
 # kodi JSONRPC info:
 # https://kodi.wiki/view/JSON-RPC_API
@@ -226,12 +294,30 @@ KODI_FAVOURITES_WINDOW_ID="10060"
 KODI_PLAYER_WINDOW_ID="12005"
 
 init() {
+    if [ ${FLAVOR} = "android" -o ${FLAVOR} = "linux" ]
+    then
+        echo "${FLAVOR} flavor of kodi"
+    else
+        echo "Unrecognized '${FLAVOR}' flavor of kodi"
+        forceStopAndExit 1
+    fi
+    
     STREAMER_WITH_PORT="$1"
     STREAMER_NO_PORT="${STREAMER_WITH_PORT%%:*}"
-    ADB_="adb -s ${STREAMER_WITH_PORT}"
+    if [ ${FLAVOR} = "android" ]
+    then
+        REMOTE_COMMAND_="adb -s ${STREAMER_WITH_PORT}"
+    elif [ ${FLAVOR} = linux ]
+    then
+        REMOTE_COMMAND_="${CONFIG_KODI_SSH_COMMAND} ${STREAMER_NO_PORT}"
+    fi
     JSONRPC_="curl -s -u ${CONFIG_KODI_JSONRPC_USERNAME}:${CONFIG_KODI_JSONRPC_PASSWORD} --url ${CONFIG_KODI_JSONRPC_SCHEME}://${STREAMER_NO_PORT}:${CONFIG_KODI_JSONRPC_PORT}/jsonrpc --json"
 
     ensureWeHaveJQ
+    if [ ${FLAVOR} = "linux" ]
+    then
+        ensureWeHaveSSH
+    fi
 }
 
 ## At various points, we have to wait for the physical device to do something. We call that
@@ -244,7 +330,7 @@ settle() {
     echo "settle ${calculation}"
     if [ "${delay:0:1}" != "-" ]
     then
-	sleep "${delay}"
+        sleep "${delay}"
     fi
 }
 
@@ -261,24 +347,28 @@ waitForWakeUp() {
     local -i maxRetries=15
     local -i retryCounter=0
 
-    while true
-    do
-	# Fire TV returns dumpsys output with CRLF line endings; what an annoyance
-	displayState=` $ADB_ shell "input keyevent KEYCODE_WAKEUP ; dumpsys display" | grep -e 'mGlobalDisplayState=' -e 'Display State=' -m 1 | cut -d= -f2 | tr -d '\r\n' `
-	if [ ${displayState} = "ON" ]; then
-	    break
-	fi
+    if [ ${FLAVOR} = "android" ]
+    then
+        while true
+        do
+            # Fire TV returns dumpsys output with CRLF line endings; what an annoyance
+            displayState=` ${REMOTE_COMMAND_} shell "input keyevent KEYCODE_WAKEUP ; dumpsys display" | grep -e 'mGlobalDisplayState=' -e 'Display State=' -m 1 | cut -d= -f2 | tr -d '\r\n' `
+            if [ ${displayState} = "ON" ]; then
+                break
+            fi
 
-	if ((${retryCounter} > ${maxRetries})); then
-	    touch $STREAMER_NO_PORT/adbCommunicationFail
-	    echo "Communication with ${STREAMER_WITH_PORT} failed after ${maxRetries} retries"
-	    forceStopAndExit 1
-	fi
+            if ((${retryCounter} > ${maxRetries})); then
+                touch $STREAMER_NO_PORT/adbCommunicationFail
+                echo "Communication with ${STREAMER_WITH_PORT} failed after ${maxRetries} retries"
+                forceStopAndExit 1
+            fi
 
-	# we need to beat a relatively short Channels connection timeout (8-10 seconds), so we use only short sleeps per iteration
-	settle "${CONFIG_SETTLE_ITERATING_FOR_SCREEN_ON}"
-	((retryCounter++))
-    done
+            # we need to beat a relatively short Channels connection timeout (8-10 seconds), so we use only short sleeps per iteration
+            settle "${CONFIG_SETTLE_ITERATING_FOR_SCREEN_ON}"
+            ((retryCounter++))
+        done
+    fi
+    
     settle ${CONFIG_SETTLE_AFTER_SCREEN_ON}
 }
 
@@ -288,54 +378,82 @@ waitForBmituneDone() {
     bmitunePID=$(<"$STREAMER_NO_PORT/bmitune_pid")
 
     while ps -p ${bmitunePID} > /dev/null 2>&1 ; do
-	echo "Waiting for bmitune.sh to complete..."
-	settle "${CONFIG_SETTLE_ITERATING_FOR_BMITUNE_DONE}"
+        echo "Waiting for bmitune.sh to complete..."
+        settle "${CONFIG_SETTLE_ITERATING_FOR_BMITUNE_DONE}"
     done
+}
+
+forceStop() {
+    echo "Force stop kodi"
+    if [ ${FLAVOR} = "android" ]
+    then
+        ${REMOTE_COMMAND_} ${R_FORCE_STOP} "${APP_PACKAGE}"
+    elif [ ${FLAVOR} = "linux" ]
+    then
+        ${REMOTE_COMMAND_} ${CONFIG_LINUX_KODI_STOPPER}
+    fi
+    settle "${CONFIG_SETTLE_AFTER_FORCE_STOP}"
 }
 
 # either way, this should leave us at the app startup main page
 launchTheApp() {
     if [ "${CONFIG_FORCE_STOP_BEFORE_APP_START}" = "true" ]
     then
-	echo "FORCE STOP ${APP_PACKAGE}"
-        $ADB_ ${R_FORCE_STOP} "${APP_PACKAGE}"
-	settle "${CONFIG_SETTLE_AFTER_FORCE_STOP}"
+        forceStop
     fi
 
-    echo "STARTING ${APP_PACKAGE}/${APP_ACTIVITY}"
-    $ADB_ ${R_LAUNCH_APP} "${APP_PACKAGE}/${APP_ACTIVITY}"
+    if [ ${FLAVOR} = "android" ]
+    then
+	echo "STARTING ${APP_PACKAGE}/${APP_ACTIVITY}"
+        ${REMOTE_COMMAND_} ${R_LAUNCH_APP} "${APP_PACKAGE}/${APP_ACTIVITY}"
+    elif [ ${FLAVOR} = "linux" ]
+    then
+        ${REMOTE_COMMAND_} ${CONFIG_LINUX_KODI_STARTER}
+    fi
+    # not really adb for Linux, but going with the previous file naming
     touch $STREAMER_NO_PORT/adbAppRunning
 }
 
 forceStopAndExit() {
-    echo "Doing force-stop of ${APP_PACKAGE}"
-    $ADB_ ${R_FORCE_STOP} ${APP_PACKAGE}
+    forceStop
     exit "$1"
 }
 
 kodiStopTheApp() {
     if [ "${CONFIG_KODI_STOP_DOES_PLAYERS_STOP}" = "true" ]
     then
-	kodiStopThePlayers
+        kodiStopThePlayers
     fi
     if [ "${CONFIG_STOP_DOES_KODI_QUIT}" = "true" ]
     then
-	jsonrpc "${J_APPLICATION_QUIT}"
-	settle ${CONFIG_SETTLE_AFTER_KODI_QUIT}
+        jsonrpc "${J_APPLICATION_QUIT}"
+        settle ${CONFIG_SETTLE_AFTER_KODI_QUIT}
     fi
     if [ "${CONFIG_STOP_DOES_APP_FORCE_STOP}" = "true" ]
     then
-	$ADB_ ${R_FORCE_STOP} ${APP_PACKAGE}
+        forceStop
     fi
     if [ "${CONFIG_STOP_DOES_DEVICE_HOME}" = "true" ]
     then
-	$ADB_ ${R_HOME}
+        if [ ${FLAVOR} = "android" ]
+        then
+            ${REMOTE_COMMAND_} ${R_HOME}
+        elif [ ${FLAVOR} = "linux" ]
+        then
+            : no Linux equivalent
+        fi
     fi
     echo "Streaming stopped for ${STREAMER_WITH_PORT}"
 }
 
 putTheDeviceToSleep() {
-    $ADB_ ${R_SLEEP}
+    if [ ${FLAVOR} = "android" ]
+    then
+         ${REMOTE_COMMAND_} ${R_SLEEP}
+    elif [ ${FLAVOR} = "linux" ]
+    then
+         : TODO Linux sleep not implemented
+    fi
     echo "Device sleep initiated for ${STREAMER_WITH_PORT}"
 }
 
@@ -365,20 +483,25 @@ matchEncoderURL() {
 specialChannels() {
 
     if [ "${REQUESTED_THING}" = "exit" ]; then
-      echo "Exit $APP_PACKAGE requested on ${STREAMER_WITH_PORT}"
-      rm $STREAMER_NO_PORT/last_channel $STREAMER_NO_PORT/adbAppRunning
-      $ADB_ shell am force-stop $APP_PACKAGE
-      exit 0
+        echo "Exit $APP_PACKAGE requested on ${STREAMER_WITH_PORT}"
+        rm $STREAMER_NO_PORT/last_channel $STREAMER_NO_PORT/adbAppRunning
+        forceStopAndExit 0
     elif [ "${REQUESTED_THING}" = "reboot" ]; then
-      echo "Reboot ${STREAMER_WITH_PORT} requested"
-      rm $STREAMER_NO_PORT/last_channel $STREAMER_NO_PORT/adbAppRunning
-      $ADB_ reboot
-      exit 0
+        echo "Reboot ${STREAMER_WITH_PORT} requested"
+        rm $STREAMER_NO_PORT/last_channel $STREAMER_NO_PORT/adbAppRunning
+        if [ ${FLAVOR} = "android" ]
+        then
+             ${REMOTE_COMMAND_} reboot
+        elif [ ${FLAVOR} = "linux" ]
+        then
+             ${REMOTE_COMMAND_} ${CONFIG_LINUX_KODI_REBOOTER}
+        fi
+        exit 0
     elif [[ -f $STREAMER_NO_PORT/adbCommunicationFail ]]; then
-      rm $STREAMER_NO_PORT/adbCommunicationFail
-      # earlier code had an error exit here since this file was a flag, but these scripts to do their own error exits
+        rm $STREAMER_NO_PORT/adbCommunicationFail
+        # earlier code had an error exit here since this file was a flag, but these scripts do their own error exits
     else
-      echo "Not a special channel (exit nor reboot)"
+        echo "Not a special channel (not exit nor reboot)"
     fi
 }
 
@@ -399,25 +522,25 @@ kodiActivateFavourites() {
     local -i tryCounter=0
     while true
     do
-	jsonrpc "${J_ACTIVATE_FAVOURITES}"
-	if [ "$?" == 0 ]
-	then
-	    local window=`kodiGetCurrentWindowId`
-	    echo "Current window is '${window}'"
-	    if [ "${window}" = "${KODI_FAVOURITES_WINDOW_ID}" ]
-	       then
-		   echo "Favourites window is activated"
-		   break
-	    fi
-	fi
-	
-	if ((${tryCounter} > ${CONFIG_KODI_FAVOURITES_ITERATING_MAX})); then
-	    touch $STREAMER_NO_PORT/adbCommunicationFail
-	    echo "Activating favourites window on ${STREAMER_WITH_PORT} failed after ${CONFIG_KODI_FAVOURITES_ITERATING_MAX} tries"
-	    forceStopAndExit 1
-	fi
-	((tryCounter++))
-	settle ${CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES}
+        jsonrpc "${J_ACTIVATE_FAVOURITES}"
+        if [ "$?" == 0 ]
+        then
+            local window=`kodiGetCurrentWindowId`
+            echo "Current window is '${window}'"
+            if [ "${window}" = "${KODI_FAVOURITES_WINDOW_ID}" ]
+               then
+                   echo "Favourites window is activated"
+                   break
+            fi
+        fi
+        
+        if ((${tryCounter} > ${CONFIG_KODI_FAVOURITES_ITERATING_MAX})); then
+            touch $STREAMER_NO_PORT/adbCommunicationFail
+            echo "Activating favourites window on ${STREAMER_WITH_PORT} failed after ${CONFIG_KODI_FAVOURITES_ITERATING_MAX} tries"
+            forceStopAndExit 1
+        fi
+        ((tryCounter++))
+        settle ${CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES}
     done
 }
 
@@ -448,40 +571,40 @@ kodiNavigateFavourites() {
     read tunePosition originalPosition <<<${result}
     if [ -z "${originalSelection}" -o "${originalPosition}" -eq 0 ]
     then
-	# It can sometimes happen that nothing is the current item; simply move down to highlight something.
-	# (I'm not sure how/why that happens.)
-	# The list in kodi wraps around, so we don't have to worry about hitting either end.
-	jsonrpc "${J_INPUT_DOWN}"
-	originalSelectionl=`kodiGetCurrentControlLabel`
-	result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
-	read tunePosition originalPosition <<<${result}
+        # It can sometimes happen that nothing is the current item; simply move down to highlight something.
+        # (I'm not sure how/why that happens.)
+        # The list in kodi wraps around, so we don't have to worry about hitting either end.
+        jsonrpc "${J_INPUT_DOWN}"
+        originalSelectionl=`kodiGetCurrentControlLabel`
+        result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
+        read tunePosition originalPosition <<<${result}
     fi
     if [ ${originalPosition} -eq 0 ]
     then
-	echo "Something is horribly wrong is searching the favourites list. No current selection."
-	forceStopAndExit 3
+        echo "Something is horribly wrong is searching the favourites list. No current selection."
+        forceStopAndExit 3
     fi
     if [ ${tunePosition} -eq 0 ]
     then
-	echo "You tried to tune a thing, '${tuningPattern}', that is not in your favourites list."
-	forceStopAndExit 4
+        echo "You tried to tune a thing, '${tuningPattern}', that is not in your favourites list."
+        forceStopAndExit 4
     fi
 
     local movementCommand="$J_INPUT_DOWN"
     local -i movesRemaining=0
     if [ ${tunePosition} -gt ${originalPosition} ]
     then
-	movementCommand="$J_INPUT_DOWN"
-	movesRemaining=$(($tunePosition - $originalPosition))
+        movementCommand="$J_INPUT_DOWN"
+        movesRemaining=$(($tunePosition - $originalPosition))
     elif [ ${tunePosition} -lt ${originalPosition} ]
     then
-	movementCommand="$J_INPUT_UP"
-	movesRemaining=$(($originalPosition - $tunePosition))
+        movementCommand="$J_INPUT_UP"
+        movesRemaining=$(($originalPosition - $tunePosition))
     fi
     while [ "$movesRemaining" -gt 0 ]
     do
-	jsonrpc "$movementCommand"
-	((movesRemaining--))
+        jsonrpc "$movementCommand"
+        ((movesRemaining--))
     done
     jsonrpc "${J_INPUT_SELECT}"
 }
@@ -490,36 +613,36 @@ kodiTune() {
     local -i tryCounter=0
     while true
     do
-	kodiActivateFavourites
-	kodiNavigateFavourites
-	settle ${CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY}
+        kodiActivateFavourites
+        kodiNavigateFavourites
+        settle ${CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY}
         local label=`kodiGetCurrentWindowId`
         if [ "${label}" = "${KODI_PLAYER_WINDOW_ID}" ]
         then
-	    local -i attempt=$((tryCounter+1))
+            local -i attempt=$((tryCounter+1))
             echo "Stream playing after ${attempt} tries."
             break
         fi
-	# do "back" to attempt to clear any error pop-up
-	jsonrpc "${J_INPUT_BACK}"
-	if ((${tryCounter} > ${CONFIG_KODI_RETRY_PLAYING_STREAM_MAX})); then
-	    touch $STREAMER_NO_PORT/adbCommunicationFail
-	    echo "Stream failed to play after ${CONFIG_KODI_RETRY_PLAYING_STREAM_MAX} tries"
-	    forceStopAndExit 1
-	fi
-	((tryCounter++))
+        # do "back" to attempt to clear any error pop-up
+        jsonrpc "${J_INPUT_BACK}"
+        if ((${tryCounter} > ${CONFIG_KODI_RETRY_PLAYING_STREAM_MAX})); then
+            touch $STREAMER_NO_PORT/adbCommunicationFail
+            echo "Stream failed to play after ${CONFIG_KODI_RETRY_PLAYING_STREAM_MAX} tries"
+            forceStopAndExit 1
+        fi
+        ((tryCounter++))
     done
 }
 
 kodiStopThePlayers() {
     # I don't know if it's meaningful to do this in our context, but it finds all the active players and tells them to stop.
     jsonrpc "${J_ACTIVE_PLAYERS}" | jq -r '.result[].playerid' |
-	while read playerid
-	do
-	    local j=`echo "${J_PLAYER_STOP}" | sed s/PLAYERID/${playerid}/`
-	    echo "Stopping playerid ${playerid}"
-	    jsonrpc "${j}"
-	done
+        while read playerid
+        do
+            local j=`echo "${J_PLAYER_STOP}" | sed s/PLAYERID/${playerid}/`
+            echo "Stopping playerid ${playerid}"
+            jsonrpc "${j}"
+        done
 }
 
 stopbmitune() {
@@ -528,7 +651,7 @@ stopbmitune() {
     kodiStopTheApp
     if [ "${CONFIG_STOP_DOES_DEVICE_SLEEP}" = "true" ]
     then
-	putTheDeviceToSleep
+        putTheDeviceToSleep
     fi
     date +%s > $STREAMER_NO_PORT/stream_stopped
     echo "$STREAMER_NO_PORT/stream_stopped written"
@@ -537,15 +660,22 @@ stopbmitune() {
 prebmitune() {
     init "$1"
     mkdir -p $STREAMER_NO_PORT
-    adb connect ${STREAMER_WITH_PORT}
     # fire and forget the wakeup call to make sure the screen comes back on soon if it was off
-    $ADB_ shell input keyevent KEYCODE_WAKEUP
-    WAKEUP_EXIT_CODE="$?"
+    if [ ${FLAVOR} = "android" ]
+    then
+	adb connect ${STREAMER_WITH_PORT}
+        ${REMOTE_COMMAND_} shell input keyevent KEYCODE_WAKEUP
+        WAKEUP_EXIT_CODE="$?"
+    elif [ ${FLAVOR} = "linux" ]
+    then
+        #TODO Linux wakeup not implemented
+        WAKEUP_EXIT_CODE="0"
+    fi
     if [ "${CONFIG_PRETUNE_WAIT_FOR_SCREEN}" = "true" ]
     then
-	waitForWakeUp
+        waitForWakeUp
     else
-	forceStopAndExit ${WAKEUP_EXIT_CODE}
+        exit ${WAKEUP_EXIT_CODE}
     fi
 }
 
