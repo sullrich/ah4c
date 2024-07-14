@@ -199,12 +199,12 @@ CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES="1"
 ## this amount of teme after each step. I don't know if this is needed,
 ## but the small delay doesn't hurt unless the favourites list is huge.
 ##
-CONFIG_SETTLE_ITERATING_FAVORITES="0.3"
+CONFIG_SETTLE_ITERATING_FAVORITES="0.1"
 
 ## After all of the movement in the favourites list is done, settle
 ## this amount of time before finally selecting the highlighted item.
 ##
-CONFIG_SETTLE_AFTER_NAVIGATING_FAVORITES="1.5"
+CONFIG_SETTLE_AFTER_NAVIGATING_FAVORITES="0.5"
 
 ###################################################################
 # end of user configuration options ... don't change things below #
@@ -563,23 +563,20 @@ kodiActivateFavourites() {
     local -i tryCounter=0
     while true
     do
-        jsonrpc "${J_ACTIVATE_FAVOURITES}"
-        if [ "$?" == 0 ]
-        then
-            local window=`kodiGetCurrentWindowId`
-            echo "Current window is '${window}'"
-            if [ "${window}" = "${KODI_FAVOURITES_WINDOW_ID}" ]
-               then
-                   echo "Favourites window is activated"
-                   break
-            fi
-        fi
-        
         if ((${tryCounter} > ${CONFIG_KODI_FAVOURITES_ITERATING_MAX})); then
             touch $STREAMER_NO_PORT/adbCommunicationFail
             echo "Activating favourites window on ${STREAMER_WITH_PORT} failed after ${CONFIG_KODI_FAVOURITES_ITERATING_MAX} tries"
             forceStopAndExit 1
         fi
+        local window=`kodiGetCurrentWindowId`
+        echo "Current window is '${window}'"
+        if [ "${window}" = "${KODI_FAVOURITES_WINDOW_ID}" ]
+        then
+            echo "Favourites window is activated"
+            break
+        fi
+        jsonrpc "${J_ACTIVATE_FAVOURITES}"
+        
         ((tryCounter++))
         settle ${CONFIG_SETTLE_ITERATING_KODI_ACTIVATING_FAVOURITES}
     done
