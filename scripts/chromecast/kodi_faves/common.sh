@@ -155,6 +155,14 @@ then
     CONFIG_PRETUNE_WAIT_FOR_SCREEN="false"
 fi
 
+## There are two ways of tuning to a particular channel. You can either directly
+## play it via a Player.Open call, or you can navigate through the Favourites panel.
+## Player.Open is simpler and you should use that unless you encounter problems.
+## Favourites navigation is here as a fallback, and also because it was implemented
+## first.
+##
+CONFIG_PLAY_VIA_FAVOURITES_NAVIGATION="false"
+
 ## If there is a screensaver, it probably consumes the first keypress
 ## to deactivate itself. This probably only applies for Linux flavor
 ## but no harm done in using it with Android, too.
@@ -255,39 +263,12 @@ J_INPUT_LEFT='{"jsonrpc": "2.0", "method": "Input.Left", "id": 1}'
 J_INPUT_SELECT='{"jsonrpc": "2.0", "method": "Input.Select", "id": 1}'
 J_INPUT_BACK='{"jsonrpc": "2.0", "method": "Input.Back", "id": 1}'
 J_APPLICATION_QUIT='{"jsonrpc": "2.0", "method": "Application.Quit", "id": 1}'
-J_PLAYER_STOP='{"jsonrpc": "2.0", "method": "Player.Stop", "params": {"playerid": PLAYERID}, "id": 1}'
+J_PLAYER_OPEN_HEAD='{"jsonrpc": "2.0", "method": "Player.Open", "params": {"item": {"file": "'
+J_PLAYER_OPEN_TAIL='"}}, "id": 1}'
+J_PLAYER_STOP_HEAD='{"jsonrpc": "2.0", "method": "Player.Stop", "params": {"playerid": '
+J_PLAYER_STOP_TAIL='}, "id": 1}'
 
-# NOTE: I recently found out how to directly tune an item from the favourites list, but it's not
-# implemented here. See examples just below. Take the value of the "path" attribute and wrap it in a
-# PlayMedia action. Invoke that via the kodi python API. If the value of the "path" attribute is
-# "PPPPP", it would look like:
-#
-#   kodi-send --action='PlayMedia(PPPPP)'
-#
-# where "kodi-send" is a command for sending things to the python API. "kodi-send" is a standard
-# part of kodi and is python, so it should be available on all platforms, I guess. It took me some
-# sleuthing and guessing, but I finally figured out how to do this in JSONRPC. I had tried that
-# without joy a million years ago, but just today I got it to work by substituting the attribute
-# name "file" where I previously had "path".
-#
-# I'm going to think about implementing this. It's better in the script logic than navigating the
-# favorites menu, but it's not so obvious where a non-technical user would dig out the real values of
-# "PPPPP", nor where is the best way to keep track of things.
-#
-#{
-#    "jsonrpc": "2.0",
-#    "method": "Player.Open",
-#    "params":
-#    {
-#        "item":
-#        {
-#            "file": "PPPPP"
-#        }
-#    },
-#    "id": 1
-#}
-#
-J_GET_FAVES='{"jsonrpc": "2.0", "method": "Favourites.GetFavourites", "id": 1}'
+J_GET_FAVES='{"jsonrpc": "2.0", "method": "Favourites.GetFavourites", "params": {"properties": ["path"]}, "id": 1}'
 # {
 #   "id": 1,
 #   "jsonrpc": "2.0",
@@ -295,13 +276,11 @@ J_GET_FAVES='{"jsonrpc": "2.0", "method": "Favourites.GetFavourites", "id": 1}'
 #     "favourites": [
 #       {
 #         "path": "plugin://slyguy.pbs.live/?_=play&_play=1&callsign=KCTS&_is_live=1&_noresume=.pvr",
-#         "thumbnail": "http://127.0.0.1:52103/https://image.pbs.org/stations/kcts-color-cobranded-logo-lBlyOon.png|user-agent=okhttp/4.9.3&session_type=art&session_addonid=slyguy.pbs.live",
 #         "title": "Cascade PBS",
 #         "type": "media"
 #       },
 #       {
 #         "path": "plugin://slyguy.pbs.live/?_=play&_play=1&callsign=KBTC&_is_live=1&_noresume=.pvr",
-#         "thumbnail": "http://127.0.0.1:52103/https://image.pbs.org/stations/kbtc-color-cobranded-logo-UQTavrW.png|user-agent=okhttp/4.9.3&session_type=art&session_addonid=slyguy.pbs.live",
 #         "title": "KBTC Public Television",
 #         "type": "media"
 #       }
@@ -434,15 +413,18 @@ waitForWakeUp() {
         done
     fi
     
-    settle ${CONFIG_SETTLE_AFTER_SCREEN_ON}
-    if [ ${CONFIG_SCREENSAVER_EATS_KEY} = "true" ]
+    if [ ${CONFIG_PLAY_VIA_FAVOURITES_NAVIGATION} = "true" ]
     then
-        # We don't know if the screensaver is actually active.  By
-        # using "right", which has no effect on the WideList view of
-        # the favourites screen, it avoids a little screen flashing.
-        # If we're on some other screen, we don't care what "right"
-        # does (I hope :-) )
-        jsonrpc "${J_INPUT_RIGHT}"
+	settle ${CONFIG_SETTLE_AFTER_SCREEN_ON}
+	if [ ${CONFIG_SCREENSAVER_EATS_KEY} = "true" ]
+	then
+            # We don't know if the screensaver is actually active.  By
+            # using "right", which has no effect on the WideList view of
+            # the favourites screen, it avoids a little screen flashing.
+            # If we're on some other screen, we don't care what "right"
+            # does (I hope :-) )
+            jsonrpc "${J_INPUT_RIGHT}"
+	fi
     fi
 }
 
@@ -620,15 +602,23 @@ kodiFindPositionsInFavourites() {
     local originalSelection="$2"
     local tuningPattern="$3"
     # complete line, exact match
-    local -i originalPosition=`echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -F -x -n "${originalSelection}" | cut -f1 -d:`
+    local -i originalPosition
+    if [ -z ${originalSelection} ]
+    then
+	# fake it
+	originalPosition=0
+    else
+	originalPosition=` echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -F -x -n "${originalSelection}" | cut -f1 -d:`
+    fi
     # any part of line, case independent match
-    local -i tunePosition=`    echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -i -F -n "${tuningPattern}"     | cut -f1 -d:`
-    echo "${tunePosition} ${originalPosition}"
+    local -i tunePosition=`echo "${favouritesList}" | jq -r '.result.favourites[].title' | grep -i -F -n "${tuningPattern}"     | cut -f1 -d:`
+    jqTunePosition=$((tunePosition-1))  # grep lines are 1-based, jq arrays are 0-based
+    local tunePath=`echo "${favouritesList}" | jq -r ".result.favourites[$jqTunePosition].path"`
+    echo "${tunePosition} ${originalPosition} ${tunePath}"
 }
 
 kodiNavigateFavourites() {
-    # It would be great to just play the desired item from the favourites list, but I didn't
-    # figure out a way to do that. Instead, navigate to it with up or down motions and select it.
+    # Navigate to the desired selection with up or down motions and select it.
     local tuningPattern="${TUNING_HINT,,}"
     echo "tuningPattern '${tuningPattern}'"
     local originalSelection=`kodiGetCurrentControlLabel`
@@ -639,7 +629,7 @@ kodiNavigateFavourites() {
     local -i originalPosition=0
     local -i tunePosition=0
     local result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
-    read tunePosition originalPosition <<<${result}
+    read tunePosition originalPosition tunePath <<<${result}
     if [ -z "${originalSelection}" -o "${originalPosition}" -eq 0 ]
     then
         # It can sometimes happen that nothing is the current item; simply move down to highlight something.
@@ -682,7 +672,21 @@ kodiNavigateFavourites() {
     jsonrpc "${J_INPUT_SELECT}"
 }
 
-kodiTune() {
+kodiTuneViaPlayerOpen() {
+    local tuningPattern="${TUNING_HINT,,}"
+    echo "tuningPattern '${tuningPattern}'"
+    
+    local favouritesList=`jsonrpc "${J_GET_FAVES}"`
+    local -i originalPosition=0
+    local -i tunePosition=0
+    local result=`kodiFindPositionsInFavourites "$favouritesList" "" "$tuningPattern"`
+    read tunePosition originalPosition tunePath <<<${result}
+    local j="${J_PLAYER_OPEN_HEAD}${tunePath}${J_PLAYER_OPEN_TAIL}"
+    echo "Playing media ${tunePath}"
+    jsonrpc "${j}"
+}
+
+kodiTuneViaFavouritesNavigation() {
     local -i tryCounter=0
     while true
     do
@@ -707,12 +711,22 @@ kodiTune() {
     done
 }
 
+kodiTune() {
+    if [ ${CONFIG_PLAY_VIA_FAVOURITES_NAVIGATION} = "true" ]
+    then
+	kodiTuneViaFavouritesNavigation
+    else
+	kodiTuneViaPlayerOpen
+    fi
+    
+}
+
 kodiStopThePlayers() {
     # I don't know if it's meaningful to do this in our context, but it finds all the active players and tells them to stop.
     jsonrpc "${J_ACTIVE_PLAYERS}" | jq -r '.result[].playerid' |
         while read playerid
         do
-            local j=`echo "${J_PLAYER_STOP}" | sed s/PLAYERID/${playerid}/`
+            local j="${J_PLAYER_STOP_HEAD}${playerid}${J_PLAYER_STOP_TAIL}"
             echo "Stopping playerid ${playerid}"
             jsonrpc "${j}"
         done

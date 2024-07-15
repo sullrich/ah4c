@@ -26,9 +26,11 @@ PREPARATION
   with no further input or interaction. Pop-ups or other confirmation things
   are OK if they automatically go away within a short amount of time.
 
-* From the "Favourites" window, select "Options" and use a ViewType of "WideList".
-  That's important because we have to move around in the list as if we were
-  using arrow keys, and the scripts only move down or up, not left or right.
+* If you plan to use "favourites navigation" to tune channels (which
+  is not the default option), then from the "Favourites" window,
+  select "Options" and use a ViewType of "WideList". That's important
+  because we have to move around in the list as if we were using arrow
+  keys, and the scripts only move down or up, not left or right.
 
 * Enable the kodi JSONRPC API via HTTP.
     - Settings > Services > Control
@@ -44,7 +46,7 @@ PREPARATION
   just above. See the configuration stuff below.
 
 * If you are running kodi on Android, you must configure adb access
-  from the ah4c server machine. If you are running koid on Linux, you
+  from the ah4c server machine. If you are running kodi on Linux, you
   must configure ssh access from the ah4c server machine to the box
   running kodi. Actually, if you don't attempt to do device
   sleep/wakeup, force stop, or reboot with the Linux flavor, you
@@ -80,17 +82,17 @@ is in case there is someday some other kind of kodi tuner that might
 share the script code. As a special favor (:-)) to Americans, you can
 use "favorites" (without the "u") as an acceptable alias.
 
-The last part is a URL-encoded string that must match an item in your
-favourites list. (Although you have to URL-encode it in your m3u, it's
-already been URL-decoded by the time it gets to these scripts.)
-Here."match" means it's either a complete or substring match done case
-insensitively. For example, "Foo%20Bar" would match a favorite channel
-with the label "My foo barlicious Channel". In the case of multiple
-matches in your favourites list, you don't really have much control
-over which one will be selected, so be as specific as possible. In the
-unlikely event that you have actual ambiguities in your favourites
-list, use the kodi favourites context menu to rename some of them to
-ensure uniqueness.
+The last part, the "tuning hint", is a URL-encoded string that must
+match an item in your favourites list. (Although you have to
+URL-encode it in your m3u, it's already been URL-decoded by the time
+it gets to these scripts.)  Here."match" means it's either a complete
+or substring match done case insensitively. For example, "Foo%20Bar"
+would match a favorite channel with the label "My foo barlicious
+Channel". In the case of multiple matches in your favourites list, you
+don't really have much control over which one will be selected, so be
+as specific as possible. In the unlikely event that you have actual
+ambiguities in your favourites list, use the kodi favourites context
+menu to rename some of them to ensure uniqueness.
 
 How do you know what the label is for a favourites item? It's not
 necessarily the same as whatever text appears in the logo or
@@ -103,7 +105,9 @@ cancel out of that after you have made a note of it.
 
 Don't use literal underscores other than to separate the 3 pieces as
 illustrated. And, except as just described, don't use any characters
-that may cause trouble in a URL.
+that may cause trouble in a URL. Even with URL-encoding, avoid
+anything special to Linux shells (single or double quotes, dollar
+signs, vertical bars, etc) in the tuning hint portion.
 
 * SCRIPTS STRUCTURE AND CONFIGURATION
 
@@ -206,7 +210,8 @@ After I got the kodi stuff working reasonably well on my Android TV
 dongles, I decided to see what my collection of ancient Raspberry Pi
 boards could do for me. After some experimenting, I settled on using
 LibreELEC, which is available in the standard Raspberry Pi imager
-tool.
+tool. I run that on a Raspberry Pi 3 with 1 GB RAM, booted from a 16
+GB thumb drive.
 
 Pro tip: If you are having problems with getting kodi to remember that
 you always want subtitles, you are not alone. This thread may help you
