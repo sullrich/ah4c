@@ -193,16 +193,19 @@ CONFIG_SCREENSAVER_EATS_KEY="true"
 ##
 CONFIG_FORCE_STOP_BEFORE_APP_START="false"
 
+## After tuning a channel, the script waits for the fullscreen player
+## to actually appear. This is the maximum amount of seconds that it
+## will wait before deciding it's not going to happen. Unless the
+## various "settle" configs, this is not a simple sleep, and the
+## scaling stuff does not apply. The script checks for the fullscreen
+## player roughly once a second. It stops looking when it finds it or
+## this many seconds have elapsed. The value here must be an integer.
+##
+CONFIG_KODI_MAX_WAIT_FOR_PLAYER="15"
+
 ## See the "DELAYS" section in README.txt for some considerations.
 CONFIG_DELAY_SCALING="1"
 CONFIG_DELAY_OFFSET="0"
-
-## After trying or retrying to play a stream, the script waits this long to
-## check to see if it's actually playing. You want this delay to be long
-## enough so that legitimate slow start-ups don't get misintepreted as
-## failures.
-##
-CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY="5"
 
 ## If we do a kodi quit, this gives a little time for it to do its thing
 ## before a possible force-stop. (I'm not sure if the quit process has
@@ -731,9 +734,20 @@ kodiTune() {
 	else
 	    kodiTuneViaPlayerOpen
 	fi
-        settle ${CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY}
 
-        local label=`kodiGetCurrentWindowId`
+        local label
+	local -i waitCounter=0
+	while true
+	do
+	    label=`kodiGetCurrentWindowId`
+	    ((waitCounter++))
+            if [ "${label}" = "${KODI_PLAYER_WINDOW_ID}" -o ${waitCounter} -gt ${CONFIG_KODI_MAX_WAIT_FOR_PLAYER} ]
+            then
+		break
+	    fi
+	    sleep 1
+	done
+	
         if [ "${label}" = "${KODI_PLAYER_WINDOW_ID}" ]
         then
             local -i attempt=$((tryCounter+1))
