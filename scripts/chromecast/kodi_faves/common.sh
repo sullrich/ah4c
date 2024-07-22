@@ -107,6 +107,14 @@ then
     CONFIG_STOP_DOES_KODI_QUIT="false"
 fi
   
+## Ideally, any kodi players were stopped properly in the stopbmitune
+## step. This is a sort of fallback in case our monkeying around gets
+## kodi to lose its marbles. We stop all the players (if any) before
+## starting a new one. Shouldn't ordinarily be necessary, but does no
+## harm.
+##
+CONFIG_KODI_STOP_BEFORE_PLAY_START="true"
+
 ## I'm not sure what happens if kodi goes into the background without a
 ## quit or force-stop. Is it still streaming something over the network?
 ## This tracks down all the active players and stops them. It can also
@@ -155,6 +163,16 @@ then
     CONFIG_PRETUNE_WAIT_FOR_SCREEN="false"
 fi
 
+## Pre-tuning has competing and possibly conflicting desires. On the one hand
+## it wants to take the least time possible so that Channels DVR does not time
+## out and retry. On the other hand, problems that occur during tuning do not
+## get communicated all the way back to Channels. If your tuning step is fast
+## enough, you can work a compromise that does all of the tuning stuff as
+## part of the pretuning script, leaving bmitune as a no-op. To do that, set
+## this config item to "true".
+##
+CONFIG_PRETUNE_DOES_TUNE="true"
+
 ## There are two ways of tuning to a particular channel. You can either directly
 ## play it via a Player.Open call, or you can navigate through the Favourites panel.
 ## Player.Open is simpler and you should use that unless you encounter problems.
@@ -184,7 +202,7 @@ CONFIG_DELAY_OFFSET="0"
 ## enough so that legitimate slow start-ups don't get misintepreted as
 ## failures.
 ##
-CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY="15"
+CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY="5"
 
 ## If we do a kodi quit, this gives a little time for it to do its thing
 ## before a possible force-stop. (I'm not sure if the quit process has
@@ -213,6 +231,13 @@ CONFIG_SETTLE_ITERATING_FAVORITES="0.1"
 ## this amount of time before finally selecting the highlighted item.
 ##
 CONFIG_SETTLE_AFTER_NAVIGATING_FAVORITES="0.5"
+
+## After the tuning action is completed and the channel starts playing,
+## one final chance to settle a bit to let codec changes or whatever
+## settle down. We've already waited for the player screen to show up,
+## so you might not need anything here at all.
+##
+CONFIG_SETTLE_AFTER_TUNING="0.5"
 
 ###################################################################
 # end of user configuration options ... don't change things below #
@@ -630,15 +655,15 @@ kodiNavigateFavourites() {
     local -i tunePosition=0
     local result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
     read tunePosition originalPosition tunePath <<<${result}
-    if [ -z "${originalSelection}" -o "${originalPosition}" -eq 0 ]
+    if [ -z "${originalSelection}" -o -z "${originalPosition}" -o "${originalPosition}" -eq 0 ]
     then
         # It can sometimes happen that nothing is the current item; simply move down to highlight something.
         # (I'm not sure how/why that happens.)
         # The list in kodi wraps around, so we don't have to worry about hitting either end.
         jsonrpc "${J_INPUT_DOWN}"
-        originalSelectionl=`kodiGetCurrentControlLabel`
+        originalSelection=`kodiGetCurrentControlLabel`
         result=`kodiFindPositionsInFavourites "$favouritesList" "$originalSelection" "$tuningPattern"`
-        read tunePosition originalPosition <<<${result}
+        read tunePosition originalPosition tunePath <<<${result}
     fi
     if [ ${originalPosition} -eq 0 ]
     then
@@ -687,12 +712,27 @@ kodiTuneViaPlayerOpen() {
 }
 
 kodiTuneViaFavouritesNavigation() {
+    kodiActivateFavourites
+    kodiNavigateFavourites
+}
+
+kodiTune() {
+    if [ ${CONFIG_KODI_STOP_BEFORE_PLAY_START} = "true" ]
+    then
+        kodiStopThePlayers
+    fi
+    
     local -i tryCounter=0
     while true
     do
-        kodiActivateFavourites
-        kodiNavigateFavourites
+	if [ ${CONFIG_PLAY_VIA_FAVOURITES_NAVIGATION} = "true" ]
+	then
+	    kodiTuneViaFavouritesNavigation
+	else
+	    kodiTuneViaPlayerOpen
+	fi
         settle ${CONFIG_SETTLE_ITERATING_KODI_FAILED_STREAM_RETRY}
+
         local label=`kodiGetCurrentWindowId`
         if [ "${label}" = "${KODI_PLAYER_WINDOW_ID}" ]
         then
@@ -709,15 +749,6 @@ kodiTuneViaFavouritesNavigation() {
         fi
         ((tryCounter++))
     done
-}
-
-kodiTune() {
-    if [ ${CONFIG_PLAY_VIA_FAVOURITES_NAVIGATION} = "true" ]
-    then
-	kodiTuneViaFavouritesNavigation
-    else
-	kodiTuneViaPlayerOpen
-    fi
     
 }
 
@@ -732,41 +763,7 @@ kodiStopThePlayers() {
         done
 }
 
-stopbmitune() {
-    init "$1"
-    waitForBmituneDone
-    kodiStopTheApp
-    if [ "${CONFIG_STOP_DOES_DEVICE_SLEEP}" = "true" ]
-    then
-        putTheDeviceToSleep
-    fi
-    date +%s > $STREAMER_NO_PORT/stream_stopped
-    echo "$STREAMER_NO_PORT/stream_stopped written"
-}
-
-prebmitune() {
-    init "$1"
-    mkdir -p $STREAMER_NO_PORT
-    # fire and forget the wakeup call to make sure the screen comes back on soon if it was off
-    if [ ${FLAVOR} = "android" ]
-    then
-	adb connect ${STREAMER_WITH_PORT}
-        ${REMOTE_COMMAND_} shell input keyevent KEYCODE_WAKEUP
-        WAKEUP_EXIT_CODE="$?"
-    elif [ ${FLAVOR} = "linux" ]
-    then
-        : Linux wakeup not implemented
-        WAKEUP_EXIT_CODE="0"
-    fi
-    if [ "${CONFIG_PRETUNE_WAIT_FOR_SCREEN}" = "true" ]
-    then
-        waitForWakeUp
-    else
-        exit ${WAKEUP_EXIT_CODE}
-    fi
-}
-
-bmitune() {
+bmituneActual() {
     init "$2"
     IFS=_ read TAG FAVES TUNING_HINT <<<${1}
     REQUESTED_THING="$1"
@@ -784,4 +781,52 @@ bmitune() {
     specialChannels
     waitForWakeUp
     kodiTune
+    settle ${CONFIG_SETTLE_AFTER_TUNING}
+}
+
+# stopbmitune.sh 192.168.1.3:22 Tacoma_favorites_KBTC Public Television
+stopbmitune() {
+    init "$1"
+    waitForBmituneDone
+    kodiStopTheApp
+    if [ "${CONFIG_STOP_DOES_DEVICE_SLEEP}" = "true" ]
+    then
+        putTheDeviceToSleep
+    fi
+    date +%s > $STREAMER_NO_PORT/stream_stopped
+    echo "$STREAMER_NO_PORT/stream_stopped written"
+}
+
+# prebmitune.sh 192.168.1.3:22 Tacoma_favorites_KBTC Public Television
+prebmitune() {
+    init "$1"
+    mkdir -p $STREAMER_NO_PORT
+    # fire and forget the wakeup call to make sure the screen comes back on soon if it was off
+    if [ ${FLAVOR} = "android" ]
+    then
+	adb connect ${STREAMER_WITH_PORT}
+        ${REMOTE_COMMAND_} shell input keyevent KEYCODE_WAKEUP
+        WAKEUP_EXIT_CODE="$?"
+    elif [ ${FLAVOR} = "linux" ]
+    then
+        : Linux wakeup not implemented
+        WAKEUP_EXIT_CODE="0"
+    fi
+    if [ "${CONFIG_PRETUNE_WAIT_FOR_SCREEN}" = "true" ]
+    then
+        waitForWakeUp
+    fi
+
+    if [ ${CONFIG_PRETUNE_DOES_TUNE} = "true" ]
+    then
+	bmituneActual "$2" "$1"
+    fi
+}
+
+# bmitune.sh Tacoma_favorites_KBTC Public Television 192.168.1.3:22
+bmitune() {
+    if [ ${CONFIG_PRETUNE_DOES_TUNE} != "true" ]
+    then
+	bmituneActual "$@"
+    fi
 }
