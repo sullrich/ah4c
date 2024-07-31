@@ -5,7 +5,7 @@ set -x
 
 #Trap end of script run
 finish() {
-    echo "$0 is exiting for ${STREAMER_IP} with exit code $?"
+    echo "$0 is exiting for ${STREAMER_NO_PORT} with exit code $?"
 }
 trap finish EXIT
 
@@ -195,7 +195,7 @@ CONFIG_FORCE_STOP_BEFORE_APP_START="false"
 
 ## After tuning a channel, the script waits for the fullscreen player
 ## to actually appear. This is the maximum amount of seconds that it
-## will wait before deciding it's not going to happen. Unless the
+## will wait before deciding it's not going to happen. Unlike the
 ## various "settle" configs, this is not a simple sleep, and the
 ## scaling stuff does not apply. The script checks for the fullscreen
 ## player roughly once a second. It stops looking when it finds it or
