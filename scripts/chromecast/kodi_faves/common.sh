@@ -42,11 +42,11 @@ then
     ## for a username on the remote machine. If you are using a
     ## non-standard port, include the options for that here. If you
     ## want to use password authentication, you'll have to organize
-    ## that via SSH ASKPASS, etc.
+    ## that via SSH ASKPASS, etc. The environment variable COMMON_DIR
+    ## points to this directory (where common.sh lives)
     ##
     ## ONLY NEEDED FOR LINUX FLAVOR
-    ## TODO location of ID file
-    CONFIG_KODI_SSH_COMMAND="ssh -i ./id_linuxkodi -l root -o StrictHostKeyChecking=accept-new"
+    CONFIG_KODI_SSH_COMMAND="ssh -i ${COMMON_DIR}/id_linuxkodi -l root -o StrictHostKeyChecking=accept-new"
 fi
 
 if [ ${FLAVOR} = "linux" ]
@@ -311,8 +311,7 @@ then
 fi
 
 ## "config-local.sh" is optional and allows for overriding config values without directly editing the scripts.
-## TODO location of config-local.sh
-CONFIG_LOCAL=`dirname $0`/config-local.sh
+CONFIG_LOCAL=${COMMON_DIR}/config-local.sh
 if [ -f "${CONFIG_LOCAL}" ]
 then
     source "${CONFIG_LOCAL}"
