@@ -248,6 +248,11 @@ CONFIG_KODI_MAX_WAIT_FOR_PLAYER="15"
 ##
 CONFIG_KODI_MAX_WAIT_FOR_JSONRPC_READY="15"
 
+## The amount of time in seconds we will wait for the busy dialog to
+## clear before trying to play a video.
+##
+CONFIG_KODI_MAX_WAIT_WHILE_BUSY="15"
+
 ## See the "DELAYS" section in README.txt for some considerations.
 CONFIG_DELAY_SCALING="1"
 CONFIG_DELAY_OFFSET="0"
@@ -415,10 +420,21 @@ J_ACTIVE_PLAYERS='{"jsonrpc": "2.0", "method": "Player.GetActivePlayers", "id": 
 ##
 KODI_FAVOURITES_WINDOW_ID="10060"
 
-## The GUI ID for the video player window.  We use the ID instead of the label
-## to avoid localization issues. See kodi source file xbmc/guilib/WindowIDs.h
+## The GUI ID for the video player window.
 ##
 KODI_PLAYER_WINDOW_ID="12005"
+
+## The GUI ID for the busy dialog (the spinning circular thing). kodi
+## has this situation (not sure if it's a bug or something else) where
+## it catches and exits if something tries to put up a busy dialog
+## when there is already one active.  In this script, this comes into
+## play if we try to start the player when we are still waiting for
+## the previous invocation to play or time out. That can happen
+## because someone above us calls things in an unexpected
+## sequence. (At least that's what I think is happening. I'm not
+## completely sure, but I'm defending against it.)
+##
+KODI_BUSY_DIALOG_WINDOWS_ID="10138"
 
 init() {
     if [ ${FLAVOR} = "android" -o ${FLAVOR} = "linux" ]
@@ -737,6 +753,20 @@ kodiFindPositionsInFavourites() {
 }
 
 kodiBeforePressPlay() {
+    # Avoid the double busy forced crash before starting the player
+    local -i waitCounter=0
+    while true
+    do
+	((waitCounter++))
+	local window=`kodiGetCurrentWindowId`
+	if [ "${window}" != ${KODI_BUSY_DIALOG_WINDOWS_ID} -o ${waitCounter} -gt ${CONFIG_KODI_MAX_WAIT_WHILE_BUSY} ]
+	then
+	    break
+	fi
+	kodiStopThePlayers
+	sleep 1
+    done
+
     if [ -n "${CONFIG_COMMAND_BEFORE_PRESS_PLAY_LOCAL}" ]
     then
 	${CONFIG_COMMAND_BEFORE_PRESS_PLAY_LOCAL}
