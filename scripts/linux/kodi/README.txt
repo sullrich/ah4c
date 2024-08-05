@@ -2,13 +2,12 @@ A tuner for kodi favourites list
 
 This set of scripts shares commonality with the scripts under
 scripts/chromecast/kodi_faves/. See the README.txt under there for
-important details.
+important details, configuration options, etc.
 
 This should work on any sort of Linux box that can run kodi. I tested
 it with a few distributions before I settled on one called
-LibreELEC. I tried it on a few differnt Raspberry Pi boards that I had
-on hand. You can find LibreELEC among the media players in the
-standard RPi imager tool.
+plain old raspbian. I tried it on a few differnt Raspberry Pi boards that I had
+on hand.
 
 On a couple of RPi 1 boards, the lag and stutter was pretty bad. On an
 RPi 2 board with 1 GB of RAM, playing was mostly smooth but with
