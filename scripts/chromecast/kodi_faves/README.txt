@@ -13,17 +13,25 @@ quirky adb remote control emulation with finicky delays.
 PREPARATION
 
 * Obviously, install kodi.
+
 * Install whatever kodi add-ons you want to deal with live streams.
+
 * For any stream you want to treat as a "channel", add it to kodi "Favourites"
   (methods for that might vary with different kodi add-ons, but typically
   it will be some kind of context menu with "add to favourites" or similar).
+
 * Test manually to see that you can actually play all the desired stuff in kodi.
+
 * Also check that anything you select from the "Favourites" screen starts playing
   with no further input or interaction. Pop-ups or other confirmation things
   are OK if they automatically go away within a short amount of time.
-* From the "Favourites" window, select "Options" and use a ViewType of "WideList".
-  That's important because we have to move around in the list as if we were
-  using arrow keys, and the scripts only move down or up, not left or right.
+
+* If you plan to use "favourites navigation" to tune channels (which
+  is not the default option), then from the "Favourites" window,
+  select "Options" and use a ViewType of "WideList". That's important
+  because we have to move around in the list as if we were using arrow
+  keys, and the scripts only move down or up, not left or right.
+
 * Enable the kodi JSONRPC API via HTTP.
     - Settings > Services > Control
     - Set or edit username and password
@@ -33,8 +41,23 @@ PREPARATION
     - The default port is 8080, but you can change it if you want to or need to
     - Allow remote control from applications on other systems
     - Enable SSL if desired (see kodi docs)
+
 * In the ah4c environment, you must configure the kodi password that you created
   just above. See the configuration stuff below.
+
+* If you are running kodi on Android, you must configure adb access
+  from the ah4c server machine. If you are running kodi on Linux, you
+  must configure ssh access from the ah4c server machine to the box
+  running kodi. Actually, if you don't attempt to do device
+  sleep/wakeup, force stop, or reboot with the Linux flavor, you
+  probably don't need to configure anything for the SSH access at
+  all. That's probably the case for you. You can just give things a
+  try and look for messages about failed SSH operations in the ah4c
+  log. If you need it, you are creating an SSH key for the Linux
+  account that runs kodi. For LibreELEC, that account is root. The SSH
+  key is NOT for the JSONRPC account. (If you don't know about SSH
+  keys, this article can help you work through it:
+  https://www.digitalocean.com/community/tutorials/how-to-set-up-ssh-keys-2)
 
 NOTE: kodi's spelling is "favourites", not "favorites". That's the
 spelling you should use except as noted specifically below. Also, the
@@ -59,17 +82,17 @@ is in case there is someday some other kind of kodi tuner that might
 share the script code. As a special favor (:-)) to Americans, you can
 use "favorites" (without the "u") as an acceptable alias.
 
-The last part is a URL-encoded string that must match an item in your
-favourites list. (Although you have to URL-encode it in your m3u, it's
-already been URL-decoded by the time it gets to these scripts.)
-Here."match" means it's either a complete or substring match done case
-insensitively. For example, "Foo%20Bar" would match a favorite channel
-with the label "My foo barlicious Channel". In the case of multiple
-matches in your favourites list, you don't really have much control
-over which one will be selected, so be as specific as possible. In the
-unlikely event that you have actual ambiguities in your favourites
-list, use the kodi favourites context menu to rename some of them to
-ensure uniqueness.
+The last part, the "tuning hint", is a URL-encoded string that must
+match an item in your favourites list. (Although you have to
+URL-encode it in your m3u, it's already been URL-decoded by the time
+it gets to these scripts.)  Here."match" means it's either a complete
+or substring match done case insensitively. For example, "Foo%20Bar"
+would match a favorite channel with the label "My foo barlicious
+Channel". In the case of multiple matches in your favourites list, you
+don't really have much control over which one will be selected, so be
+as specific as possible. In the unlikely event that you have actual
+ambiguities in your favourites list, use the kodi favourites context
+menu to rename some of them to ensure uniqueness.
 
 How do you know what the label is for a favourites item? It's not
 necessarily the same as whatever text appears in the logo or
@@ -82,17 +105,28 @@ cancel out of that after you have made a note of it.
 
 Don't use literal underscores other than to separate the 3 pieces as
 illustrated. And, except as just described, don't use any characters
-that may cause trouble in a URL.
+that may cause trouble in a URL. Even with URL-encoding, avoid
+anything special to Linux shells (single or double quotes, dollar
+signs, vertical bars, etc) in the tuning hint portion.
 
 * SCRIPTS STRUCTURE AND CONFIGURATION
 
 Our caller, ah4c, expects there to exist 3 scripts: "prebmitune.sh",
 "bmitune.sh", and "stopbmitune.sh". For this set of scripts, there are
-several common definitions, functions, etc.  Each of the expected
-scripts is a trivial 3-liner that sources "common.sh" and then calls
-the applicable function defined within "common.sh". The intent of that
-arrangement is to achive more consistent naming, simpler editing, and
-so on. All of the scripts redirect stdout to be on top of stderr.
+several common definitions, functions, etc. Each of the expected
+scripts is a trivial 4-liner that sets the FLAVOR, sources "common.sh"
+and then calls the applicable function defined within "common.sh". The
+intent of that arrangement is to achieve more consistent naming,
+simpler editing, and so on. All of the scripts redirect stdout to be
+on top of stderr.
+
+There is a 95%-plus overlap between the kodi scripts running on
+Android TV and kodi running on Linux. The top-level scripts
+set ane environment variable "FLAVOR" to indicate which flavor is
+being used, ("android" or "linux") and "common.sh" has conditional
+logic in the applicable places. There is only one copy of
+"common.sh". It's located under scripts/chromecast/kodi_faves/ because
+that's where it first appeared.
 
 At the top of "common.sh" is a collection of variables whose names
 start with "CONFIG_". As you might guess, those are things that
@@ -100,12 +134,16 @@ conditionally control aspects of the script behaviors. If you are
 happy with the default values defined in "common.sh", then that's all
 you need to know. If you want to change any of them, you can, of
 course, just modify "common.sh".  A better way is to create a file in
-this same directory called "config-local.sh" and provide modified
-values for just the items of interest. Copy/paste/modify is the most
-reliable way of doing that. The advantage of using "config-local.sh"
-is that your changes would not be overwritten by any updates to this
-set of scripts. One way or the other, you will have to at least
-configure the password for JSONRPC API access.
+the same directory (as common.sh) called "config-local.sh" and provide
+modified values for just the items of interest. Copy/paste/modify is
+the most reliable way of doing that. The advantage of using
+"config-local.sh" is that your changes would not be overwritten by any
+updates to this set of scripts. One way or the other, you will have to
+at least configure the password for JSONRPC API access. If you are
+running kodi on Linux, you will have to configure the ssh key.
+
+You can use the FLAVOR variable to put conditional logic into your
+"config-local.sh" file. The possible values are "android" and "linux".
 
 The scripts use a tool called "jq" for parsing JSON responses. jq
 is not present in the ah4c docker image, so the scripts detect that
@@ -157,16 +195,23 @@ as short as you can and still have them tune reliably.
 
 I got involved in this whole ah4c business because of a single local
 PBS station that I can't pick up with my antenna. I started out by
-using the PBS app with remote control emulation. That works, modulo
-the occasional loss-of-marbles, but it's fiddly at best. I also
-experimented with a different technique called VLC-bridge-PBS. That
-works really, really well, but I didn't find a way to enable closed
-captions. Sources for VLC-bridge-PBS don't seem to be available. In
-poking around, I saw that it's using a kodi plugin to handle
-DRM. That's what got me heading down the path of using kodi itself to
-"tune" the PBS station. kodi's rich API makes moving around the GUI
-pretty straightforward for most things, and that eliminates a lot of
-fiddliness.
+using the PBS app with remote control emulation an an Android TV
+dongle. That works, modulo the occasional loss-of-marbles, but it's
+fiddly at best. I also experimented with a different technique called
+VLC-bridge-PBS. That works really, really well, but I didn't find a
+way to enable closed captions. Sources for VLC-bridge-PBS don't seem
+to be available. In poking around, I saw that it's using a kodi plugin
+to handle DRM. That's what got me heading down the path of using kodi
+itself to "tune" the PBS station. kodi's rich API makes moving around
+the GUI pretty straightforward for most things, and that eliminates a
+lot of fiddliness.
+
+After I got the kodi stuff working reasonably well on my Android TV
+dongles, I decided to see what my collection of ancient Raspberry Pi
+boards could do for me. After some experimenting, I settled on using
+LibreELEC, which is available in the standard Raspberry Pi imager
+tool. I run that on a Raspberry Pi 3 with 1 GB RAM, booted from a 16
+GB thumb drive.
 
 Pro tip: If you are having problems with getting kodi to remember that
 you always want subtitles, you are not alone. This thread may help you

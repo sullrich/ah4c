@@ -1,5 +1,5 @@
 #!/bin/bash
-FLAVOR=android
+FLAVOR=linux
 STUB=$(dirname $(dirname $(dirname $(realpath $0))))
 if [[ -z "${STUB}" || "${STUB}" = "/" ]]; then exit 12; fi
 COMMON_DIR=${STUB}/chromecast/kodi_faves
