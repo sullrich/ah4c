@@ -37,6 +37,8 @@ ah4c WebUI:
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 
+<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-17-02" src="https://github.com/user-attachments/assets/b84e6fb9-3e56-41c1-bb54-76bc70e69b27" />
+
 <img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-10-42" src="https://github.com/user-attachments/assets/a7e4ab65-1787-490f-a2a3-f02c6a2cc819" />
 
 #### Docker Instructions
