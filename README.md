@@ -1,19 +1,4 @@
-# ah4c WebUI
-
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-05-29" src="https://github.com/user-attachments/assets/ca64d967-29dd-4a78-97b5-1018d3ce2647" />
-
-### Activity & logs:
-
-![image](static/status_ss.png)
-(built in stats gui)
-
-### M3U Editor
-
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-01-57" src="https://github.com/user-attachments/assets/f2297fc1-a108-4790-a78a-26401211beee" />
-
-### Built-in ws-scrcpy for interacting directly with the streaming device:
-
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-10-42" src="https://github.com/user-attachments/assets/a7e4ab65-1787-490f-a2a3-f02c6a2cc819" />
+# ah4c
 
 ### This is a fork of https://github.com/tmm1/androidhdmi-for-channels with these features:
 
@@ -36,6 +21,23 @@
 16. Application based tuning! Just send the feed to stdout
 17. Dead video feeds restart - video locking up but audio working
 18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
+
+ah4c WebUI:
+
+<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-05-29" src="https://github.com/user-attachments/assets/ca64d967-29dd-4a78-97b5-1018d3ce2647" />
+
+### Activity & logs:
+
+![image](static/status_ss.png)
+(built in stats gui)
+
+### M3U Editor
+
+<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-01-57" src="https://github.com/user-attachments/assets/f2297fc1-a108-4790-a78a-26401211beee" />
+
+### Built-in ws-scrcpy for interacting directly with the streaming device:
+
+<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-10-42" src="https://github.com/user-attachments/assets/a7e4ab65-1787-490f-a2a3-f02c6a2cc819" />
 
 #### Docker Instructions
 
