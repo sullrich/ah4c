@@ -1,6 +1,6 @@
 #!/bin/bash
-#bmitune.sh for firetv/channels
-#2025.05.03
+# bmitune.sh for firetv/channels
+# 2025.05.03
 
 #Debug on if uncommented
 set -x

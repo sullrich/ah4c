@@ -1,6 +1,6 @@
 #!/bin/bash
-#prebmitune.sh for firetv/channels
-#2025.05.03
+# prebmitune.sh for firetv/channels
+# 2025.05.03
 
 #Debug on if uncommented
 set -x

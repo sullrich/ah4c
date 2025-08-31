@@ -1,6 +1,6 @@
 #!/bin/bash
-#stopbmitune.sh for firetv/channels
-#2025.05.03
+# stopbmitune.sh for firetv/channels
+# 2025.05.03
 
 #Debug on if uncommented
 set -x
