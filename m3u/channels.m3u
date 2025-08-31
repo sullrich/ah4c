@@ -1,0 +1,34 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="10001" tvg-logo="/dvr/uploads/3/content",Police Dramas
+http://{{ .IPADDRESS }}/play/tuner/10001
+
+#EXTINF:-1 channel-id="10002" tvg-logo="/dvr/uploads/4/content",The Sixties
+http://{{ .IPADDRESS }}/play/tuner/10002
+
+#EXTINF:-1 channel-id="10003" tvg-logo="/dvr/uploads/5/content",Victorian Age
+http://{{ .IPADDRESS }}/play/tuner/10003
+
+#EXTINF:-1 channel-id="10004" tvg-logo="/dvr/uploads/6/content",Star Wars
+http://{{ .IPADDRESS }}/play/tuner/10004
+
+#EXTINF:-1 channel-id="10005" tvg-logo="/dvr/uploads/7/content",Political
+http://{{ .IPADDRESS }}/play/tuner/10005
+
+#EXTINF:-1 channel-id="10006" tvg-logo="/dvr/uploads/8/content",Medical
+http://{{ .IPADDRESS }}/play/tuner/10006
+
+#EXTINF:-1 channel-id="10007" tvg-logo="/dvr/uploads/9/content",Napoleonic Era
+http://{{ .IPADDRESS }}/play/tuner/10007
+
+#EXTINF:-1 channel-id="10008" tvg-logo="/dvr/uploads/10/content",Chicago Shows
+http://{{ .IPADDRESS }}/play/tuner/10008
+
+#EXTINF:-1 channel-id="10009" tvg-logo="/dvr/uploads/11/content",Police Consultants
+http://{{ .IPADDRESS }}/play/tuner/10009
+
+#EXTINF:-1 channel-id="10010" tvg-logo="/dvr/uploads/14/content",Global Catastrophe
+http://{{ .IPADDRESS }}/play/tuner/10009
+
+#EXTINF:-1 channel-id="10011" tvg-logo="/dvr/uploads/15/content",Criminals
+http://{{ .IPADDRESS }}/play/tuner/10011

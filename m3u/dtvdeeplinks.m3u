@@ -1,0 +1,421 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="3" channel-number="3" tvc-guide-stationid="30817" tvg-group="" tvg-logo="",KTVK IND 3
+http://{{ .IPADDRESS }}/play/tuner/KTVK~f8803ee2-28ec-4b62-9c22-8243f7d06ef9
+
+#EXTINF:-1 channel-id="5" channel-number="5" tvc-guide-stationid="21293" tvg-group="" tvg-logo="",KPHO CBS 5
+http://{{ .IPADDRESS }}/play/tuner/KPHO~e81b1f24-0294-46c6-8ba8-f51daeee355e
+
+#EXTINF:-1 channel-id="8" channel-number="8" tvc-guide-stationid="25102" tvg-group="" tvg-logo="",KAET PBS 8
+http://{{ .IPADDRESS }}/play/tuner/KAET~7bae8fd6-1ff9-4a17-a093-461ddb78b763
+
+#EXTINF:-1 channel-id="10" channel-number="10" tvc-guide-stationid="21209" tvg-group="" tvg-logo="",KSAZ FOX 10
+http://{{ .IPADDRESS }}/play/tuner/KSAZ~40a0fef7-9e71-4952-8ef5-833a7a44ddbb
+
+#EXTINF:-1 channel-id="12" channel-number="12" tvc-guide-stationid="20507" tvg-group="" tvg-logo="",KPNX NBC 12
+http://{{ .IPADDRESS }}/play/tuner/KPNX~eee9b0c9-1b4e-4170-8504-283fdf536d02
+
+#EXTINF:-1 channel-id="15" channel-number="15" tvc-guide-stationid="21210" tvg-group="" tvg-logo="",KNXV ABC 15
+http://{{ .IPADDRESS }}/play/tuner/KNXV~8f362ca9-fb88-4b9d-9fe3-bd83eff58365
+
+#EXTINF:-1 channel-id="77" channel-number="77" tvc-guide-stationid="70436" tvg-group="" tvg-logo="",MeTV
+http://{{ .IPADDRESS }}/play/tuner/METV~038e34a5-d895-44cb-81da-f5d0b860fd06
+
+#EXTINF:-1 channel-id="202" channel-number="202" tvc-guide-stationid="58646" tvg-group="" tvg-logo="",CNN HD
+http://{{ .IPADDRESS }}/play/tuner/CNNHD~519a0379-3e00-4a61-8581-56f5bf7488a2
+
+#EXTINF:-1 channel-id="204" channel-number="204" tvc-guide-stationid="10145" tvg-group="" tvg-logo="",HLN HD
+http://{{ .IPADDRESS }}/play/tuner/HLNHD~8d1c72f6-99db-4279-a5b2-183f92c53a61
+
+#EXTINF:-1 channel-id="206" channel-number="206" tvc-guide-stationid="32645" tvg-group="" tvg-logo="",ESPN HD
+http://{{ .IPADDRESS }}/play/tuner/ESPNHD~d1f76753-8507-4df5-bdeb-77ce20690d9d
+
+#EXTINF:-1 channel-id="207" channel-number="207" tvc-guide-stationid="16485" tvg-group="" tvg-logo="",ESPNews HD
+http://{{ .IPADDRESS }}/play/tuner/ESNHD~c7385ebe-0068-4c7a-8c84-2146862d2694
+
+#EXTINF:-1 channel-id="208" channel-number="208" tvc-guide-stationid="60696" tvg-group="" tvg-logo="",ESPNU HD
+http://{{ .IPADDRESS }}/play/tuner/ESPNUHD~78a8f90a-df4f-4fcf-be56-df27539c5ac4
+
+#EXTINF:-1 channel-id="209" channel-number="209" tvc-guide-stationid="45507" tvg-group="" tvg-logo="",ESPN2 HD
+http://{{ .IPADDRESS }}/play/tuner/ESPN2HD~fa09c7bf-b0bd-4976-9bab-c7e2c5021ade
+
+#EXTINF:-1 channel-id="212" channel-number="212" tvc-guide-stationid="45399" tvg-group="" tvg-logo="",NFL Network HD
+http://{{ .IPADDRESS }}/play/tuner/NFLHD~b9b1b688-8d78-4580-8913-e98fe3bd9b05
+
+#EXTINF:-1 channel-id="213" channel-number="213" tvc-guide-stationid="62081" tvg-group="" tvg-logo="",MLB Network HD
+http://{{ .IPADDRESS }}/play/tuner/MLBNHD~c8e2cc18-4320-4f21-8a59-68c2f33c0c05
+
+#EXTINF:-1 channel-id="215" channel-number="215" tvc-guide-stationid="58690" tvg-group="" tvg-logo="",NHL Network HD
+http://{{ .IPADDRESS }}/play/tuner/NHLHD~028e8e6c-3ecd-4248-a436-1f3284a3f955
+
+#EXTINF:-1 channel-id="216" channel-number="216" tvc-guide-stationid="45526" tvg-group="" tvg-logo="",NBA TV HD
+http://{{ .IPADDRESS }}/play/tuner/NBAHD~10627bc1-89a2-4c00-bf92-8851d96e1b98
+
+#EXTINF:-1 channel-id="217" channel-number="217" tvc-guide-stationid="60316" tvg-group="" tvg-logo="",Tennis Channel HD
+http://{{ .IPADDRESS }}/play/tuner/TNNSHD~d33d363d-4144-4aae-be5d-debebeef2b0d
+
+#EXTINF:-1 channel-id="218" channel-number="218" tvc-guide-stationid="61854" tvg-group="" tvg-logo="",Golf Channel HD
+http://{{ .IPADDRESS }}/play/tuner/GolfHD~35621fc9-1d39-49c7-bdef-4c182d3d07fa
+
+#EXTINF:-1 channel-id="219" channel-number="219" tvc-guide-stationid="82547" tvg-group="" tvg-logo="",FOX Sports 1 HD
+http://{{ .IPADDRESS }}/play/tuner/FS1HD~f86aec47-ea18-4de2-8f67-38384c91102a
+
+#EXTINF:-1 channel-id="221" channel-number="221" tvc-guide-stationid="59250" tvg-group="" tvg-logo="",CBS Sports Network HD
+http://{{ .IPADDRESS }}/play/tuner/CBSSNHD~2945210e-6289-4402-be3a-6704b027ec50
+
+#EXTINF:-1 channel-id="226" channel-number="226" tvc-guide-stationid="56032" tvg-group="" tvg-logo="",Shop LC HD
+http://{{ .IPADDRESS }}/play/tuner/SHOPLC~2f0d7833-e695-43a7-8432-82812cdfc532
+
+#EXTINF:-1 channel-id="229" channel-number="229" tvc-guide-stationid="14902" tvg-group="" tvg-logo="",HGTV HD
+http://{{ .IPADDRESS }}/play/tuner/HGTVHD~b7669e3c-2916-4b8c-b40d-6266e791ab57
+
+#EXTINF:-1 channel-id="230" channel-number="230" tvc-guide-stationid="67375" tvg-group="" tvg-logo="",Magnolia Network HD
+http://{{ .IPADDRESS }}/play/tuner/MAGNHD~43847d39-8406-487a-b232-8ceea451186e
+
+#EXTINF:-1 channel-id="231" channel-number="231" tvc-guide-stationid="50747" tvg-group="" tvg-logo="",Food Network HD
+http://{{ .IPADDRESS }}/play/tuner/foodHD~b6258d16-2f69-4846-abc7-b3947eea6e2b
+
+#EXTINF:-1 channel-id="232" channel-number="232" tvc-guide-stationid="68065" tvg-group="" tvg-logo="",Cooking Channel HD
+http://{{ .IPADDRESS }}/play/tuner/COOKHD~9d882605-20d3-4ff3-b6e1-03139d4f1e11
+
+#EXTINF:-1 channel-id="233" channel-number="233" tvc-guide-stationid="68827" tvg-group="" tvg-logo="",Game Show Network HD
+http://{{ .IPADDRESS }}/play/tuner/GSNHD~11cc055c-6f49-4c2e-b391-f96b7ac8e7d7
+
+#EXTINF:-1 channel-id="236" channel-number="236" tvc-guide-stationid="61812" tvg-group="" tvg-logo="",E! HD
+http://{{ .IPADDRESS }}/play/tuner/E!HD~b587c1f5-49ec-4006-b806-9073e5f53d50
+
+#EXTINF:-1 channel-id="237" channel-number="237" tvc-guide-stationid="58625" tvg-group="" tvg-logo="",Bravo HD
+http://{{ .IPADDRESS }}/play/tuner/BRVOHD~83249ad9-5836-4d16-a5f7-9cc2a42032c9
+
+#EXTINF:-1 channel-id="238" channel-number="238" tvc-guide-stationid="68385" tvg-group="" tvg-logo="",ReelzChannel HD
+http://{{ .IPADDRESS }}/play/tuner/REELZHD~a5f102f9-b54d-4431-b702-053fd4c7616e
+
+#EXTINF:-1 channel-id="239" channel-number="239" tvc-guide-stationid="71280" tvg-group="" tvg-logo="",SundanceTV HD
+http://{{ .IPADDRESS }}/play/tuner/SUNDHD~f56626d5-7461-4408-91f6-8d235b884be6
+
+#EXTINF:-1 channel-id="240" channel-number="240" tvc-guide-stationid="62077" tvg-group="" tvg-logo="",Home Shopping Network HD
+http://{{ .IPADDRESS }}/play/tuner/HSNHD~a58a86bb-07f4-4c61-bdd0-eb61afa1d82b
+
+#EXTINF:-1 channel-id="241" channel-number="241" tvc-guide-stationid="59186" tvg-group="" tvg-logo="",Paramount Network HD
+http://{{ .IPADDRESS }}/play/tuner/PARHD~35132820-6521-4eb9-9ccf-1dd42de1a5c3
+
+#EXTINF:-1 channel-id="242" channel-number="242" tvc-guide-stationid="58452" tvg-group="" tvg-logo="",USA Network HD
+http://{{ .IPADDRESS }}/play/tuner/USAHD~214a502e-c54a-4b61-8904-b4ce37c1e38a
+
+#EXTINF:-1 channel-id="242A" channel-number="242A" tvc-guide-stationid="154942" tvg-group="" tvg-logo="",Paris Extra 1
+http://{{ .IPADDRESS }}/play/tuner/OLYX1~350e3196-719a-4e61-95b4-36a39d178637
+
+#EXTINF:-1 channel-id="242B" channel-number="242B" tvc-guide-stationid="154943" tvg-group="" tvg-logo="",Paris Extra 2
+http://{{ .IPADDRESS }}/play/tuner/OLYX2~b1502b2c-bdb0-468d-a469-8bb5c5d7a717
+
+#EXTINF:-1 channel-id="245" channel-number="245" tvc-guide-stationid="61340" tvg-group="" tvg-logo="",TNT West HD
+http://{{ .IPADDRESS }}/play/tuner/TNTWHD~fb089f4f-0b1a-481c-adb1-d624884f51f2
+
+#EXTINF:-1 channel-id="245A" channel-number="245A" tvc-guide-stationid="42642" tvg-group="" tvg-logo="",TNT HD
+http://{{ .IPADDRESS }}/play/tuner/TNTHD~3c10db4e-98ac-40c0-a301-661504f60588
+
+#EXTINF:-1 channel-id="246" channel-number="246" tvc-guide-stationid="64490" tvg-group="" tvg-logo="",truTV HD
+http://{{ .IPADDRESS }}/play/tuner/truTVHD~1b10de5e-3e3b-488f-9740-bec197244114
+
+#EXTINF:-1 channel-id="247" channel-number="247" tvc-guide-stationid="58515" tvg-group="" tvg-logo="",TBS HD
+http://{{ .IPADDRESS }}/play/tuner/TBSHD~86528a42-ae4e-405c-8fae-c567c1ed70df
+
+#EXTINF:-1 channel-id="247A" channel-number="247A" tvc-guide-stationid="67890" tvg-group="" tvg-logo="",TBS West HD
+http://{{ .IPADDRESS }}/play/tuner/TBSWHD~385801f7-606a-457d-8116-e1a73cf77484
+
+#EXTINF:-1 channel-id="248" channel-number="248" tvc-guide-stationid="58574" tvg-group="" tvg-logo="",FX HD
+http://{{ .IPADDRESS }}/play/tuner/FXHD~af2ab375-0902-4865-acb5-61df66acca5b
+
+#EXTINF:-1 channel-id="249" channel-number="249" tvc-guide-stationid="106112" tvg-group="" tvg-logo="",Comedy Central HD
+http://{{ .IPADDRESS }}/play/tuner/COMHD~5070bc2e-dd69-4dee-98b4-a4c5e3b1fd7b
+
+#EXTINF:-1 channel-id="249A" channel-number="249A" tvc-guide-stationid="62420" tvg-group="" tvg-logo="",Comedy Central West HD
+http://{{ .IPADDRESS }}/play/tuner/COMWHD~6aec9a4e-7824-4869-b75f-fb1c648d207e
+
+#EXTINF:-1 channel-id="251" channel-number="251" tvc-guide-stationid="70522" tvg-group="" tvg-logo="",Oxygen True Crime HD
+http://{{ .IPADDRESS }}/play/tuner/OXGNHD~2b054eaf-3dd6-4178-9a91-5dd02f58791a
+
+#EXTINF:-1 channel-id="252" channel-number="252" tvc-guide-stationid="60150" tvg-group="" tvg-logo="",Lifetime HD
+http://{{ .IPADDRESS }}/play/tuner/LIFEHD~d1dd879a-5790-454f-9104-39432f4859c6
+
+#EXTINF:-1 channel-id="253" channel-number="253" tvc-guide-stationid="55887" tvg-group="" tvg-logo="",LMN HD
+http://{{ .IPADDRESS }}/play/tuner/LMNHD~7da4a06b-ca37-4123-8994-b3794b673df6
+
+#EXTINF:-1 channel-id="254" channel-number="254" tvc-guide-stationid="59337" tvg-group="" tvg-logo="",AMC HD
+http://{{ .IPADDRESS }}/play/tuner/AMCHD~b428862c-08fc-47d1-98f4-7cc8bdbf0c31
+
+#EXTINF:-1 channel-id="256" channel-number="256" tvc-guide-stationid="64312" tvg-group="" tvg-logo="",TCM HD
+http://{{ .IPADDRESS }}/play/tuner/TCMHD~6b20b8de-3094-48f4-ad7b-4eecc2f8d48a
+
+#EXTINF:-1 channel-id="258" channel-number="258" tvc-guide-stationid="70253" tvg-group="" tvg-logo="",FX Movie Channel HD
+http://{{ .IPADDRESS }}/play/tuner/FXMHD~d7088b74-3db2-4672-825e-6c7cb8ff41ec
+
+#EXTINF:-1 channel-id="259" channel-number="259" tvc-guide-stationid="66379" tvg-group="" tvg-logo="",FXX HD
+http://{{ .IPADDRESS }}/play/tuner/FXXHD~d48f198b-6a0f-4d53-9749-222e38f8847b
+
+#EXTINF:-1 channel-id="260" channel-number="260" tvc-guide-stationid="59296" tvg-group="" tvg-logo="",WE tv HD
+http://{{ .IPADDRESS }}/play/tuner/WeHD~d38f1910-a0af-4933-8a89-fd100277c0b0
+
+#EXTINF:-1 channel-id="264" channel-number="264" tvc-guide-stationid="64492" tvg-group="" tvg-logo="",BBC America HD
+http://{{ .IPADDRESS }}/play/tuner/BBCAHD~f0651d6c-09c5-46a9-a168-cfc86e01cdc7
+
+#EXTINF:-1 channel-id="265" channel-number="265" tvc-guide-stationid="51529" tvg-group="" tvg-logo="",A&E HD
+http://{{ .IPADDRESS }}/play/tuner/A&EHD~6e1ae46f-40ab-44ee-b20e-d4508363a65e
+
+#EXTINF:-1 channel-id="266" channel-number="266" tvc-guide-stationid="58988" tvg-group="" tvg-logo="",FYI HD
+http://{{ .IPADDRESS }}/play/tuner/FYIHD~6d1cd9b3-d125-4e87-a37f-0309c1459f8a
+
+#EXTINF:-1 channel-id="269" channel-number="269" tvc-guide-stationid="57708" tvg-group="" tvg-logo="",History HD
+http://{{ .IPADDRESS }}/play/tuner/HISTHD~8dc85473-5c44-444f-8ee3-f3ad6da10329
+
+#EXTINF:-1 channel-id="271" channel-number="271" tvc-guide-stationid="65732" tvg-group="" tvg-logo="",VICE HD
+http://{{ .IPADDRESS }}/play/tuner/VICEHD~2e991d96-3ca5-41f6-8ec1-6db7bd9f4371
+
+#EXTINF:-1 channel-id="272" channel-number="272" tvc-guide-stationid="46762" tvg-group="" tvg-logo="",LOGO HD
+http://{{ .IPADDRESS }}/play/tuner/LOGO~14ec4f80-2045-4d80-8bf4-36a57123d642
+
+#EXTINF:-1 channel-id="273" channel-number="273" tvc-guide-stationid="68796" tvg-group="" tvg-logo="",POP HD
+http://{{ .IPADDRESS }}/play/tuner/POPHD~2fb0e133-7cd4-4817-bbc3-9698566f491e
+
+#EXTINF:-1 channel-id="274" channel-number="274" tvc-guide-stationid="69061" tvg-group="" tvg-logo="",Ovation HD
+http://{{ .IPADDRESS }}/play/tuner/OVTVHD~9e44efca-a796-4d96-a15f-25c0e75f90ce
+
+#EXTINF:-1 channel-id="275" channel-number="275" tvc-guide-stationid="60222" tvg-group="" tvg-logo="",QVC HD
+http://{{ .IPADDRESS }}/play/tuner/QVCHD~352ed336-6f24-4801-8a2d-711bf8e86317
+
+#EXTINF:-1 channel-id="276" channel-number="276" tvc-guide-stationid="49438" tvg-group="" tvg-logo="",National Geographic HD
+http://{{ .IPADDRESS }}/play/tuner/NGCHD~cba2a67f-9cae-41e0-a27e-9444c979b689
+
+#EXTINF:-1 channel-id="277" channel-number="277" tvc-guide-stationid="59303" tvg-group="" tvg-logo="",Travel Channel HD
+http://{{ .IPADDRESS }}/play/tuner/TRAVHD~088ffb78-2fed-4ebb-bf13-bf009d0700d7
+
+#EXTINF:-1 channel-id="278" channel-number="278" tvc-guide-stationid="56905" tvg-group="" tvg-logo="",Discovery HD
+http://{{ .IPADDRESS }}/play/tuner/DSCHD~4d2c2d58-cb18-44fe-8f9b-96637b1aac60
+
+#EXTINF:-1 channel-id="279" channel-number="279" tvc-guide-stationid="70388" tvg-group="" tvg-logo="",OWN HD
+http://{{ .IPADDRESS }}/play/tuner/OWNHD~f1082500-8827-43bd-a782-583a56f5b2db
+
+#EXTINF:-1 channel-id="280" channel-number="280" tvc-guide-stationid="57391" tvg-group="" tvg-logo="",TLC HD
+http://{{ .IPADDRESS }}/play/tuner/TLCHD~be9b2996-ae6c-4161-b99b-6158e6d2b798
+
+#EXTINF:-1 channel-id="281" channel-number="281" tvc-guide-stationid="31046" tvg-group="" tvg-logo="",MotorTrend HD
+http://{{ .IPADDRESS }}/play/tuner/MTHD~32f60ebb-2e14-4265-b5bf-1c63f1d58f7c
+
+#EXTINF:-1 channel-id="282" channel-number="282" tvc-guide-stationid="57394" tvg-group="" tvg-logo="",Animal Planet HD
+http://{{ .IPADDRESS }}/play/tuner/APLHD~2022d13f-d2c5-44bd-9e92-041d33c18c49
+
+#EXTINF:-1 channel-id="283" channel-number="283" tvc-guide-stationid="67331" tvg-group="" tvg-logo="",Nat Geo Wild HD
+http://{{ .IPADDRESS }}/play/tuner/NGWHD~86732c76-8068-44b3-9c89-f39523208b9c
+
+#EXTINF:-1 channel-id="284" channel-number="284" tvc-guide-stationid="57390" tvg-group="" tvg-logo="",Science HD
+http://{{ .IPADDRESS }}/play/tuner/SCIHD~96c2990a-a4f4-4009-8076-a62ee28ae061
+
+#EXTINF:-1 channel-id="285" channel-number="285" tvc-guide-stationid="65342" tvg-group="" tvg-logo="",Investigation Discovery HD
+http://{{ .IPADDRESS }}/play/tuner/IDHD~1dd9b3b8-12fe-4821-9cef-0f5adbd4b0e5
+
+#EXTINF:-1 channel-id="286" channel-number="286" tvc-guide-stationid="60468" tvg-group="" tvg-logo="",Destination America HD
+http://{{ .IPADDRESS }}/play/tuner/DESTHD~6903683f-175f-4289-bec6-1de345090173
+
+#EXTINF:-1 channel-id="287" channel-number="287" tvc-guide-stationid="78808" tvg-group="" tvg-logo="",American Heroes HD
+http://{{ .IPADDRESS }}/play/tuner/AHCHD~bca90090-7f85-4e55-ba11-ae184874a02d
+
+#EXTINF:-1 channel-id="288" channel-number="288" tvc-guide-stationid="101364" tvg-group="" tvg-logo="",PBS Kids
+http://{{ .IPADDRESS }}/play/tuner/PBS%20KIDS~46c15402-92e9-4aee-9b2d-e8512c33696a
+
+#EXTINF:-1 channel-id="289" channel-number="289" tvc-guide-stationid="74885" tvg-group="" tvg-logo="",Disney Junior HD
+http://{{ .IPADDRESS }}/play/tuner/DSJRHD~b49573ad-cf93-4c89-81dd-c06ce57822f2
+
+#EXTINF:-1 channel-id="290" channel-number="290" tvc-guide-stationid="59684" tvg-group="" tvg-logo="",Disney Channel HD
+http://{{ .IPADDRESS }}/play/tuner/DISeHD~8ef7ede4-94b2-44c3-bced-ecf138fe1c9b
+
+#EXTINF:-1 channel-id="292" channel-number="292" tvc-guide-stationid="60006" tvg-group="" tvg-logo="",Disney XD HD
+http://{{ .IPADDRESS }}/play/tuner/DXDHD~b7c1fb6b-0eb7-4fa9-b7e0-1005f699fbb6
+
+#EXTINF:-1 channel-id="295" channel-number="295" tvc-guide-stationid="70225" tvg-group="" tvg-logo="",Universal Kids HD
+http://{{ .IPADDRESS }}/play/tuner/UKIDSH~dd6bcabb-6534-4b06-804f-986e69b5d8b6
+
+#EXTINF:-1 channel-id="296" channel-number="296" tvc-guide-stationid="60048" tvg-group="" tvg-logo="",Cartoon Network HD
+http://{{ .IPADDRESS }}/play/tuner/CNeHD~b58935e4-74c0-4d19-aa0c-d0557d716f2b
+
+#EXTINF:-1 channel-id="299" channel-number="299" tvc-guide-stationid="59432" tvg-group="" tvg-logo="",Nickelodeon East HD
+http://{{ .IPADDRESS }}/play/tuner/NIKeHD~18ee6c13-d93a-4f79-bd02-21bd18b052a3
+
+#EXTINF:-1 channel-id="301" channel-number="301" tvc-guide-stationid="82649" tvg-group="" tvg-logo="",Nick Jr. HD
+http://{{ .IPADDRESS }}/play/tuner/NKJRHD~0ae8d67d-2284-4e26-a2f9-4ba1b2819ff9
+
+#EXTINF:-1 channel-id="304" channel-number="304" tvc-guide-stationid="73541" tvg-group="" tvg-logo="",TV Land HD
+http://{{ .IPADDRESS }}/play/tuner/TVLDHD~a22a1e02-fb9b-4d64-b9e8-2ce5eac89d6d
+
+#EXTINF:-1 channel-id="305" channel-number="305" tvc-guide-stationid="76894" tvg-group="" tvg-logo="",ION Television East HD
+http://{{ .IPADDRESS }}/play/tuner/IONEHD~175bd340-10e5-49e4-ae44-c479e4784c38
+
+#EXTINF:-1 channel-id="311" channel-number="311" tvc-guide-stationid="59615" tvg-group="" tvg-logo="",Freeform HD
+http://{{ .IPADDRESS }}/play/tuner/FRFMHD~33ad289e-84cc-462f-bfee-26531b95d443
+
+#EXTINF:-1 channel-id="312" channel-number="312" tvc-guide-stationid="66268" tvg-group="" tvg-logo="",Hallmark Channel HD
+http://{{ .IPADDRESS }}/play/tuner/HALLHD~cb4259f1-c227-41e7-8542-1d08a47cf49d
+
+#EXTINF:-1 channel-id="320" channel-number="320" tvc-guide-stationid="102490" tvg-group="" tvg-logo="",Scientology Network
+http://{{ .IPADDRESS }}/play/tuner/SCNTV~336feaf4-0c3f-4b91-b903-81d2694ba296
+
+#EXTINF:-1 channel-id="326" channel-number="326" tvc-guide-stationid="82892" tvg-group="" tvg-logo="",Great American Family HD
+http://{{ .IPADDRESS }}/play/tuner/GFAMHD~7d74cbcf-0ae9-4981-b7ba-9dde99194efa
+
+#EXTINF:-1 channel-id="327" channel-number="327" tvc-guide-stationid="10138" tvg-group="" tvg-logo="",CMT HD
+http://{{ .IPADDRESS }}/play/tuner/CMTHD~c1a35106-2d20-4b58-bcfe-906cdb19197d
+
+#EXTINF:-1 channel-id="328" channel-number="328" tvc-guide-stationid="61960" tvg-group="" tvg-logo="",TV One
+http://{{ .IPADDRESS }}/play/tuner/TV1HD~8c312c97-15af-45d1-b754-9770c854f177
+
+#EXTINF:-1 channel-id="329" channel-number="329" tvc-guide-stationid="64673" tvg-group="" tvg-logo="",BET West HD
+http://{{ .IPADDRESS }}/play/tuner/BETWHD~4acb50cc-b347-45c1-941c-50d65fb25271
+
+#EXTINF:-1 channel-id="329A" channel-number="329A" tvc-guide-stationid="63236" tvg-group="" tvg-logo="",BET HD
+http://{{ .IPADDRESS }}/play/tuner/BETHD~89c5c432-4596-47ef-a801-1b0308ba6994
+
+#EXTINF:-1 channel-id="331" channel-number="331" tvc-guide-stationid="60964" tvg-group="" tvg-logo="",MTV HD
+http://{{ .IPADDRESS }}/play/tuner/MTVHD~6bb1b774-c06c-44e1-a316-5d41c63229e0
+
+#EXTINF:-1 channel-id="331A" channel-number="331A" tvc-guide-stationid="64630" tvg-group="" tvg-logo="",MTV West HD
+http://{{ .IPADDRESS }}/play/tuner/MTVWHD~e3190daa-5f8a-41e8-b8ff-0d9eae7bb347
+
+#EXTINF:-1 channel-id="332" channel-number="332" tvc-guide-stationid="75077" tvg-group="" tvg-logo="",MTV2 HD
+http://{{ .IPADDRESS }}/play/tuner/MTV2HD~5fa9cee6-c5e0-4efd-8035-23dd470c2f3d
+
+#EXTINF:-1 channel-id="333" channel-number="333" tvc-guide-stationid="59444" tvg-group="" tvg-logo="",IFC HD
+http://{{ .IPADDRESS }}/play/tuner/IFCHD~9e89d8ee-9678-4378-988f-09665f91f1c2
+
+#EXTINF:-1 channel-id="335" channel-number="335" tvc-guide-stationid="60046" tvg-group="" tvg-logo="",VH1 HD
+http://{{ .IPADDRESS }}/play/tuner/VH1HD~3e229de3-9fb0-4f09-8a0c-4c88b4c61614
+
+#EXTINF:-1 channel-id="339" channel-number="339" tvc-guide-stationid="59116" tvg-group="" tvg-logo="",Fuse HD
+http://{{ .IPADDRESS }}/play/tuner/fuseHD~97c42c68-6aca-4e70-8368-381efcb10cbf
+
+#EXTINF:-1 channel-id="340" channel-number="340" tvc-guide-stationid="28506" tvg-group="" tvg-logo="",AXS TV HD
+http://{{ .IPADDRESS }}/play/tuner/AXSTV~44483b11-87ac-4da6-a420-538a462f45e0
+
+#EXTINF:-1 channel-id="341" channel-number="341" tvc-guide-stationid="110289" tvg-group="" tvg-logo="",Cleo TV
+http://{{ .IPADDRESS }}/play/tuner/CLEOTV~d3349098-3608-45d6-8efb-24ebae2be28c
+
+#EXTINF:-1 channel-id="342" channel-number="342" tvc-guide-stationid="132272" tvg-group="" tvg-logo="",theGrio
+http://{{ .IPADDRESS }}/play/tuner/GRIOTV~c546d353-7526-4d4d-9cf3-e7afefad7f44
+
+#EXTINF:-1 channel-id="345" channel-number="345" tvc-guide-stationid="63717" tvg-group="" tvg-logo="",RFD HD TV
+http://{{ .IPADDRESS }}/play/tuner/RFDHD~33b33049-4d09-4ad9-8c25-b1862f8a7600
+
+#EXTINF:-1 channel-id="346" channel-number="346" tvc-guide-stationid="89690" tvg-group="" tvg-logo="",BBC News
+http://{{ .IPADDRESS }}/play/tuner/BBCN~38fa4074-8901-45d1-be15-2fcaf7e54f24
+
+#EXTINF:-1 channel-id="347" channel-number="347" tvc-guide-stationid="114934" tvg-group="" tvg-logo="",The First
+http://{{ .IPADDRESS }}/play/tuner/TheFirst~80c25768-273c-4298-a307-a6255e60cf7f
+
+#EXTINF:-1 channel-id="349" channel-number="349" tvc-guide-stationid="97163" tvg-group="" tvg-logo="",Newsmax TV HD
+http://{{ .IPADDRESS }}/play/tuner/NEWSMXH~dd85480a-4cf2-446c-ab67-3deb7ea00581
+
+#EXTINF:-1 channel-id="353" channel-number="353" tvc-guide-stationid="71799" tvg-group="" tvg-logo="",Bloomberg TV HD
+http://{{ .IPADDRESS }}/play/tuner/BTVHD~9d556827-6bb0-4e70-b843-1ae390321e74
+
+#EXTINF:-1 channel-id="355" channel-number="355" tvc-guide-stationid="58780" tvg-group="" tvg-logo="",CNBC HD
+http://{{ .IPADDRESS }}/play/tuner/CNBCHD~c3cfa12b-f991-4ace-9438-62ace1ac535a
+
+#EXTINF:-1 channel-id="356" channel-number="356" tvc-guide-stationid="64241" tvg-group="" tvg-logo="",MSNBC HD
+http://{{ .IPADDRESS }}/play/tuner/MSNBC~7188780b-f344-4cb6-8ebc-7c7937a02004
+
+#EXTINF:-1 channel-id="359" channel-number="359" tvc-guide-stationid="58718" tvg-group="" tvg-logo="",Fox Business Network HD
+http://{{ .IPADDRESS }}/play/tuner/FBNHD~d6bf4706-2005-419a-a168-bb7bc464d20f
+
+#EXTINF:-1 channel-id="360" channel-number="360" tvc-guide-stationid="60179" tvg-group="" tvg-logo="",Fox News Channel HD
+http://{{ .IPADDRESS }}/play/tuner/FNCHD~e286a88a-9068-45ff-a81d-929b9455b557
+
+#EXTINF:-1 channel-id="361" channel-number="361" tvc-guide-stationid="91994" tvg-group="" tvg-logo="",AccuWeather HD
+http://{{ .IPADDRESS }}/play/tuner/ACCUHD~a368c1d1-d258-4e80-9448-b9ef3a8271c7
+
+#EXTINF:-1 channel-id="362" channel-number="362" tvc-guide-stationid="58812" tvg-group="" tvg-logo="",The Weather Channel HD
+http://{{ .IPADDRESS }}/play/tuner/WEAHD~56f08371-563d-4910-8b4f-147e829104e5
+
+#EXTINF:-1 channel-id="364" channel-number="364" tvc-guide-stationid="82773" tvg-group="" tvg-logo="",INSP HD
+http://{{ .IPADDRESS }}/play/tuner/INSPHD~3c6a1eea-d513-4ed7-b467-dcde66069d31
+
+#EXTINF:-1 channel-id="369" channel-number="369" tvc-guide-stationid="87001" tvg-group="" tvg-logo="",Daystar HD
+http://{{ .IPADDRESS }}/play/tuner/DSTRHD~5972cb2f-63d7-47fb-bec3-e1f956f15ceb
+
+#EXTINF:-1 channel-id="381" channel-number="381" tvc-guide-stationid="97409" tvg-group="" tvg-logo="",Aspire (HD)
+http://{{ .IPADDRESS }}/play/tuner/ASPHD~181271ae-0aa6-4974-83e2-c80759427ae3
+
+#EXTINF:-1 channel-id="382" channel-number="382" tvc-guide-stationid="82470" tvg-group="" tvg-logo="",Comedy TV HD
+http://{{ .IPADDRESS }}/play/tuner/COMTVH~6bc2e297-8940-4561-9071-994328392946
+
+#EXTINF:-1 channel-id="383" channel-number="383" tvc-guide-stationid="78850" tvg-group="" tvg-logo="",Justice Central HD
+http://{{ .IPADDRESS }}/play/tuner/JC%20HD~1d36c051-d7cd-42a5-8a79-5c9ceac2fca8
+
+#EXTINF:-1 channel-id="384" channel-number="384" tvc-guide-stationid="83098" tvg-group="" tvg-logo="",Revolt HD
+http://{{ .IPADDRESS }}/play/tuner/RVLTHD~8fff1531-0549-4bf4-8bd0-8e52ce8545e3
+
+#EXTINF:-1 channel-id="386" channel-number="386" tvc-guide-stationid="72094" tvg-group="" tvg-logo="",FM HD
+http://{{ .IPADDRESS }}/play/tuner/FM%20HD~3bc5e947-4d01-498c-a9d9-0e08bd42ab7f
+
+#EXTINF:-1 channel-id="402" channel-number="402" tvc-guide-stationid="68049" tvg-group="" tvg-logo="",Univision East HD
+http://{{ .IPADDRESS }}/play/tuner/UNIeHD~94f35e95-f0d6-4967-874e-234e4ceaae8c
+
+#EXTINF:-1 channel-id="404" channel-number="404" tvc-guide-stationid="68367" tvg-group="" tvg-logo="",Galavision HD
+http://{{ .IPADDRESS }}/play/tuner/GALAHD~851e06c6-a83a-4d33-a19d-bb726a9a955f
+
+#EXTINF:-1 channel-id="408" channel-number="408" tvc-guide-stationid="68040" tvg-group="" tvg-logo="",UniMas West HD
+http://{{ .IPADDRESS }}/play/tuner/UMasHD~dad499f5-14e2-43f8-a98a-333022817223
+
+#EXTINF:-1 channel-id="410" channel-number="410" tvc-guide-stationid="91588" tvg-group="" tvg-logo="",Universo HD
+http://{{ .IPADDRESS }}/play/tuner/UVSOHD~b0453ac3-7a84-462d-8ef0-c1d66810b72c
+
+#EXTINF:-1 channel-id="501" channel-number="501" tvc-guide-stationid="19548" tvg-group="" tvg-logo="",HBO HD East
+http://{{ .IPADDRESS }}/play/tuner/HBOeHD~4fc097f1-e123-4b41-b302-faf4e7d82118
+
+#EXTINF:-1 channel-id="502" channel-number="502" tvc-guide-stationid="59368" tvg-group="" tvg-logo="",HBO2 HD East
+http://{{ .IPADDRESS }}/play/tuner/HB2eHD~51cfd7f4-0f6e-4c9b-b2ec-646afb3f7d93
+
+#EXTINF:-1 channel-id="503" channel-number="503" tvc-guide-stationid="59363" tvg-group="" tvg-logo="",HBO Signature HD East
+http://{{ .IPADDRESS }}/play/tuner/HBSeHD~5beb41da-ff97-42af-a31f-3787ee6878b6
+
+#EXTINF:-1 channel-id="504" channel-number="504" tvc-guide-stationid="19566" tvg-group="" tvg-logo="",HBO West HD
+http://{{ .IPADDRESS }}/play/tuner/HBOwHD~6da0d147-0635-4fe0-a003-19c6dc089af5
+
+#EXTINF:-1 channel-id="505" channel-number="505" tvc-guide-stationid="59355" tvg-group="" tvg-logo="",HBO2 West HD
+http://{{ .IPADDRESS }}/play/tuner/HB2wHD~c4256331-1604-417d-9c37-6dba5513ef98
+
+#EXTINF:-1 channel-id="506" channel-number="506" tvc-guide-stationid="59839" tvg-group="" tvg-logo="",HBO Comedy HD
+http://{{ .IPADDRESS }}/play/tuner/HBOCHD~703c22aa-7be9-43b4-a3fb-d828479bc421
+
+#EXTINF:-1 channel-id="507" channel-number="507" tvc-guide-stationid="59357" tvg-group="" tvg-logo="",HBO Family East HD
+http://{{ .IPADDRESS }}/play/tuner/HBOFeHD~7fe9d32a-0313-4ee6-911f-9ed6e42ee8dc
+
+#EXTINF:-1 channel-id="509" channel-number="509" tvc-guide-stationid="59845" tvg-group="" tvg-logo="",HBO Zone HD
+http://{{ .IPADDRESS }}/play/tuner/HBOZHD~9cc69dee-d1f4-4f2d-a646-657b2ddbc5f7
+
+#EXTINF:-1 channel-id="511" channel-number="511" tvc-guide-stationid="59837" tvg-group="" tvg-logo="",HBO Latino HD
+http://{{ .IPADDRESS }}/play/tuner/HBOLHD~efe03e4e-1994-4716-a74d-8948f01c856e
+
+#EXTINF:-1 channel-id="570" channel-number="570" tvc-guide-stationid="58532" tvg-group="" tvg-logo="",Smithsonian Channel HD
+http://{{ .IPADDRESS }}/play/tuner/SMTHHD~b7dd0c3c-d22b-4a6b-b360-dcaf56deab7f
+
+#EXTINF:-1 channel-id="573" channel-number="573" tvc-guide-stationid="67454" tvg-group="" tvg-logo="",ShortsTV HD
+http://{{ .IPADDRESS }}/play/tuner/SHRTTV~9cf938f5-e2c1-4909-9536-918305eb4f23
+
+#EXTINF:-1 channel-id="602" channel-number="602" tvc-guide-stationid="21345" tvg-group="" tvg-logo="",FanDuel TV HD
+http://{{ .IPADDRESS }}/play/tuner/FDTVHD~29f35d32-a695-40de-9fbb-56d5c0204822
+
+#EXTINF:-1 channel-id="610" channel-number="610" tvc-guide-stationid="61143" tvg-group="" tvg-logo="",BTN HD
+http://{{ .IPADDRESS }}/play/tuner/BTNHD~9a1380bd-3201-4fdd-a46e-c71a0453c87a
+
+#EXTINF:-1 channel-id="611" channel-number="611" tvc-guide-stationid="89714" tvg-group="" tvg-logo="",SEC Network HD
+http://{{ .IPADDRESS }}/play/tuner/SECHD~3c8abb32-1002-4118-a3b2-2201be88fe5a
+
+#EXTINF:-1 channel-id="612" channel-number="612" tvc-guide-stationid="111871" tvg-group="" tvg-logo="",ACC Network HD
+http://{{ .IPADDRESS }}/play/tuner/ACCNHD~4adb6040-f730-4e88-be8c-742a12943915
+
+#EXTINF:-1 channel-id="618" channel-number="618" tvc-guide-stationid="59305" tvg-group="" tvg-logo="",FOX Sports 2 HD
+http://{{ .IPADDRESS }}/play/tuner/FS2HD~c710ec79-d8e0-4100-ae61-ab296cbb1fc0
+
+#EXTINF:-1 channel-id="exit" channel-number="698" tvc-guide-stationid="" tvg-group="" tvg-logo="http://{{ .IPADDRESS }}/static/logos/exit.png",Exit DirecTV
+http://{{ .IPADDRESS }}/play/tuner/exit
+
+#EXTINF:-1 channel-id="reboot" channel-number="699" tvc-guide-stationid="" tvg-group="" tvg-logo="http://{{ .IPADDRESS }}/static/logos/reboot.png",Reboot FireTV
+http://{{ .IPADDRESS }}/play/tuner/reboot

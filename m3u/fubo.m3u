@@ -1,0 +1,31 @@
+#EXTM3U
+#EXTINF:-1 channel-id="STZHD" tvc-guide-stationid="34941",Starz HD
+http://{{ .IPADDRESS }}/play/tuner/12719
+#EXTINF:-1 channel-id="STZKHD" tvc-guide-stationid="57581",Starz Kids & Family HD
+http://{{ .IPADDRESS }}/play/tuner/67703
+#EXTINF:-1 channel-id="STZCHD" tvc-guide-stationid="57569",Starz Comedy HD
+http://{{ .IPADDRESS }}/play/tuner/67691
+#EXTINF:-1 channel-id="STZEHD" tvc-guide-stationid="57573",Starz Edge HD
+http://{{ .IPADDRESS }}/play/tuner/67695
+#EXTINF:-1 channel-id="STRZIBH" tvc-guide-stationid="67235",Starz in Black HD
+http://{{ .IPADDRESS }}/play/tuner/78393
+#EXTINF:-1 channel-id="STZENHD" tvc-guide-stationid="36225",Starz Encore HD
+http://{{ .IPADDRESS }}/play/tuner/36225
+#EXTINF:-1 channel-id="SHOWHD" tvc-guide-stationid="21868",Showtime HD
+http://{{ .IPADDRESS }}/play/tuner/21868
+#EXTINF:-1 channel-id="SHOWHDP" tvc-guide-stationid="22532",Showtime HD West
+http://{{ .IPADDRESS }}/play/tuner/22532
+#EXTINF:-1 channel-id="SHO2HD" tvc-guide-stationid="58533",Showtime 2 HD
+http://{{ .IPADDRESS }}/play/tuner/68704
+#EXTINF:-1 channel-id="SHOBETH" tvc-guide-stationid="68340",Showtime BET HD
+http://{{ .IPADDRESS }}/play/tuner/79670
+#EXTINF:-1 channel-id="SHOXHD" tvc-guide-stationid="60947",Showtime Extreme HD
+http://{{ .IPADDRESS }}/play/tuner/71379
+#EXTINF:-1 channel-id="SHOCSHD" tvc-guide-stationid="61001",Showtime Showcase HD
+http://{{ .IPADDRESS }}/play/tuner/71444
+#EXTINF:-1 channel-id="NEXTHD" tvc-guide-stationid="68342",Showtime NextHD
+http://{{ .IPADDRESS }}/play/tuner/79672
+#EXTINF:-1 channel-id="FAMZHD" tvc-guide-stationid="103892",Showtime Familyzone HD
+http://{{ .IPADDRESS }}/play/tuner/117799
+#EXTINF:-1 channel-id="WOMNHD" tvc-guide-stationid="68338",Showtime Women
+http://{{ .IPADDRESS }}/play/tuner/79668

@@ -1,0 +1,25 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="usa_east" channel-number="" tvc-guide-stationid="58452" tvg-group="" tvg-logo="",USA East
+http://{{ .IPADDRESS }}/play/tuner/usa-usa_east
+
+#EXTINF:-1 channel-id="usa_west" channel-number="" tvc-guide-stationid="74030" tvg-group="" tvg-logo="",USA West
+http://{{ .IPADDRESS }}/play/tuner/usa-usa_west
+
+#EXTINF:-1 channel-id="oxygen_east" channel-number="" tvc-guide-stationid="21484" tvg-group="" tvg-logo="",Oxygen East
+http://{{ .IPADDRESS }}/play/tuner/oxygen-oxygen_east
+
+#EXTINF:-1 channel-id="oxygen_west" channel-number="" tvc-guide-stationid="21744" tvg-group="" tvg-logo="",Oxygen West
+http://{{ .IPADDRESS }}/play/tuner/oxygen-oxygen_east
+
+#EXTINF:-1 channel-id="e_east" channel-number="" tvc-guide-stationid="61812" tvg-group="" tvg-logo="",E! East
+http://{{ .IPADDRESS }}/play/tuner/e-e_east
+
+#EXTINF:-1 channel-id="e_west" channel-number="" tvc-guide-stationid="17561" tvg-group="" tvg-logo="",E! West
+http://{{ .IPADDRESS }}/play/tuner/e-e_west
+
+#EXTINF:-1 channel-id="cnbc_east" channel-number="" tvc-guide-stationid="58780" tvg-group="" tvg-logo="",CNBC
+http://{{ .IPADDRESS }}/play/tuner/cnbc-cnbc_east
+
+#EXTINF:-1 channel-id="golf_east" channel-number="" tvc-guide-stationid="61854" tvg-group="" tvg-logo="",Golf Channel
+http://{{ .IPADDRESS }}/play/tuner/golf-golf_east

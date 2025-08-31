@@ -1,0 +1,148 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="1002" channel-number="1002" tvc-guide-stationid="21634" tvg-group="" tvg-logo="",KTCA-DT
+http://{{ .IPADDRESS }}/play/tuner/tpt2H-8037961156532819105
+
+#EXTINF:-1 channel-id="1004" channel-number="1004" tvc-guide-stationid="21234" tvg-group="" tvg-logo="",WCCO-DT
+http://{{ .IPADDRESS }}/play/tuner/WCCOD-5669032547815822105
+
+#EXTINF:-1 channel-id="1005" channel-number="1005" tvc-guide-stationid="21236" tvg-group="" tvg-logo="",KSTP-DT
+http://{{ .IPADDRESS }}/play/tuner/KSTPD-8713109229817176105
+
+#EXTINF:-1 channel-id="1009" channel-number="1009" tvc-guide-stationid="24504" tvg-group="" tvg-logo="",KMSP-DT
+http://{{ .IPADDRESS }}/play/tuner/KMSPD-8615637520029897105
+
+#EXTINF:-1 channel-id="1011" channel-number="1011" tvc-guide-stationid="20505" tvg-group="" tvg-logo="",KARE-DT
+http://{{ .IPADDRESS }}/play/tuner/KARED-7728061817102576105
+
+#EXTINF:-1 channel-id="1017" channel-number="1017" tvc-guide-stationid="21865" tvg-group="" tvg-logo="",KTCI-DT3
+http://{{ .IPADDRESS }}/play/tuner/TPTL-8037961156532819105
+
+#EXTINF:-1 channel-id="1023" channel-number="1023" tvc-guide-stationid="34425" tvg-group="" tvg-logo="",WUCW-DT
+http://{{ .IPADDRESS }}/play/tuner/TPTL-8037961156532819105
+
+#EXTINF:-1 channel-id="1041" channel-number="1041" tvc-guide-stationid="36071" tvg-group="" tvg-logo="",KPXM-DT
+http://{{ .IPADDRESS }}/play/tuner/IONHD-8070479734704376105
+
+#EXTINF:-1 channel-id="1111" channel-number="1111" tvc-guide-stationid="58646" tvg-group="" tvg-logo="",CNN HD
+http://{{ .IPADDRESS }}/play/tuner/CNNHD-7551018075264600105
+
+#EXTINF:-1 channel-id="1167" channel-number="1167" tvc-guide-stationid="73502" tvg-group="" tvg-logo="",KSTC-DT2
+http://{{ .IPADDRESS }}/play/tuner/MeTV-4757730922757252105
+
+#EXTINF:-1 channel-id="1168" channel-number="1168" tvc-guide-stationid="75977" tvg-group="" tvg-logo="",KSTC-DT4
+http://{{ .IPADDRESS }}/play/tuner/KSTC2-8760927753427221105
+
+#EXTINF:-1 channel-id="1174" channel-number="1174" tvc-guide-stationid="92038" tvg-group="" tvg-logo="",WCCO-DT2
+http://{{ .IPADDRESS }}/play/tuner/START-8313187410358697105
+
+#EXTINF:-1 channel-id="1182" channel-number="1182" tvc-guide-stationid="52331" tvg-group="" tvg-logo="",WUCW-DT2
+http://{{ .IPADDRESS }}/play/tuner/COMET-6532506444970079105
+
+#EXTINF:-1 channel-id="1183" channel-number="1183" tvc-guide-stationid="69640" tvg-group="" tvg-logo="",WUCW-DT3
+http://{{ .IPADDRESS }}/play/tuner/CHARG-6872374361091213105
+
+#EXTINF:-1 channel-id="1205" channel-number="1205" tvc-guide-stationid="32645" tvg-group="" tvg-logo="",ESPN HD
+http://{{ .IPADDRESS }}/play/tuner/ESPND-7642769970651506105
+
+#EXTINF:-1 channel-id="1206" channel-number="1206" tvc-guide-stationid="45507" tvg-group="" tvg-logo="",ESPN2 HD
+http://{{ .IPADDRESS }}/play/tuner/ES2HD-7642769970651506105
+
+#EXTINF:-1 channel-id="1208" channel-number="1208" tvc-guide-stationid="82547" tvg-group="" tvg-logo="",FS1 HD
+http://{{ .IPADDRESS }}/play/tuner/FS1HD-5628918118244997105
+
+#EXTINF:-1 channel-id="1209" channel-number="1209" tvc-guide-stationid="59305" tvg-group="" tvg-logo="",FS2 HD
+http://{{ .IPADDRESS }}/play/tuner/FS2-8827972050046699105
+
+#EXTINF:-1 channel-id="1223" channel-number="1223" tvc-guide-stationid="61854" tvg-group="" tvg-logo="",Golf Channel HD
+http://{{ .IPADDRESS }}/play/tuner/GOLFD-7547469904399748105
+
+#EXTINF:-1 channel-id="1224" channel-number="1224" tvc-guide-stationid="60316" tvg-group="" tvg-logo="",Tennis Channel HD
+http://{{ .IPADDRESS }}/play/tuner/TNND-5272992504836762105
+
+#EXTINF:-1 channel-id="1250" channel-number="1250" tvc-guide-stationid="74436" tvg-group="" tvg-logo="",Bally Sports North HD
+http://{{ .IPADDRESS }}/play/tuner/BSNRD-5676071061539263105
+
+#EXTINF:-1 channel-id="1313" channel-number="1313" tvc-guide-stationid="58774" tvg-group="" tvg-logo="",Big Ten Network Minnesota HD
+http://{{ .IPADDRESS }}/play/tuner/B10HD-7916016111854078105
+
+#EXTINF:-1 channel-id="1403" channel-number="1403" tvc-guide-stationid="58452" tvg-group="" tvg-logo="",USA Network HD
+http://{{ .IPADDRESS }}/play/tuner/USAHD-6198908101479551105
+
+#EXTINF:-1 channel-id="1404" channel-number="1404" tvc-guide-stationid="42642" tvg-group="" tvg-logo="",TNT HD
+http://{{ .IPADDRESS }}/play/tuner/TNTHD-5966517083150279105
+
+#EXTINF:-1 channel-id="1405" channel-number="1405" tvc-guide-stationid="59337" tvg-group="" tvg-logo="",AMC HD
+http://{{ .IPADDRESS }}/play/tuner/AMCHD-8004546766543596105
+
+#EXTINF:-1 channel-id="1418" channel-number="1418" tvc-guide-stationid="64492" tvg-group="" tvg-logo="",BBC America HD
+http://{{ .IPADDRESS }}/play/tuner/BBCAM-7159950156799115105
+
+#EXTINF:-1 channel-id="1430" channel-number="1430" tvc-guide-stationid="64490" tvg-group="" tvg-logo="",truTV HD
+http://{{ .IPADDRESS }}/play/tuner/TRTVD-5197383487287436105
+
+#EXTINF:-1 channel-id="1434" channel-number="1434" tvc-guide-stationid="58515" tvg-group="" tvg-logo="",TBS HD
+http://{{ .IPADDRESS }}/play/tuner/TBSHD-6937726884423880105
+
+#EXTINF:-1 channel-id="1458" channel-number="1458" tvc-guide-stationid="66268" tvg-group="" tvg-logo="",Hallmark Channel HD
+http://{{ .IPADDRESS }}/play/tuner/HCHD-7889068523651137105
+
+#EXTINF:-1 channel-id="1459" channel-number="1459" tvc-guide-stationid="46710" tvg-group="" tvg-logo="",Hallmark Mystery HD
+http://{{ .IPADDRESS }}/play/tuner/HMYS-7889068523651137105
+
+#EXTINF:-1 channel-id="1802" channel-number="1802" tvc-guide-stationid="19548" tvg-group="" tvg-logo="",HBO HD
+http://{{ .IPADDRESS }}/play/tuner/HBOHD-5232923399725817105
+
+#EXTINF:-1 channel-id="1803" channel-number="1803" tvc-guide-stationid="10244" tvg-group="" tvg-logo="",HBO (PACIFIC)
+http://{{ .IPADDRESS }}/play/tuner/HBO-W-5232923399725817105
+
+#EXTINF:-1 channel-id="1804" channel-number="1804" tvc-guide-stationid="59368" tvg-group="" tvg-logo="",HBO2 HD
+http://{{ .IPADDRESS }}/play/tuner/HBO2H-5232923399725817105
+
+#EXTINF:-1 channel-id="1806" channel-number="1806" tvc-guide-stationid="10243" tvg-group="" tvg-logo="",HBO Signature
+http://{{ .IPADDRESS }}/play/tuner/HBOSG-5232923399725817105
+
+#EXTINF:-1 channel-id="1808" channel-number="1808" tvc-guide-stationid="16585" tvg-group="" tvg-logo="",HBO Family
+http://{{ .IPADDRESS }}/play/tuner/HBOFE-5232923399725817105
+
+#EXTINF:-1 channel-id="1810" channel-number="1810" tvc-guide-stationid="18429" tvg-group="" tvg-logo="",HBO Comedy
+http://{{ .IPADDRESS }}/play/tuner/HBOCM-5232923399725817105
+
+#EXTINF:-1 channel-id="1812" channel-number="1812" tvc-guide-stationid="18431" tvg-group="" tvg-logo="",HBO Zone
+http://{{ .IPADDRESS }}/play/tuner/HBOZN-5232923399725817105
+
+#EXTINF:-1 channel-id="1840" channel-number="1840" tvc-guide-stationid="21868" tvg-group="" tvg-logo="",Paramount+ with Showtime HD
+http://{{ .IPADDRESS }}/play/tuner/SHOHD-6578292319676893105
+
+#EXTINF:-1 channel-id="1841" channel-number="1841" tvc-guide-stationid="22532" tvg-group="HD" tvg-logo="",SHOWHDP
+http://{{ .IPADDRESS }}/play/tuner/SHOHW-6578292319676893105
+
+#EXTINF:-1 channel-id="1842" channel-number="1842" tvc-guide-stationid="11116" tvg-group="" tvg-logo="",SHO2e
+http://{{ .IPADDRESS }}/play/tuner/SHO2e-6578292319676893105
+
+#EXTINF:-1 channel-id="1846" channel-number="1846" tvc-guide-stationid="16153" tvg-group="" tvg-logo="",Showtime Showcase
+http://{{ .IPADDRESS }}/play/tuner/SHOCe-6578292319676893105
+
+#EXTINF:-1 channel-id="1848" channel-number="1848" tvc-guide-stationid="18086" tvg-group="" tvg-logo="",Showtime Extreme
+http://{{ .IPADDRESS }}/play/tuner/SHOXe-6578292319676893105
+
+#EXTINF:-1 channel-id="1852" channel-number="1852" tvc-guide-stationid="25274" tvg-group="" tvg-logo="",Showtime Familyzone
+http://{{ .IPADDRESS }}/play/tuner/SHOFe-6578292319676893105
+
+#EXTINF:-1 channel-id="1860" channel-number="1860" tvc-guide-stationid="35329" tvg-group="" tvg-logo="",The Movie Channel HD
+http://{{ .IPADDRESS }}/play/tuner/TMCHD-9102031849685959105
+
+#EXTINF:-1 channel-id="1862" channel-number="1862" tvc-guide-stationid="60951" tvg-group="" tvg-logo="",The Movie Channel Extra HD
+http://{{ .IPADDRESS }}/play/tuner/TMCXe-9102031849685959105
+
+#EXTINF:-1 channel-id="1871" channel-number="1871" tvc-guide-stationid="65687" tvg-group="" tvg-logo="",MGM+ HD
+http://{{ .IPADDRESS }}/play/tuner/MGM+-7697030199876428105
+
+#EXTINF:-1 channel-id="1873" channel-number="1873" tvc-guide-stationid="67929" tvg-group="" tvg-logo="",MGM+ Hits HD
+http://{{ .IPADDRESS }}/play/tuner/MGMHT-7697030199876428105
+
+#EXTINF:-1 channel-id="1874" channel-number="1874" tvc-guide-stationid="74073" tvg-group="" tvg-logo="",MGM+ Marquee HD
+http://{{ .IPADDRESS }}/play/tuner/MGMMR-7697030199876428105
+
+#EXTINF:-1 channel-id="1875" channel-number="1875" tvc-guide-stationid="103828" tvg-group="" tvg-logo="",MGM+ Drive-In HD
+http://{{ .IPADDRESS }}/play/tuner/MGMDR-7697030199876428105

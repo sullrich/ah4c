@@ -1,0 +1,7 @@
+#EXTM3U
+
+#EXTINF:-1 channel-id="1" tvc-guide-stationid="",SVT1
+http://{{ .IPADDRESS }}/play/tuner/1
+
+#EXTINF:-1 channel-id="10" tvc-guide-stationid="",Tv10
+http://{{ .IPADDRESS }}/play/tuner/10
