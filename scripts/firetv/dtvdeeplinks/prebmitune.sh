@@ -1,5 +1,6 @@
 #!/bin/bash
-#prebmitune.sh for firetv/dtvdeeplinks
+# prebmitune.sh for firetv/dtvdeeplinks
+# 2024.07.30
 
 #Debug on if uncommented
 set -x

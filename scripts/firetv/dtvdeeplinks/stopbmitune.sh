@@ -1,5 +1,6 @@
 #!/bin/bash
-#stopbmitune.sh for firetv/directv
+# stopbmitune.sh for firetv/dtvdeeplinks
+# 2024.10.29
 
 #Debug on if uncommented
 set -x

@@ -1,6 +1,6 @@
 #!/bin/bash
-#bmitune.sh for firetv/dtvdeeplinks
-#2024.09.18
+# bmitune.sh for firetv/dtvdeeplinks
+# 2024.09.18
 
 #Debug on if uncommented
 set -x
