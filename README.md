@@ -28,7 +28,8 @@ ah4c WebUI:
 
 ### Activity & logs:
 
-![image](static/status_ss.png)
+<img width="1685" height="836" alt="screenshot-channels0-2025-08-31-09-13-54" src="https://github.com/user-attachments/assets/8a3043cc-063a-401c-b49b-68c94ce74195" />
+
 (built in stats gui)
 
 ### M3U Editor
