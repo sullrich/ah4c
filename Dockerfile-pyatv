@@ -1,0 +1,44 @@
+#docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile-pyatv -t bnhf/ah4c:appletv . --push --no-cache
+
+# Build ah4c application in 2nd stage
+#FROM golang:alpine3.14 AS builder2
+FROM golang:alpine3.21 AS builder2
+
+# Set working directory
+RUN mkdir -p /go/src/github.com/sullrich
+WORKDIR /go/src/github.com/sullrich
+
+# Install dependencies and build
+RUN apk upgrade --no-cache && apk add --no-cache git \
+    && git clone https://github.com/sullrich/ah4c . \
+    && go build -o /opt/ah4c
+
+# Copy files from local workspace
+COPY docker-start-pyatv.sh /opt/
+COPY scripts /tmp/scripts/
+COPY m3u/* /tmp/m3u/
+COPY html/* /opt/html/
+COPY static /opt/static/
+
+# Build combined ah4c with ws-scrcpy
+FROM ghcr.io/postlund/pyatv:0.14.5 AS runner
+LABEL maintainer="The Slayer <slayer@technologydragonslayer.com>"
+
+# Set working directory
+RUN mkdir -p /opt/scripts /tmp/scripts /tmp/m3u /opt/html /opt/static
+WORKDIR /opt
+
+# Install dependencies
+RUN apk upgrade --no-cache \
+    && apk add --no-cache android-tools curl npm bash bind-tools ffmpeg procps nano tzdata tesseract-ocr
+
+# Copy files from builders
+COPY --from=builder2 /opt /opt
+COPY --from=builder2 /tmp /tmp
+
+# Expose needed ports
+EXPOSE 7654
+EXPOSE 8000
+
+# Run start script
+CMD ["./docker-start-pyatv.sh"]
