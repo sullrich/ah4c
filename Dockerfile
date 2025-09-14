@@ -27,7 +27,7 @@ LABEL maintainer="The Slayer <slayer@technologydragonslayer.com>"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    android-tools-adb curl npm bash dnsutils ffmpeg procps nano tzdata tesseract-ocr \
+    android-tools-adb curl npm bash dnsutils ffmpeg procps nano tzdata tesseract-ocr jq bc \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up working directories

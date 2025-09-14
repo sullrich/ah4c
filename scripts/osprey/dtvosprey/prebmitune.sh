@@ -1,5 +1,6 @@
 #!/bin/bash
-#prebmitune.sh for osprey/directv
+#prebmitune.sh for osprey/dtvosprey
+# 2025.09.10
 
 #Debug on if uncommented
 set -x

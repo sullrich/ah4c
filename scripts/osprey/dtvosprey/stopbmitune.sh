@@ -1,5 +1,6 @@
 #!/bin/bash
-#stopbmitune.sh for osprey/directv
+#stopbmitune.sh for osprey/dtvosprey
+# 2025.09.10
 
 #Debug on if uncommented
 set -x
