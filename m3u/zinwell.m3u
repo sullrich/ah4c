@@ -1,10 +1,10 @@
 #EXTM3U
 
-#EXTINF:-1 channel-id="102.1" tvc-guide-stationid="",CBS 2 NEXTGENTV
-http://{{ .IPADDRESS }}/play/tuner/102.1
+#EXTINF:-1 channel-id="102.1" channel-number="" tvc-guide-stationid="" tvg-group="" tvg-logo="",CBS 2 NEXTGENTV
+http://{{ .IPADDRESS }}/play/tuner/02-1
 
-#EXTINF:-1 channel-id="105.1" tvc-guide-stationid="",NBC 5 NEXTGENTV
-http://{{ .IPADDRESS }}/play/tuner/105.1
+#EXTINF:-1 channel-id="104.1" channel-number="" tvc-guide-stationid="" tvg-group="" tvg-logo="",NBC 4 NEXTGENTV
+http://{{ .IPADDRESS }}/play/tuner/04-1
 
-#EXTINF:-1 channel-id="132.1" tvc-guide-stationid="",FOX 32 NEXTGENTV
-http://{{ .IPADDRESS }}/play/tuner/132.1
+#EXTINF:-1 channel-id="147.1" channel-number="" tvc-guide-stationid="" tvg-group="" tvg-logo="",WNJU 47 NEXTGENTV
+http://{{ .IPADDRESS }}/play/tuner/47-1

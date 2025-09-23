@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for zinwell/livetv
-# 2025.01.26
+# 2025.09.23
 
 #Debug on if uncommented
 set -x
@@ -19,8 +19,11 @@ trap finish EXIT
 
 #Tuning is based on channel number values from zinwell.m3u
 tuneChannel() {
-  $adbTarget shell input text $channelID
-  sleep 1
+  for (( i=0; i<${#channelID}; i++ )); do
+    keypress="${channelID:$i:1}"
+    $adbTarget shell input keyevent KEYCODE_$keypress
+    sleep 2
+  done
   $adbTarget shell input keyevent KEYCODE_DPAD_CENTER
 }
 
