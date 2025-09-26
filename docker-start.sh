@@ -1,6 +1,9 @@
 #!/bin/bash
 # docker-start.sh
-# 2025.03.14
+# 2025.09.23
+
+# Ensure render group can access GPU device
+[[ -c /dev/dri/renderD128 ]] && chgrp render /dev/dri/renderD128
 
 #androids=( $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP )
 #[[ "$STREAMER_APP" == *"/atv/"* ]] && appleTV=true
@@ -157,7 +160,7 @@ main() {
   fixEncoderDNS $ENCODER1_URL $ENCODER2_URL $ENCODER3_URL $ENCODER4_URL $ENCODER5_URL $ENCODER6_URL $ENCODER7_URL $ENCODER8_URL $ENCODER9_URL
   adbConnections $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP $TUNER5_IP $TUNER6_IP $TUNER7_IP $TUNER8_IP $TUNER9_IP
   checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh common.sh
-  checkM3Us directv.m3u dtvdeeplinks.m3u dtvosprey.m3u dtvstream.m3u dtvstreamdeeplinks.m3u foo-fighters.m3u fubo.m3u hulu.m3u livetv.m3u nbc.m3u npo.m3u pbs-seatac.m3u pbs-worcester.m3u silicondust.m3u sling.m3u spectrum.m3u xfinity.m3u youtubetv_shield.m3u youtubetv.m3u
+  checkM3Us allente.m3u channels.m3u coachella.m3u directv.m3u dtvdeeplinks.m3u dtvosprey.m3u dtvstream.m3u dtvstreamdeeplinks.m3u edc.m3u foo-fighters.m3u fubo.m3u hulu.m3u kodifaves-pbs-seatac.m3u livetv.m3u nbc.m3u npo.m3u pbs-seatac.m3u pbs-worcester.m3u silicondust.m3u sling.m3u spectrum.m3u xfinity.m3u youtubetv_shield.m3u youtubetv.m3u zinwell.m3u
   createM3Us $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP $TUNER5_IP $TUNER6_IP $TUNER7_IP $TUNER8_IP $TUNER9_IP
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"
   npm start --prefix ws-scrcpy &
