@@ -599,6 +599,10 @@ func run() error {
 	})
 	// Show registered env variables
 	r.GET("/env", func(c *gin.Context) {
+		if _, err := os.Stat("/.dockerenv"); err == nil {
+			c.String(http.StatusNotFound, "This feature is not available when running in Docker. ENV configuration should be managed through your Docker Compose file or environment variables.")
+			return
+		}
 		env := os.Environ()
 		var envData string
 		for _, val := range env {
@@ -887,6 +891,10 @@ func run() error {
 	})
 
 	r.GET("/config", func(c *gin.Context) {
+		if _, err := os.Stat("/.dockerenv"); err == nil {
+			c.String(http.StatusNotFound, "This feature is not available when running in Docker. ENV configuration should be managed through your Docker Compose file or environment variables.")
+			return
+		}
 		configData := parseEnvFile("./env")
 		c.HTML(200, "config.html", configData)
 	})
@@ -1248,7 +1256,7 @@ func parseEnvFile(filePath string) ConfigData {
 	file, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Printf("Failed to open file: %s", err)
-		os.Exit(1)
+		return ConfigData{}
 	}
 	lines := strings.Split(string(file), "\n")
 	var envVariables []ConfigEnvVariable
@@ -1310,6 +1318,6 @@ func saveConfigToFile(filePath string, configData ConfigData) {
 	err := os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
 	if err != nil {
 		log.Printf("Failed to write to file: %s", err)
-		os.Exit(1)
+		return
 	}
 }
