@@ -1,13 +1,28 @@
 #!/bin/bash
 # stopbmitune.sh for osprey/dtvospreydeeplinks
-# 2025.09.26
-
+# 2026.04.03
 #Debug on if uncommented
 set -x
 
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
+
+#Check if bmitune.sh is done running
+bmituneDone() {
+  bmitunePID=$(<"$streamerNoPort/bmitune_pid")
+  keepWatchingPID=$(pgrep -f "$streamerNoPort/keep_watching.sh")
+  keepWatchingPPID=$(ps -o ppid= -p "$keepWatchingPID")
+  keepWatchingCPID=$(pgrep -P $keepWatchingPID)
+
+  while ps -p $bmitunePID > /dev/null; do
+    echo "Waiting for bmitune.sh to complete..."
+    sleep 2
+  done
+
+  [[ $KEEP_WATCHING ]] && pkill -P $keepWatchingPPID && kill $keepWatchingCPID
+  rm ./$streamerNoPort/keep_watching.sh
+}
 
 #Device sleep
 adbSleep() {
@@ -19,7 +34,7 @@ adbSleep() {
 }
 
 main() {
+  bmituneDone
   adbSleep
 }
-
 main

@@ -1,10 +1,8 @@
 #!/bin/bash
 # bmitune.sh for osprey/dtvospreydeeplinks
-# 2025.09.26
-
+# 2026.04.03
 #Debug on if uncommented
 set -x
-
 #Global
 channelID=$(echo $1 | awk -F~ '{print $2}')
 channelName=$(echo $1 | awk -F~ '{print $1}')
@@ -14,16 +12,16 @@ streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 [[ $SPEED_MODE == "" ]] && speedMode="true" || speedMode="$SPEED_MODE"
 
+mkdir -p $streamerNoPort
+echo $$ > "$streamerNoPort/bmitune_pid"
+
 #Trap end of script run
 finish() {
   echo "bmitune.sh is exiting for $streamerIP with exit code $?"
 }
-
 trap finish EXIT
-
 #Set encoderURL based on the value of streamerIP
 matchEncoderURL() {
-
   case "$streamerIP" in
     "$TUNER1_IP")
         encoderURL=$ENCODER1_URL
@@ -57,15 +55,13 @@ matchEncoderURL() {
         ;;
   esac
 }
-
 #Tuning is based on channel name/ID values from dtvospreydeeplinks.m3u.
 tuneChannel() {
-  #$adbTarget shell am start -a android.intent.action.VIEW -d https://deeplink.directvnow.com/tune/live/$channelName/$channelID
-  $adbTarget shell am start -W -a android.intent.action.VIEW -d https://deeplink.directvnow.com/tune/live/channel/$channelName/$channelID com.att.tv.openvideo
+  $adbTarget shell "am start -a android.intent.action.VIEW -d 'https://deeplink.directvnow.com/tune/live/channel/$channelName/$channelID' com.att.tv.openvideo"
+  echo -e "#!/bin/bash\n\necho \"[\$(date)] Keep-alive started for $streamerIP (interval: $KEEP_WATCHING)\" > /proc/1/fd/1\nwhile true; do sleep $KEEP_WATCHING; echo \"[\$(date)] Keep-alive sent to $streamerIP\" > /proc/1/fd/1; $adbTarget shell input keyevent KEYCODE_MEDIA_PLAY; done" > ./$streamerNoPort/keep_watching.sh && chmod +x ./$streamerNoPort/keep_watching.sh
+  [[ $KEEP_WATCHING ]] && nohup ./$streamerNoPort/keep_watching.sh &
 }
-
 main() {
   tuneChannel
 }
-
 main
