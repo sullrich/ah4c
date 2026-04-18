@@ -1374,11 +1374,12 @@ type stallTolerantReader struct {
 }
 
 const (
-	stallReadGap       = 500 * time.Millisecond  // queue-empty before injecting nulls
-	srcStallReconnect  = 5 * time.Second         // source idle before forced reconnect
-	srcReconnectBackoff = 2 * time.Second        // wait between failed reconnect attempts
-	chunkSize          = 32 * 1024
-	queueDepth         = 64 // ~2MB max in-flight
+	stallReadGap         = 500 * time.Millisecond // queue-empty before injecting nulls
+	srcStallReconnect    = 5 * time.Second        // source idle before forced reconnect
+	srcReconnectBackoff  = 2 * time.Second        // wait between failed reconnect attempts
+	maxUnhealthyDuration = 15 * time.Second       // total time without any real bytes before giving up so Read returns EOF and DVR can react (matches Channels DVR's no-data timeout)
+	chunkSize            = 32 * 1024
+	queueDepth           = 64 // ~2MB max in-flight
 )
 
 func newStallTolerantReader(body io.ReadCloser, reconnectFn func() (io.ReadCloser, error), label string) *stallTolerantReader {
@@ -1395,11 +1396,20 @@ func newStallTolerantReader(body io.ReadCloser, reconnectFn func() (io.ReadClose
 
 func (s *stallTolerantReader) producer() {
 	chunk := make([]byte, chunkSize)
+	lastRealBytes := time.Now()
+	giveUp := func(reason string) {
+		logger("[%s] %s; closing reader so DVR sees EOF", s.label, reason)
+		s.closeOnce.Do(func() { close(s.closed) })
+	}
 	for {
 		select {
 		case <-s.closed:
 			return
 		default:
+		}
+		if time.Since(lastRealBytes) > maxUnhealthyDuration {
+			giveUp(fmt.Sprintf("no source bytes for %v", maxUnhealthyDuration))
+			return
 		}
 		s.bodyMu.Lock()
 		body := s.body
@@ -1408,6 +1418,7 @@ func (s *stallTolerantReader) producer() {
 		n, err := readWithDeadline(ctx, body, chunk)
 		cancel()
 		if n > 0 {
+			lastRealBytes = time.Now()
 			data := make([]byte, n)
 			copy(data, chunk[:n])
 			select {
@@ -1429,12 +1440,19 @@ func (s *stallTolerantReader) producer() {
 			return
 		}
 		// Try to reconnect. While this loops, DVR keeps getting NULL packets.
+		// The outer-loop budget check handles the "reconnect succeeds repeatedly
+		// but yields no real bytes" case; this inner check handles "reconnect
+		// keeps failing outright".
 		var newBody io.ReadCloser
 		for {
 			select {
 			case <-s.closed:
 				return
 			default:
+			}
+			if time.Since(lastRealBytes) > maxUnhealthyDuration {
+				giveUp(fmt.Sprintf("no source bytes for %v during reconnect", maxUnhealthyDuration))
+				return
 			}
 			nb, rerr := s.reconnectFn()
 			if rerr == nil {
