@@ -66,6 +66,7 @@ COPY docker-start.sh adbpackages.sh /opt/
 COPY scripts /tmp/scripts/
 COPY m3u/* /tmp/m3u/
 COPY html/* /opt/html/
+RUN sed -i '/href="\/config"/d; /href="\/env"/d' /opt/html/index.html
 COPY static /opt/static/
 
 # Ensure start script is executable
