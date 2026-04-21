@@ -401,23 +401,27 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = false
 				continue
 			}
-			// Wrap the encoder body so DVR sees a continuous byte stream even if
-			// the encoder briefly stalls during the bmitune.sh channel change or
-			// has to be reconnected. Stalls are filled with MPEG-TS NULL packets
-			// (PID 0x1FFF) which TS demuxers ignore. Warm path adds zero latency.
-			encoderURL := t.url
-			tunerLabel := fmt.Sprintf("tuner=%s", t.tunerip)
-			body := newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
-				r, e := http.Get(encoderURL)
-				if e != nil {
-					return nil, e
-				}
-				if r.StatusCode != 200 {
-					r.Body.Close()
-					return nil, fmt.Errorf("status %s", r.Status)
-				}
-				return r.Body, nil
-			}, tunerLabel)
+			// Opt-in via NULL_FRAME_INSERTION=TRUE: wrap the encoder body so DVR
+			// sees a continuous byte stream even if the encoder briefly stalls
+			// during the bmitune.sh channel change or has to be reconnected.
+			// Stalls are filled with MPEG-TS NULL packets (PID 0x1FFF) which
+			// TS demuxers ignore. Default is the original pass-through.
+			var body io.ReadCloser = resp.Body
+			if os.Getenv("NULL_FRAME_INSERTION") == "TRUE" {
+				encoderURL := t.url
+				tunerLabel := fmt.Sprintf("tuner=%s", t.tunerip)
+				body = newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
+					r, e := http.Get(encoderURL)
+					if e != nil {
+						return nil, e
+					}
+					if r.StatusCode != 200 {
+						r.Body.Close()
+						return nil, fmt.Errorf("status %s", r.Status)
+					}
+					return r.Body, nil
+				}, tunerLabel)
+			}
 			t.active = true
 			t.index = i
 			r := &reader{
@@ -979,6 +983,7 @@ func loadenv() {
 	logger("[ENV] ALERT_EMAIL_TO             %s", os.Getenv("ALERT_EMAIL_TO"))
 	logger("[ENV] ALERT_WEBHOOK_URL          %s", os.Getenv("ALERT_WEBHOOK_URL"))
 	logger("[ENV] ALLOW_DEBUG_VIDEO_PREVIEW  %s", os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"))
+	logger("[ENV] NULL_FRAME_INSERTION       %s", os.Getenv("NULL_FRAME_INSERTION"))
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
