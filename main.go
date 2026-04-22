@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -401,17 +402,11 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = false
 				continue
 			}
-			// Opt-in via NULL_FRAME_INSERTION=TRUE: wrap the encoder body so DVR
-			// sees a continuous byte stream even if the encoder briefly stalls
-			// during the bmitune.sh channel change or has to be reconnected.
-			// Stalls are filled with MPEG-TS NULL packets (PID 0x1FFF) which
-			// TS demuxers ignore. Default is the original pass-through.
+			// NULL_FRAME_INSERTION=TRUE: fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
 			var body io.ReadCloser = resp.Body
 			if os.Getenv("NULL_FRAME_INSERTION") == "TRUE" {
-				encoderURL := t.url
-				tunerLabel := fmt.Sprintf("tuner=%s", t.tunerip)
 				body = newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
-					r, e := http.Get(encoderURL)
+					r, e := http.Get(t.url)
 					if e != nil {
 						return nil, e
 					}
@@ -420,7 +415,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 						return nil, fmt.Errorf("status %s", r.Status)
 					}
 					return r.Body, nil
-				}, tunerLabel)
+				}, fmt.Sprintf("tuner=%s", t.tunerip))
 			}
 			t.active = true
 			t.index = i
@@ -1339,52 +1334,39 @@ func saveConfigToFile(filePath string, configData ConfigData) {
 	}
 }
 
-// nullTSPacket is a single 188-byte MPEG-TS NULL packet (PID 0x1FFF). TS
-// demuxers including Channels DVR drop these on demux, so they're safe to
-// inject as a keepalive when the upstream encoder briefly stops producing.
+// nullTSPacket is an MPEG-TS NULL packet (PID 0x1FFF) — safe keepalive bytes.
 var nullTSPacket = func() [188]byte {
 	var p [188]byte
-	p[0] = 0x47 // sync byte
-	p[1] = 0x1F // TEI=0, PUSI=0, transport_priority=0, PID upper 5 bits = 0x1F
-	p[2] = 0xFF // PID lower 8 bits (full PID = 0x1FFF)
-	p[3] = 0x10 // scrambling=0, adaptation_field_control=01 (payload only), CC=0
-	for i := 4; i < 188; i++ {
-		p[i] = 0xFF
-	}
+	p[0], p[1], p[2], p[3] = 0x47, 0x1F, 0xFF, 0x10
+	copy(p[4:], bytes.Repeat([]byte{0xFF}, 184))
 	return p
 }()
 
-// stallTolerantReader wraps an HTTP response body so that downstream consumers
-// (Channels DVR) never observe a zero-byte gap when the upstream encoder
-// stalls (e.g. while bmitune.sh triggers a channel change) or when the
-// underlying TCP connection dies and needs to be re-established.
-//
-// Behavior:
-//   - A producer goroutine reads from the source and pushes chunks into a
-//     bounded queue.
-//   - Read() drains the queue; if the queue is empty for stallReadGap, it fills
-//     the caller's buffer with TS NULL packets so the HTTP response keeps
-//     making forward progress.
-//   - If the source produces nothing for srcStallReconnect, the producer closes
-//     the body, calls reconnectFn, and continues with the new body. NULL
-//     packets keep DVR fed during the reconnect.
+// nullFill is a pre-assembled run of NULL packets for one-shot stall fills.
+var nullFill = bytes.Repeat(nullTSPacket[:], 350) // 65.8KB, ≥ any plausible DVR read
+
+// stallTolerantReader fills encoder stalls with NULL TS packets. NULLs are
+// gated behind the first real chunk so DVR locks onto the real PAT/PMT.
 type stallTolerantReader struct {
-	chunks      chan []byte
-	closed      chan struct{}
-	closeOnce   sync.Once
-	bodyMu      sync.Mutex
-	body        io.ReadCloser
-	reconnectFn func() (io.ReadCloser, error)
-	label       string
+	chunks        chan []byte
+	closed        chan struct{}
+	closeOnce     sync.Once
+	bodyMu        sync.Mutex
+	body          io.ReadCloser
+	reconnectFn   func() (io.ReadCloser, error)
+	label         string
+	hasFirstChunk atomic.Bool
 }
 
 const (
-	stallReadGap         = 500 * time.Millisecond // queue-empty before injecting nulls
-	srcStallReconnect    = 5 * time.Second        // source idle before forced reconnect
-	srcReconnectBackoff  = 2 * time.Second        // wait between failed reconnect attempts
-	maxUnhealthyDuration = 15 * time.Second       // total time without any real bytes before giving up so Read returns EOF and DVR can react (matches Channels DVR's no-data timeout)
+	stallReadGap         = 500 * time.Millisecond
+	srcStallReconnect    = 5 * time.Second
+	srcReconnectBackoff  = 2 * time.Second
+	reconnectLogEvery    = 10 * time.Second
+	preFirstChunkBudget  = 15 * time.Second // fail over fast on a dead tuner
+	postFirstChunkBudget = 3 * time.Minute  // ride through mid-stream glitches
 	chunkSize            = 32 * 1024
-	queueDepth           = 64 // ~2MB max in-flight
+	queueDepth           = 64
 )
 
 func newStallTolerantReader(body io.ReadCloser, reconnectFn func() (io.ReadCloser, error), label string) *stallTolerantReader {
@@ -1401,29 +1383,53 @@ func newStallTolerantReader(body io.ReadCloser, reconnectFn func() (io.ReadClose
 
 func (s *stallTolerantReader) producer() {
 	chunk := make([]byte, chunkSize)
-	lastRealBytes := time.Now()
-	giveUp := func(reason string) {
-		logger("[%s] %s; closing reader so DVR sees EOF", s.label, reason)
-		s.closeOnce.Do(func() { close(s.closed) })
-	}
+	lastReal := time.Now()
+	var lastLog time.Time
 	for {
 		select {
 		case <-s.closed:
 			return
 		default:
 		}
-		if time.Since(lastRealBytes) > maxUnhealthyDuration {
-			giveUp(fmt.Sprintf("no source bytes for %v", maxUnhealthyDuration))
+		budget := preFirstChunkBudget
+		if s.hasFirstChunk.Load() {
+			budget = postFirstChunkBudget
+		}
+		if time.Since(lastReal) > budget {
+			logger("[%s] no source bytes for %v; giving up and ending stream", s.label, budget)
+			s.closeOnce.Do(func() { close(s.closed) })
 			return
 		}
 		s.bodyMu.Lock()
 		body := s.body
 		s.bodyMu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), srcStallReconnect)
-		n, err := readWithDeadline(ctx, body, chunk)
-		cancel()
+		if body == nil {
+			if s.reconnectFn == nil {
+				s.closeOnce.Do(func() { close(s.closed) })
+				return
+			}
+			nb, rerr := s.reconnectFn()
+			if rerr != nil {
+				if time.Since(lastLog) > reconnectLogEvery {
+					logger("[%s] reconnect to encoder failed: %v", s.label, rerr)
+					lastLog = time.Now()
+				}
+				select {
+				case <-time.After(srcReconnectBackoff):
+				case <-s.closed:
+					return
+				}
+				continue
+			}
+			logger("[%s] reconnected to encoder", s.label)
+			s.bodyMu.Lock()
+			s.body = nb
+			s.bodyMu.Unlock()
+			continue
+		}
+		n, err := readWithDeadline(body, chunk, srcStallReconnect)
 		if n > 0 {
-			lastRealBytes = time.Now()
+			lastReal = time.Now()
 			data := make([]byte, n)
 			copy(data, chunk[:n])
 			select {
@@ -1435,69 +1441,36 @@ func (s *stallTolerantReader) producer() {
 				continue
 			}
 		}
-		// n == 0 OR err != nil after partial read.
 		if err != nil {
-			logger("[%s] source idle/error (%v); reconnecting", s.label, err)
+			logger("[%s] encoder stream ended (%v); reconnecting", s.label, err)
 		}
 		body.Close()
-		if s.reconnectFn == nil {
-			s.closeOnce.Do(func() { close(s.closed) })
-			return
-		}
-		// Try to reconnect. While this loops, DVR keeps getting NULL packets.
-		// The outer-loop budget check handles the "reconnect succeeds repeatedly
-		// but yields no real bytes" case; this inner check handles "reconnect
-		// keeps failing outright".
-		var newBody io.ReadCloser
-		for {
-			select {
-			case <-s.closed:
-				return
-			default:
-			}
-			if time.Since(lastRealBytes) > maxUnhealthyDuration {
-				giveUp(fmt.Sprintf("no source bytes for %v during reconnect", maxUnhealthyDuration))
-				return
-			}
-			nb, rerr := s.reconnectFn()
-			if rerr == nil {
-				newBody = nb
-				break
-			}
-			logger("[%s] reconnect failed: %v", s.label, rerr)
-			select {
-			case <-time.After(srcReconnectBackoff):
-			case <-s.closed:
-				return
-			}
-		}
-		logger("[%s] reconnected", s.label)
 		s.bodyMu.Lock()
-		s.body = newBody
+		s.body = nil
 		s.bodyMu.Unlock()
 	}
 }
 
 func (s *stallTolerantReader) Read(p []byte) (int, error) {
-	timer := time.NewTimer(stallReadGap)
-	defer timer.Stop()
+	// Pre-first-chunk: nil channel disables the NULL-fill case, so Read blocks on chunks/closed only.
+	var stall <-chan time.Time
+	if s.hasFirstChunk.Load() {
+		t := time.NewTimer(stallReadGap)
+		defer t.Stop()
+		stall = t.C
+	}
 	select {
 	case <-s.closed:
 		return 0, io.EOF
 	case data := <-s.chunks:
+		s.hasFirstChunk.Store(true)
 		return copy(p, data), nil
-	case <-timer.C:
-		// Stalled — fill p with NULL packets to keep DVR's connection alive.
-		n := 0
-		for n+188 <= len(p) {
-			copy(p[n:n+188], nullTSPacket[:])
-			n += 188
-		}
-		if n == 0 {
-			// p < 188 bytes — return what fits
+	case <-stall:
+		if len(p) < 188 {
 			return copy(p, nullTSPacket[:]), nil
 		}
-		return n, nil
+		n := min(len(p)/188*188, len(nullFill))
+		return copy(p, nullFill[:n]), nil
 	}
 }
 
@@ -1512,23 +1485,11 @@ func (s *stallTolerantReader) Close() error {
 	return nil
 }
 
-// readWithDeadline performs r.Read(buf) with a context deadline. If the
-// deadline elapses, it returns (0, ctx.Err()) — the caller is expected to
-// close the underlying reader to release the leaked goroutine.
-func readWithDeadline(ctx context.Context, r io.Reader, buf []byte) (int, error) {
-	type result struct {
-		n   int
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		n, err := r.Read(buf)
-		ch <- result{n, err}
-	}()
-	select {
-	case res := <-ch:
-		return res.n, res.err
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
+// readWithDeadline does r.Read with a timeout: on expiry the body is closed,
+// unblocking the blocked Read with an error. No goroutine leak, no buf race.
+func readWithDeadline(r io.ReadCloser, buf []byte, timeout time.Duration) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	defer context.AfterFunc(ctx, func() { r.Close() })()
+	return r.Read(buf)
 }
