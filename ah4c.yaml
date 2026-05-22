@@ -13,7 +13,7 @@ services:
       - ${WSCR_PORT}:8000 # Port used by ws-scrcpy
     environment:
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
-      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined 1, 2, 3, 4, 5, 6, 7, 8 or 9 supported
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP and ENCODERn_URL line below for each beyond 9
       - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
       - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
       - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
