@@ -47,6 +47,7 @@ services:
       - TZ=${TZ} # Your local timezone in Linux "tz" format
       - SPEED_MODE=${SPEED_MODE} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
+      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Must be the literal string TRUE; anything else (including true/1/yes) leaves the feature off.
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
