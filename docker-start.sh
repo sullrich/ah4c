@@ -1,6 +1,6 @@
 #!/bin/bash
 # docker-start.sh
-# 2025.09.23
+# 2026.05.22
 
 # Ensure render group can access GPU device
 [[ -c /dev/dri/renderD128 ]] && chgrp render /dev/dri/renderD128
