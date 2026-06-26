@@ -1,6 +1,6 @@
 #!/bin/bash
 #prebmitune.sh for osprey/dtvospreydeeplinks
-# 2025.09.26
+# 2026.06.25
 
 #Debug on if uncommented
 set -x
@@ -52,6 +52,7 @@ adbWake() {
 main() {
   adbConnect
   adbWake
+  $adbTarget shell 'for i in $(seq 1 80); do dumpsys audio | grep -qE "pack: com.att.tv.openvideo.*gain: GAIN " && break; dumpsys media_session | grep -q "PlaybackState {state=3" && break; sleep 0.1; done'
 }
 
 main
