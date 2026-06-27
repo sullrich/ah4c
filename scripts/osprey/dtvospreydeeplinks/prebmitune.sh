@@ -38,9 +38,8 @@ adbConnect() {
       exit 2
     fi
     
-
     ((adbCounter++))
-    $adbTarget shell 'for i in $(seq 1 80); do dumpsys audio 2>/dev/null | grep -E "pack: com.att.tv.openvideo.*gain: GAIN " >/dev/null && break; dumpsys media_session 2>/dev/null | grep "PlaybackState {state=3" >/dev/null && break; sleep 0.1; done'
+    
   done
 }
 
@@ -53,5 +52,6 @@ adbWake() {
 main() {
   adbConnect
   adbWake
+  $adbTarget shell 'for i in $(seq 1 80); do dumpsys audio 2>/dev/null | grep -E "pack: com.att.tv.openvideo.*gain: GAIN " >/dev/null && break; dumpsys media_session 2>/dev/null | grep "PlaybackState {state=3" >/dev/null && break; sleep 0.1; done'
 }
 main
