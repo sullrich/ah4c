@@ -39,7 +39,6 @@ adbConnect() {
     fi
     
     ((adbCounter++))
-    
   done
 }
 
