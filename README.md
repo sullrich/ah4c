@@ -21,6 +21,7 @@
 16. Application based tuning! Just send the feed to stdout
 17. Dead video feeds restart - video locking up but audio working
 18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
+19. NULL packet insertion - fills encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR sees a continuous bitstream during HDMI source gaps
 
 ah4c WebUI:
 
@@ -79,7 +80,7 @@ services:
       - ${WSCR_PORT}:8000 # Port used by ws-scrcpy
     environment:
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
-      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined 1, 2, 3, 4, 5, 6, 7, 8 or 9 supported
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP and ENCODERn_URL line below for each beyond 9
       - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
       - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
       - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
@@ -113,6 +114,7 @@ services:
       - TZ=${TZ} # Your local timezone in Linux "tz" format
       - SPEED_MODE=${SPEED_MODE} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
+      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Must be the literal string TRUE; anything else (including true/1/yes) leaves the feature off.
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
@@ -151,6 +153,7 @@ UPDATE_M3US=true
 TZ=US/Mountain
 SPEED_MODE=false
 KEEP_WATCHING=4h
+NULL_FRAME_INSERTION=FALSE
 HOST_DIR=/data
 ```
 
