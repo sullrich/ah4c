@@ -58,8 +58,21 @@ matchEncoderURL() {
 #Tuning is based on channel name/ID values from dtvospreydeeplinks.m3u.
 tuneChannel() {
   $adbTarget shell "am start -a android.intent.action.VIEW -d 'https://deeplink.directvnow.com/tune/live/channel/$channelName/$channelID' com.att.tv.openvideo"
-  echo -e "#!/bin/bash\n\necho \"[\$(date)] Keep-alive started for $streamerIP (interval: $KEEP_WATCHING)\" > /proc/1/fd/1\nwhile true; do sleep $KEEP_WATCHING; echo \"[\$(date)] Keep-alive sent to $streamerIP\" > /proc/1/fd/1; $adbTarget shell input keyevent KEYCODE_MEDIA_PLAY; done" > ./$streamerNoPort/keep_watching.sh && chmod +x ./$streamerNoPort/keep_watching.sh
-  [[ $KEEP_WATCHING ]] && nohup ./$streamerNoPort/keep_watching.sh &
+  cat > ./$streamerNoPort/keep_watching.sh <<KWEOF
+#!/bin/bash
+trap 'echo "keep watching pid killed" > /proc/1/fd/1; exit 0' TERM INT
+echo "keep watching started interval $KEEP_WATCHING" > /proc/1/fd/1
+while true; do
+  sleep $KEEP_WATCHING
+  echo "keep watching event triggered" > /proc/1/fd/1
+  $adbTarget shell input keyevent KEYCODE_MEDIA_PLAY
+done
+KWEOF
+  chmod +x ./$streamerNoPort/keep_watching.sh
+  if [[ $KEEP_WATCHING ]]; then
+    setsid ./$streamerNoPort/keep_watching.sh >/dev/null 2>&1 &
+    echo $! > "$streamerNoPort/keep_watching_pid"
+  fi
 }
 main() {
   tuneChannel
