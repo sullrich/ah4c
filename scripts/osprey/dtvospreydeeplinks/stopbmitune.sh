@@ -1,6 +1,6 @@
 #!/bin/bash
 # stopbmitune.sh for osprey/dtvospreydeeplinks
-# 2026.04.03
+# 2026.07.03
 #Debug on if uncommented
 set -x
 
