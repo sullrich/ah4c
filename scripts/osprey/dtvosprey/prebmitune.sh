@@ -46,13 +46,15 @@ adbWake() {
   touch "$streamerNoPort/adbAppRunning"
 }
 
-#Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
+#Block until the app is playing AND owns the focused window, otherwise input text goes nowhere
+#mCurrentFocus is the only signal that says a keystroke will land; mFocusedApp stays set while asleep
 readinessGate() {
   $adbTarget shell "
     end=\$((SECONDS+10))
     while [ \$SECONDS -lt \$end ]; do
-      dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0
-      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)' && exit 0
+      if dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' || dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)'; then
+        dumpsys window 2>/dev/null | grep -q 'mCurrentFocus=Window.*$dtvPackage' && exit 0
+      fi
     done
     exit 1"
 
