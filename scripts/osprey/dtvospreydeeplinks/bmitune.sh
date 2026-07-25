@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for osprey/dtvospreydeeplinks
-# 2026.07.03
+# 2026.07.25
 #Debug on if uncommented
 set -x
 #Global
@@ -11,6 +11,8 @@ streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 [[ $SPEED_MODE == "" ]] && speedMode="true" || speedMode="$SPEED_MODE"
+heartbeatInterval=180
+heartbeatKeycode=211
 
 mkdir -p $streamerNoPort
 echo $$ > "$streamerNoPort/bmitune_pid"
@@ -58,23 +60,28 @@ matchEncoderURL() {
 #Tuning is based on channel name/ID values from dtvospreydeeplinks.m3u.
 tuneChannel() {
   $adbTarget shell "am start -a android.intent.action.VIEW -d 'https://deeplink.directvnow.com/tune/live/channel/$channelName/$channelID' com.att.tv.openvideo"
-  cat > ./$streamerNoPort/keep_watching.sh <<KWEOF
-#!/bin/bash
-trap 'echo "keep watching pid killed" > /proc/1/fd/1; exit 0' TERM INT
-echo "keep watching started interval $KEEP_WATCHING" > /proc/1/fd/1
-while true; do
-  sleep $KEEP_WATCHING
-  echo "keep watching event triggered" > /proc/1/fd/1
-  $adbTarget shell input keyevent KEYCODE_MEDIA_PLAY
-done
-KWEOF
-  chmod +x ./$streamerNoPort/keep_watching.sh
-  if [[ $KEEP_WATCHING ]]; then
-    setsid ./$streamerNoPort/keep_watching.sh >/dev/null 2>&1 &
-    echo $! > "$streamerNoPort/keep_watching_pid"
+}
+#Resets the app's 5 minute UI inactivity timer, which otherwise restarts playback mid stream
+#Keycode 211 is inert on a US TV app, unlike media keycodes which draw an OSD
+startHeartbeat() {
+  if [[ -f "$streamerNoPort/heartbeat_pid" ]]; then
+    kill -- -"$(<"$streamerNoPort/heartbeat_pid")" 2>/dev/null
   fi
+  cat > ./$streamerNoPort/heartbeat.sh <<HBEOF
+#!/bin/bash
+trap 'echo "heartbeat pid killed" > /proc/1/fd/1; exit 0' TERM INT
+echo "heartbeat started for $streamerIP -- keyevent $heartbeatKeycode every ${heartbeatInterval}s" > /proc/1/fd/1
+while true; do
+  sleep $heartbeatInterval
+  $adbTarget shell input keyevent $heartbeatKeycode
+done
+HBEOF
+  chmod +x ./$streamerNoPort/heartbeat.sh
+  setsid ./$streamerNoPort/heartbeat.sh >/dev/null 2>&1 &
+  echo $! > "$streamerNoPort/heartbeat_pid"
 }
 main() {
   tuneChannel
+  startHeartbeat
 }
 main
