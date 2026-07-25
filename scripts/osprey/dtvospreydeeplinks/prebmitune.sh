@@ -7,7 +7,8 @@ set -x
 
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
-adbTarget="adb -s $streamerIP"
+adbTarget="timeout 15 adb -s $streamerIP"
+dtvPackage="com.att.tv.openvideo"
 
 mkdir -p $streamerNoPort
 
@@ -48,15 +49,15 @@ adbWake() {
   touch $streamerNoPort/adbAppRunning
 }
 
-#Block until audio focus or playback state says the box is hot, then fail the tune if it never is
+#Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
 readinessGate() {
-  $adbTarget shell '
-    end=$((SECONDS+10))
-    while [ $SECONDS -lt $end ]; do
-      dumpsys audio 2>/dev/null | grep -qE "pack: com.att.tv.openvideo.*gain: GAIN " && exit 0
-      dumpsys media_session 2>/dev/null | grep -qE "PlaybackState \{state=(3|8)" && exit 0
+  $adbTarget shell "
+    end=\$((SECONDS+10))
+    while [ \$SECONDS -lt \$end ]; do
+      dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0
+      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)' && exit 0
     done
-    exit 1'
+    exit 1"
 
   if [[ $? -ne 0 ]]; then
     touch "$streamerNoPort/adbCommunicationFail"

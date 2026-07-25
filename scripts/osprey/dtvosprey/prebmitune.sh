@@ -46,8 +46,8 @@ adbWake() {
   touch "$streamerNoPort/adbAppRunning"
 }
 
-#Block until the app holds audio focus or reports playing, otherwise the channel digits get dropped
-readyGate() {
+#Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
+readinessGate() {
   $adbTarget shell "
     end=\$((SECONDS+10))
     while [ \$SECONDS -lt \$end ]; do
@@ -68,7 +68,7 @@ readyGate() {
 main() {
   adbConnect
   adbWake
-  readyGate
+  readinessGate
 }
 
 main
