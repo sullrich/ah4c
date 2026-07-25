@@ -52,7 +52,7 @@ readinessGate() {
   $adbTarget shell "
     end=\$((SECONDS+10))
     while [ \$SECONDS -lt \$end ]; do
-      if dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' || dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)'; then
+      if dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' || dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=3'; then
         dumpsys window 2>/dev/null | grep -q 'mCurrentFocus=Window.*$dtvPackage' && exit 0
       fi
     done

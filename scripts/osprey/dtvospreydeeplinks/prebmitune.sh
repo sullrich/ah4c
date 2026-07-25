@@ -55,7 +55,7 @@ readinessGate() {
     end=\$((SECONDS+10))
     while [ \$SECONDS -lt \$end ]; do
       dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0
-      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)' && exit 0
+      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=3' && exit 0
     done
     exit 1"
 
