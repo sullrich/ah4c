@@ -47,21 +47,28 @@ adbWake() {
 }
 
 #Block until the app holds audio focus or reports playing, otherwise the channel digits get dropped
-#The host side timeout is the only time authority so the verdict never depends on adb propagating remote exit codes
 readyGate() {
-  timeout 12 adb -s "$streamerIP" shell "while true; do dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0; dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)' && exit 0; done"
+  $adbTarget shell "
+    end=\$((SECONDS+10))
+    while [ \$SECONDS -lt \$end ]; do
+      dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0
+      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=(3|8)' && exit 0
+    done
+    exit 1"
+
+  if [[ $? -ne 0 ]]; then
+    touch "$streamerNoPort/adbCommunicationFail"
+    echo "Readiness gate timed out for $streamerIP -- failing tune so ah4c can try the next tuner"
+    exit 2
+  fi
+
+  echo "Readiness gate: $streamerIP is live and hot"
 }
 
 main() {
   adbConnect
   adbWake
-  if readyGate; then
-    echo "Readiness gate: $streamerIP is live and hot"
-  else
-    touch "$streamerNoPort/adbCommunicationFail"
-    echo "Readiness gate timed out for $streamerIP -- failing tune so ah4c can try the next tuner"
-    exit 2
-  fi
+  readyGate
 }
 
 main
