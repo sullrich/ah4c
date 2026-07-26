@@ -2,7 +2,7 @@
 #prebmitune.sh for osprey/dtvosprey
 # 2026.07.25
 #Debug on if uncommented
-#set -x
+set -x
 
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
