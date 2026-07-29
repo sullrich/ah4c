@@ -6,11 +6,9 @@ set -x
 #Global
 channelID=$(echo $1 | awk -F~ '{print $2}')
 channelName=$(echo $1 | awk -F~ '{print $1}')
-specialID="$channelName"
 streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
-[[ $SPEED_MODE == "" ]] && speedMode="true" || speedMode="$SPEED_MODE"
 heartbeatInterval=180
 heartbeatKeycode=KEYCODE_ZENKAKU_HANKAKU
 
