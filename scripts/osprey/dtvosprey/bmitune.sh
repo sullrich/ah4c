@@ -19,6 +19,7 @@ echo $$ > "$streamerNoPort/bmitune_pid"
 finish() {
   echo "bmitune.sh is exiting for $streamerIP with exit code $?"
 }
+
 trap finish EXIT
 
 #Tune by channel number; prebmitune.sh has already woken the box and gated on it being ready for input
@@ -55,4 +56,5 @@ main() {
   tuneChannel || exit 1
   startHeartbeat
 }
+
 main

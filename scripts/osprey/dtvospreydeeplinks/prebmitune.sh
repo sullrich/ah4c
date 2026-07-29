@@ -73,4 +73,5 @@ main() {
   adbWake
   readinessGate
 }
+
 main
