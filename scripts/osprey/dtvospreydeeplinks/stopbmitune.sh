@@ -1,6 +1,6 @@
 #!/bin/bash
 # stopbmitune.sh for osprey/dtvospreydeeplinks
-# 2026.07.03
+# 2026.07.29
 #Debug on if uncommented
 set -x
 
@@ -8,7 +8,7 @@ streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 
-#Check if bmitune.sh is done running
+#Check if bmitune.sh is done running, then kill the heartbeat before the device is slept
 bmituneDone() {
   bmitunePID=$(<"$streamerNoPort/bmitune_pid")
 
@@ -17,12 +17,12 @@ bmituneDone() {
     sleep 2
   done
 
-  if [[ $KEEP_WATCHING && -f "$streamerNoPort/keep_watching_pid" ]]; then
-    keepWatchingPID=$(<"$streamerNoPort/keep_watching_pid")
-    kill -- -"$keepWatchingPID" 2>/dev/null
-    rm -f "./$streamerNoPort/keep_watching_pid"
+  if [[ -f "$streamerNoPort/heartbeat_pid" ]]; then
+    heartbeatPID=$(<"$streamerNoPort/heartbeat_pid")
+    kill -- -"$heartbeatPID" 2>/dev/null
+    rm -f "./$streamerNoPort/heartbeat_pid"
   fi
-  rm -f "./$streamerNoPort/keep_watching.sh"
+  rm -f "./$streamerNoPort/heartbeat.sh"
 }
 
 #Device sleep
@@ -38,4 +38,5 @@ main() {
   bmituneDone
   adbSleep
 }
+
 main

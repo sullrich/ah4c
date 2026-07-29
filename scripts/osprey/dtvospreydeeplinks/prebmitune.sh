@@ -1,13 +1,14 @@
 #!/bin/bash
 #prebmitune.sh for osprey/dtvospreydeeplinks
-# 2026.06.25
+# 2026.07.29
 
 #Debug on if uncommented
 set -x
 
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
-adbTarget="adb -s $streamerIP"
+adbTarget="timeout 15 adb -s $streamerIP"
+dtvPackage="com.att.tv.openvideo"
 
 mkdir -p $streamerNoPort
 
@@ -37,7 +38,7 @@ adbConnect() {
       echo "Communication with $streamerIP failed after $adbMaxRetries retries"
       exit 2
     fi
-    
+
     ((adbCounter++))
   done
 }
@@ -48,9 +49,29 @@ adbWake() {
   touch $streamerNoPort/adbAppRunning
 }
 
+#Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
+readinessGate() {
+  $adbTarget shell "
+    end=\$((SECONDS+10))
+    while [ \$SECONDS -lt \$end ]; do
+      dumpsys audio 2>/dev/null | grep -qE 'pack: $dtvPackage.*gain: GAIN ' && exit 0
+      dumpsys media_session 2>/dev/null | grep -qE 'PlaybackState \{state=3' && exit 0
+    done
+    exit 1"
+
+  if [[ $? -ne 0 ]]; then
+    touch "$streamerNoPort/adbCommunicationFail"
+    echo "Readiness gate timed out for $streamerIP -- failing tune so ah4c can try the next tuner"
+    exit 2
+  fi
+
+  echo "Readiness gate: $streamerIP is live and hot"
+}
+
 main() {
   adbConnect
   adbWake
-  $adbTarget shell 'for i in $(seq 1 80); do dumpsys audio 2>/dev/null | grep -E "pack: com.att.tv.openvideo.*gain: GAIN " >/dev/null && break; dumpsys media_session 2>/dev/null | grep "PlaybackState {state=3" >/dev/null && break; sleep 0.1; done'
+  readinessGate
 }
+
 main
