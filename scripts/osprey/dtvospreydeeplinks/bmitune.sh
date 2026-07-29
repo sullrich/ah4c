@@ -12,7 +12,7 @@ streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 [[ $SPEED_MODE == "" ]] && speedMode="true" || speedMode="$SPEED_MODE"
 heartbeatInterval=180
-heartbeatKeycode=211
+heartbeatKeycode=KEYCODE_ZENKAKU_HANKAKU
 
 mkdir -p $streamerNoPort
 echo $$ > "$streamerNoPort/bmitune_pid"
@@ -62,7 +62,7 @@ tuneChannel() {
   $adbTarget shell "am start -a android.intent.action.VIEW -d 'https://deeplink.directvnow.com/tune/live/channel/$channelName/$channelID' com.att.tv.openvideo"
 }
 #Resets the app's 5 minute UI inactivity timer, which otherwise restarts playback mid stream
-#Keycode 211 is inert on a US TV app, unlike media keycodes which draw an OSD
+#KEYCODE_ZENKAKU_HANKAKU is inert on a US TV app, unlike media keycodes which draw an OSD
 startHeartbeat() {
   if [[ -f "$streamerNoPort/heartbeat_pid" ]]; then
     kill -- -"$(<"$streamerNoPort/heartbeat_pid")" 2>/dev/null

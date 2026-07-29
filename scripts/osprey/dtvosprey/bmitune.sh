@@ -10,7 +10,7 @@ streamerNoPort="${streamerIP%%:*}"
 adbTarget="timeout 15 adb -s $streamerIP"
 dtvPackage="com.att.tv.openvideo"
 heartbeatInterval=180
-heartbeatKeycode=211
+heartbeatKeycode=KEYCODE_ZENKAKU_HANKAKU
 
 mkdir -p "$streamerNoPort"
 echo $$ > "$streamerNoPort/bmitune_pid"
@@ -32,7 +32,7 @@ tuneChannel() {
 }
 
 #Resets the app's 5 minute UI inactivity timer, which otherwise restarts playback mid stream
-#Keycode 211 is inert on a US TV app, unlike media keycodes which draw an OSD
+#KEYCODE_ZENKAKU_HANKAKU is inert on a US TV app, unlike media keycodes which draw an OSD
 startHeartbeat() {
   if [[ -f "$streamerNoPort/heartbeat_pid" ]]; then
     kill -- -"$(<"$streamerNoPort/heartbeat_pid")" 2>/dev/null
