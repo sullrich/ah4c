@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for osprey/dtvospreydeeplinks
-# 2026.07.25
+# 2026.07.29
 #Debug on if uncommented
 set -x
 #Global
