@@ -1,4 +1,4 @@
-#docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t bnhf/ah4c:latest -t bnhf/ah4c:2025.08.31 . --push --no-cache
+#docker buildx build --platform linux/amd64,linux/arm64 --build-arg CDVR_RELEASE=$(curl -s https://channels-dvr.s3.amazonaws.com/latest.txt | tr -d '\n') -f Dockerfile -t bnhf/ah4c:latest -t bnhf/ah4c:2025.08.31 . --push --no-cache
 
 # First Stage: Build ws-scrcpy and ah4c
 FROM golang:bookworm AS builder
@@ -29,6 +29,8 @@ FROM debian:bookworm-slim AS runner
 LABEL maintainer="The Slayer <slayer@technologydragonslayer.com>"
 
 ARG TARGETARCH
+ARG CDVR_RELEASE
+ARG CDVR_URL=https://channels-dvr.s3.amazonaws.com
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Add contrib/non-free/non-free-firmware components
@@ -39,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl bash dnsutils procps nano tzdata jq bc \
     android-tools-adb tesseract-ocr \
     nodejs npm \
-    ffmpeg libva2 libva-drm2 vainfo \
+    libva2 libva-drm2 vainfo \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Intel VA driver & (optionally) QSV libs only on amd64
@@ -48,6 +50,12 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         intel-media-va-driver-non-free libmfx1 && \
       rm -rf /var/lib/apt/lists/* ; \
     fi
+
+# Download ffmpeg and ffprobe from Channels DVR
+RUN ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "arm64") \
+    && curl -fsSL ${CDVR_URL}/${CDVR_RELEASE}/ffmpeg-linux-${ARCH} -o /usr/bin/ffmpeg \
+    && curl -fsSL ${CDVR_URL}/${CDVR_RELEASE}/ffprobe-linux-${ARCH} -o /usr/bin/ffprobe \
+    && chmod +x /usr/bin/ffmpeg /usr/bin/ffprobe
 
 # (Optional) set for Intel VA driver name
 ENV LIBVA_DRIVER_NAME=iHD

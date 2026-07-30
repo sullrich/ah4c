@@ -1,15 +1,17 @@
 #!/bin/bash
 # bmitune.sh for osprey/dtvospreydeeplinks
-# 2026.07.29
+# 2026.07.30
+
 #Debug on if uncommented
 set -x
+
 #Global
 channelID=$(echo $1 | awk -F~ '{print $2}')
 channelName=$(echo $1 | awk -F~ '{print $1}')
 streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
-heartbeatInterval=180
+heartbeatInterval="${HEARTBEAT_INTERVAL:-180}"
 heartbeatKeycode=KEYCODE_ZENKAKU_HANKAKU
 
 mkdir -p $streamerNoPort
@@ -49,7 +51,7 @@ HBEOF
 
 main() {
   tuneChannel
-  startHeartbeat
+  [[ "$heartbeatInterval" != 0 ]] && startHeartbeat
 }
 
 main
