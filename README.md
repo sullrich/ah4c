@@ -66,7 +66,7 @@ ah4c WebUI:
 
 ```yaml
 services:
-  # 2024.10.30
+  # 2026.08.05
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c:
@@ -114,7 +114,8 @@ services:
       - TZ=${TZ} # Your local timezone in Linux "tz" format
       - SPEED_MODE=${SPEED_MODE} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
-      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Must be the literal string TRUE; anything else (including true/1/yes) leaves the feature off.
+      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
@@ -154,6 +155,7 @@ TZ=US/Mountain
 SPEED_MODE=false
 KEEP_WATCHING=4h
 NULL_FRAME_INSERTION=FALSE
+HEARTBEAT_INTERVAL=0
 HOST_DIR=/data
 ```
 

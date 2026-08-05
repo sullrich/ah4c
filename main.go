@@ -402,9 +402,9 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = false
 				continue
 			}
-			// NULL_FRAME_INSERTION=TRUE: fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
+			// NULL_FRAME_INSERTION=TRUE (case-insensitive): fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
 			var body io.ReadCloser = resp.Body
-			if os.Getenv("NULL_FRAME_INSERTION") == "TRUE" {
+			if strings.EqualFold(os.Getenv("NULL_FRAME_INSERTION"), "TRUE") {
 				body = newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
 					r, e := http.Get(t.url)
 					if e != nil {
