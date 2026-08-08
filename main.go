@@ -268,21 +268,25 @@ func (r *reader) Read(p []byte) (int, error) {
 	// Read from the source
 	n, err := r.ReadCloser.Read(p)
 	// Write out to preview file if enabled
-	go func(data []byte) {
+	if allowPreview || r.t.teecmd != "" {
+		data := make([]byte, n)
+		copy(data, p[:n])
 		if allowPreview {
-			// Write to file
-			if _, err := r.file.Write(data[:n]); err != nil {
-				logger("Error while writing to preview file")
-			}
+			go func() {
+				// Write to file
+				if _, err := r.file.Write(data); err != nil {
+					logger("Error while writing to preview file")
+				}
+			}()
 		}
-	}(p[:n])
-	// Write to TEECMD if enabled
-	if r.t.teecmd != "" {
-		go func(data []byte) {
-			if _, err := r.teecmdIn.Write(data[:n]); err != nil {
-				logger("Error while writing to TEECMD")
-			}
-		}(p[:n])
+		// Write to TEECMD if enabled
+		if r.t.teecmd != "" {
+			go func() {
+				if _, err := r.teecmdIn.Write(data); err != nil {
+					logger("Error while writing to TEECMD")
+				}
+			}()
+		}
 	}
 	return n, err
 }
