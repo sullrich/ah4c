@@ -21,7 +21,9 @@ RUN npm install
 
 # Build ah4c application
 WORKDIR /go/src/github.com/mackid1993
+ARG AH4C_SHA=main
 RUN git clone https://github.com/mackid1993/ah4c . \
+    && git checkout ${AH4C_SHA} \
     && go build -o /opt/ah4c
 
 # Second Stage: Create the Runtime Environment

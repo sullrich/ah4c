@@ -8,10 +8,10 @@ on:
         required: false
         default: latest
       no_cache:
-        description: Ignore the layer cache and re-clone from scratch (untick only for a faster rebuild of unchanged code)
+        description: Ignore the layer cache entirely (rarely needed; the ah4c build layer now tracks the commit on its own)
         type: boolean
         required: false
-        default: true
+        default: false
 
 jobs:
   build:
@@ -44,4 +44,5 @@ jobs:
           no-cache: ${{ inputs.no_cache }}
           build-args: |
             CDVR_RELEASE=${{ steps.cdvr.outputs.release }}
+            AH4C_SHA=${{ github.sha }}
           tags: ghcr.io/${{ github.repository_owner }}/ah4c:${{ inputs.tag }}
