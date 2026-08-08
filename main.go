@@ -407,6 +407,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			}
 			// Network encoder
 			logger("Attempting network tune for device %s %s %v %v", t.url, t.tunerip, channel, idx)
+			tuneStart := time.Now()
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				t.active = false
@@ -415,6 +416,41 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			var ready chan struct{}
 			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
 				ready = make(chan struct{})
+			}
+			if secs, _ := strconv.Atoi(os.Getenv("PLAYBACK_DELAY")); secs > 0 && ready == nil {
+				if secs > 30 {
+					logger("[PLAYBACK] %s PLAYBACK_DELAY %d is above the 30 second maximum, using 30", t.tunerip, secs)
+					secs = 30
+				}
+				if secs < 2 {
+					logger("[PLAYBACK] %s PLAYBACK_DELAY %d is below the 2 second minimum, using 2", t.tunerip, secs)
+					secs = 2
+				}
+				skip := secs - int(time.Since(tuneStart).Seconds()) - 2
+				if skip < 2 {
+					skip = 2
+				}
+				logger("[PLAYBACK] %s delaying playback for %d seconds", t.tunerip, secs)
+				cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+					"-i", t.url, "-ss", strconv.Itoa(skip), "-c:v", "copy", "-c:a", "copy", "-f", "mpegts", "pipe:1")
+				cmd.Stderr = os.Stderr
+				pipe, err := cmd.StdoutPipe()
+				if err == nil {
+					err = cmd.Start()
+				}
+				if err != nil {
+					logger("[ERR] Failed to start ffmpeg for PLAYBACK_DELAY: %v", err)
+					t.active = false
+					continue
+				}
+				t.active = true
+				t.index = i
+				return &reader{
+					ReadCloser: pipe,
+					channel:    channel,
+					t:          t,
+					cmd:        cmd,
+				}, nil
 			}
 			resp, err := http.Get(t.url)
 			if err != nil {
@@ -1010,6 +1046,7 @@ func loadenv() {
 	logger("[ENV] ALLOW_DEBUG_VIDEO_PREVIEW  %s", os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"))
 	logger("[ENV] NULL_FRAME_INSERTION       %s", os.Getenv("NULL_FRAME_INSERTION"))
 	logger("[ENV] PLAYBACK_DETECTION         %s", os.Getenv("PLAYBACK_DETECTION"))
+	logger("[ENV] PLAYBACK_DELAY             %s", os.Getenv("PLAYBACK_DELAY"))
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
