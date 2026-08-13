@@ -521,6 +521,11 @@ table.table {
 .badge-idle { color: var(--text-faint); border-color: var(--border-soft); }
 
 .tune-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: min(16rem, 45%);
   padding: 0.1rem 0.55rem;
   border: 1px solid rgba(82, 210, 115, 0.3);
   border-radius: 999px;
@@ -530,6 +535,15 @@ table.table {
   color: var(--live);
   white-space: nowrap;
 }
+
+.tune-timer .tune-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tune-timer .tune-clock { flex-shrink: 0; }
+
+.tuner-status-head strong { white-space: nowrap; }
 
 /* --------------------------------------------------------------------------
    Status page — stat tiles and charts
