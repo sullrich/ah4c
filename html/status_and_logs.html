@@ -13,7 +13,10 @@
 			<a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
 			<strong>Activity &amp; Logs</strong>
 			<span>Last updated: <span id="last-update"></span></span>
-			<button class="btn btn-sm" id="expandLogs" onclick="toggleLogs()">Expand logs</button>
+			<button class="btn btn-sm btn-icon" id="expandLogs" onclick="toggleLogs()" title="Expand logs">
+				<svg id="iconExpand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+				<svg id="iconCollapse" class="hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+			</button>
 			<nav class="nav push-right">
 				<a href="/">Home</a>
 				<a href="/device">Device Control</a>
@@ -38,7 +41,9 @@
 	<script>
 		function toggleLogs() {
 			var expanded = document.getElementById('split').classList.toggle('logs-max');
-			document.getElementById('expandLogs').innerText = expanded ? 'Show activity' : 'Expand logs';
+			document.getElementById('iconExpand').classList.toggle('hidden', expanded);
+			document.getElementById('iconCollapse').classList.toggle('hidden', !expanded);
+			document.getElementById('expandLogs').title = expanded ? 'Show activity' : 'Expand logs';
 		}
 		function fetchLogs() {
 			var now = new Date();

@@ -292,6 +292,7 @@ h3 { font-size: 0.95rem; }
 .btn-danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
 .btn-sm { padding: 0.26rem 0.6rem; font-size: 0.76rem; }
+.btn-icon { padding: 0.3rem 0.45rem; line-height: 0; }
 
 .btn-row {
   display: flex;
@@ -607,6 +608,7 @@ table.table {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
 }
 
 .shell-body { flex: 1; min-height: 0; }
@@ -620,7 +622,7 @@ table.table {
 
 .frame-fill { display: block; width: 100%; height: 100%; border: none; background: #000; }
 
-.split-pane { min-width: 0; min-height: 0; }
+.split-pane { min-width: 0; min-height: 0; overflow: hidden; }
 .split-pane iframe { display: block; width: 100%; height: 100%; border: none; }
 .split-left { width: 45%; border-right: 1px solid var(--border-soft); }
 .split-right { width: 55%; }
@@ -709,7 +711,7 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 0.5rem;
-  align-items: center;
+  align-items: start;
   margin-bottom: 0.7rem;
 }
 
@@ -732,7 +734,8 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 
 .tuner-pairing .pair-link {
   height: auto;
-  align-self: center;
+  align-self: start;
+  margin-top: 1rem;
 }
 
 @media (max-width: 560px) {

@@ -29,6 +29,11 @@
 		</div>
 	</div>
 	<script>
+		if (window.self !== window.top || new URLSearchParams(window.location.search).has('notime')) {
+			document.getElementById('time-header').classList.add('hidden');
+		}
+	</script>
+	<script>
 		var autoScroll = true;
 		var MAX_LOG_LINES = 500;
 		$('#line-cap').text(MAX_LOG_LINES);
@@ -80,12 +85,6 @@
 			});
 		}
 		$(document).ready(function() {
-			// Check if 'notime' parameter is present in the URL
-			var urlParams = new URLSearchParams(window.location.search);
-			if (urlParams.has('notime')) {
-				// Hide the header if 'notime' is present
-				$('#time-header').hide();
-			}
 			$('#log-content').on('scroll', function() {
 				autoScroll = $(this).scrollTop() + $(this).innerHeight() >= $(this)[0].scrollHeight;
 			});
