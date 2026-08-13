@@ -368,7 +368,7 @@
 		                <tr>
 		                    <th>Tuner</th>
 		                    <th>Channel</th>
-		                    <th>Started</th>
+		                    <th>Elapsed</th>
 		                    <th>File</th>
 		                    <th>CMD</th>
 		                </tr>`;
@@ -380,7 +380,7 @@
 		                    <tr>
 		                        <td class="num">${reader.T}</td>
 		                        <td>${esc(reader.Channel)}</td>
-		                        <td>${esc(reader.Started)}</td>
+		                        <td><span class="tune-timer" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></td>
 		                        <td class="mono">${esc(reader.FileName)}</td>
 		                        <td class="mono">${esc(reader.Cmd)}</td>
 		                    </tr>
