@@ -12,6 +12,7 @@
 		<div class="pagebar">
 			<strong>Activity &amp; Logs</strong>
 			<span>Last updated: <span id="last-update"></span></span>
+			<button class="btn btn-sm" id="expandLogs" onclick="toggleLogs()">Expand logs</button>
 			<nav class="nav push-right">
 				<a href="/">Home</a>
 				<a href="/device">Device Control</a>
@@ -23,7 +24,7 @@
 			</nav>
 		</div>
 		<div class="shell-body">
-			<div class="split">
+			<div class="split" id="split">
 				<div class="split-pane split-left">
 					<iframe src="/status"></iframe>
 				</div>
@@ -34,6 +35,10 @@
 		</div>
 	</div>
 	<script>
+		function toggleLogs() {
+			var expanded = document.getElementById('split').classList.toggle('logs-max');
+			document.getElementById('expandLogs').innerText = expanded ? 'Show activity' : 'Expand logs';
+		}
 		function fetchLogs() {
 			var now = new Date();
 			$('#last-update').text(now.toLocaleString());

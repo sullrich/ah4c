@@ -623,6 +623,9 @@ table.table {
   .split-right { height: 45%; }
 }
 
+.split.logs-max .split-left { display: none; }
+.split.logs-max .split-right { width: 100%; height: 100%; }
+
 /* --------------------------------------------------------------------------
    Misc
    -------------------------------------------------------------------------- */
