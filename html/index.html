@@ -16,7 +16,7 @@
         </div>
 
         <div class="menu-grid">
-            <a id="device-control" class="menu-item menu-item--accent" href="#" target="_blank" rel="noopener">
+            <a class="menu-item menu-item--accent" href="/device">
                 <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z"/></svg></span>
                 <span class="menu-label">Device Control</span>
                 <span class="menu-desc">Open ws-scrcpy to view and drive your streaming devices</span>
@@ -60,9 +60,5 @@
             </a>
         </div>
     </div>
-    <script>
-        document.getElementById('device-control').href =
-            'http://' + window.location.hostname + ':{{ .ScrcpyPort }}/';
-    </script>
 </body>
 </html>

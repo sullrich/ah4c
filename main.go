@@ -23,6 +23,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -621,15 +622,6 @@ func bToMb(b uint64) uint64 {
 	return (b + 1024*1024 - 1) / 1024 / 1024
 }
 
-func scrcpyPort() string {
-	for _, key := range []string{"WSCR_PORT", "SCRC_PORT"} {
-		if port := os.Getenv(key); port != "" {
-			return port
-		}
-	}
-	return "8000"
-}
-
 // Called from main()
 func run() error {
 	// Lets get to playing!
@@ -642,7 +634,19 @@ func run() error {
 	r.StaticFS("/static", http.Dir("static"))
 	r.GET("/", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
-		c.HTML(http.StatusOK, "index.html", gin.H{"ScrcpyPort": scrcpyPort()})
+		routes := r.Routes()
+		c.HTML(http.StatusOK, "index.html", routes)
+	})
+	scrcpyProxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:8000"})
+	r.GET("/device", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "device.html", nil)
+	})
+	r.GET("/scrcpy", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/scrcpy/")
+	})
+	r.Any("/scrcpy/*proxyPath", func(c *gin.Context) {
+		c.Request.URL.Path = c.Param("proxyPath")
+		scrcpyProxy.ServeHTTP(c.Writer, c.Request)
 	})
 	r.GET("/routes", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
