@@ -9,7 +9,15 @@
     <div class="page page--wide">
         <div class="pagebar pagebar--inline">
             <strong>Text Editor</strong>
-            <a href="/" class="push-right">Home</a>
+            <nav class="nav push-right">
+                <a href="/">Home</a>
+                <a href="/device">Device</a>
+                <a href="/status">Activity</a>
+                <a href="/status/andlogs">Activity &amp; Logs</a>
+                <a href="/logs">Logs</a>
+                <a href="/m3us">M3Us</a>
+                <a href="/routes">Routes</a>
+            </nav>
         </div>
         <form action="/save" method="POST">
             <textarea name="content" class="editor">{{ .content }}</textarea>

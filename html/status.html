@@ -16,6 +16,19 @@
 <body>
     <div id="tooltip" class="flot-tooltip"></div>
 
+    <div class="pagebar" id="pageNav">
+        <strong>Activity</strong>
+        <nav class="nav push-right">
+            <a href="/">Home</a>
+            <a href="/device">Device</a>
+            <a href="/status" class="active">Activity</a>
+            <a href="/status/andlogs">Activity &amp; Logs</a>
+            <a href="/logs">Logs</a>
+            <a href="/m3us">M3Us</a>
+            <a href="/routes">Routes</a>
+        </nav>
+    </div>
+
     <div class="page page--wide">
         <div class="status-columns">
             <div class="card">
@@ -99,6 +112,9 @@
     </div>
 
     <script>
+        if (window.self !== window.top) document.getElementById('pageNav').classList.add('hidden');
+    </script>
+    <script>
         var modalIndex = null;
         var player = null;
         var tunerIps = [];
@@ -123,6 +139,10 @@
             modalIndex = null;
         }
 
+        var stallTimer = null;
+        var lastFrames = -1;
+        var stallTicks = 0;
+
         function startPreview(index) {
             stopPreview();
             if (!window.mpegts || !mpegts.isSupported()) return;
@@ -140,12 +160,40 @@
             }, { once: true });
             player.load();
             player.play().catch(function() {});
+            startWatchdog();
         }
 
         function stopPreview() {
+            stopWatchdog();
             if (player) {
                 player.destroy();
                 player = null;
+            }
+        }
+
+        function startWatchdog() {
+            lastFrames = -1;
+            stallTicks = 0;
+            stallTimer = setInterval(function() {
+                if (!player || modalIndex === null) return;
+                var frames = (player.statisticsInfo || {}).decodedFrames || 0;
+                if (frames === lastFrames) {
+                    stallTicks++;
+                    if (stallTicks >= 3) {
+                        startPreview(modalIndex);
+                        return;
+                    }
+                } else {
+                    stallTicks = 0;
+                }
+                lastFrames = frames;
+            }, 2000);
+        }
+
+        function stopWatchdog() {
+            if (stallTimer) {
+                clearInterval(stallTimer);
+                stallTimer = null;
             }
         }
 
