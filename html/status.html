@@ -91,7 +91,10 @@
                 <h3 id="modalTitle">Tuner</h3>
                 <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
             </div>
-            <video id="modalVideo" controls muted></video>
+            <video id="modalVideo" class="hidden" controls muted></video>
+            <div id="previewStart" class="preview-start">
+                <button class="btn btn-primary" onclick="startPreviewClicked()">Start preview</button>
+            </div>
             <p class="modal-hint" id="modalHint"></p>
             <div class="remote">
                 <div class="remote-dpad">
@@ -146,8 +149,17 @@
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
             setModalHint();
+            $('#modalVideo').addClass('hidden');
+            $('#previewStart').removeClass('hidden');
             $('#tunerModal').addClass('open');
-            startPreview(index);
+        }
+
+        function startPreviewClicked() {
+            if (modalIndex === null) return;
+            previewRetries = 0;
+            $('#previewStart').addClass('hidden');
+            $('#modalVideo').removeClass('hidden');
+            startPreview(modalIndex);
         }
 
         function closeTunerModal() {

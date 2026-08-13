@@ -873,6 +873,17 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 
 .modal video { width: 100%; aspect-ratio: 16 / 9; }
 
+.preview-start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
 .modal-hint { font-size: 0.74rem; color: var(--text-faint); margin: 0.4rem 0 0; }
 
 .remote {
