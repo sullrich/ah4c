@@ -156,6 +156,15 @@ h3 { font-size: 0.95rem; }
 
 .pagebar strong { color: var(--text); font-weight: 600; }
 
+.pagebar-logo {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
 /* --------------------------------------------------------------------------
    Cards
    -------------------------------------------------------------------------- */
@@ -719,6 +728,11 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   font-size: 0.74rem;
   color: var(--text);
   overflow-wrap: break-word;
+}
+
+.tuner-pairing .pair-link {
+  height: auto;
+  align-self: center;
 }
 
 @media (max-width: 560px) {
