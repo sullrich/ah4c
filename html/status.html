@@ -176,6 +176,10 @@
             stallTicks = 0;
             stallTimer = setInterval(function() {
                 if (!player || modalIndex === null) return;
+                if (document.getElementById('modalVideo').paused) {
+                    stallTicks = 0;
+                    return;
+                }
                 var frames = (player.statisticsInfo || {}).decodedFrames || 0;
                 if (frames === lastFrames) {
                     stallTicks++;
@@ -199,7 +203,13 @@
 
         function sendKey(action) {
             if (modalIndex === null) return;
-            $.post('/api/tuner/' + modalIndex + '/control/' + action);
+            $.post('/api/tuner/' + modalIndex + '/control/' + action).fail(function() {
+                var hint = $('#modalHint');
+                hint.text('Control failed — this device may not be reachable over adb.');
+                setTimeout(function() {
+                    hint.text("Live view direct from this tuner's encoder.");
+                }, 4000);
+            });
         }
 
         function controlAll(action) {

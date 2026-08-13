@@ -64,7 +64,6 @@ h3 { font-size: 0.95rem; }
 }
 
 .page--wide { max-width: 1380px; }
-.page--full { max-width: none; }
 
 /* Top bar / branding */
 .topbar {
@@ -474,7 +473,6 @@ table.table {
 
 .badge-active { background: var(--live-soft); border-color: rgba(82, 210, 115, 0.3); color: var(--live); }
 .badge-idle { color: var(--text-faint); border-color: var(--border-soft); }
-.badge-danger { background: var(--danger-soft); color: var(--danger); }
 
 /* --------------------------------------------------------------------------
    Status page — stat tiles and charts
@@ -613,13 +611,12 @@ table.table {
 .split-pane iframe { display: block; width: 100%; height: 100%; border: none; }
 .split-left { width: 45%; border-right: 1px solid var(--border-soft); }
 .split-right { width: 55%; }
-.split--even .split-left, .split--even .split-right { width: 50%; }
 
 /* --------------------------------------------------------------------------
    Misc
    -------------------------------------------------------------------------- */
 
-pre.env-dump, .card pre {
+.card pre {
   margin: 0;
   padding: 0.8rem 0.95rem;
   background: var(--bg);

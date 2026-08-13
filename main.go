@@ -642,10 +642,15 @@ func run() error {
 		c.HTML(http.StatusOK, "device.html", nil)
 	})
 	r.GET("/scrcpy", func(c *gin.Context) {
-		c.Redirect(http.StatusMovedPermanently, "/scrcpy/")
+		loc := "/scrcpy/"
+		if q := c.Request.URL.RawQuery; q != "" {
+			loc += "?" + q
+		}
+		c.Redirect(http.StatusMovedPermanently, loc)
 	})
 	r.Any("/scrcpy/*proxyPath", func(c *gin.Context) {
 		c.Request.URL.Path = c.Param("proxyPath")
+		c.Request.URL.RawPath = strings.TrimPrefix(c.Request.URL.RawPath, "/scrcpy")
 		scrcpyProxy.ServeHTTP(c.Writer, c.Request)
 	})
 	r.GET("/routes", func(c *gin.Context) {
@@ -822,6 +827,10 @@ func run() error {
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("encoder returned %s", resp.Status)})
+			return
+		}
 		c.Header("Content-Type", "video/mp2t")
 		c.Writer.WriteHeaderNow()
 		io.Copy(c.Writer, resp.Body)
