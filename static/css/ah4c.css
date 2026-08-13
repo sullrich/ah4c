@@ -645,11 +645,13 @@ table.table {
 @media (max-width: 860px) {
   .split { flex-direction: column; }
   .split-left, .split-right { width: 100%; }
-  .split-left { height: 55%; border-right: none; }
-  .split-right { height: 45%; display: flex; flex-direction: column; }
-  .split-right iframe { flex: 1; height: auto; min-height: 0; }
+  .split-left { flex: 1; min-height: 0; border-right: none; }
+  .split-right { display: flex; flex-direction: column; }
+  .split-right iframe { display: none; }
   .split-handle { display: block; }
   #expandLogs { display: none; }
+  .split.logs-max .split-right { flex: 1; }
+  .split.logs-max .split-right iframe { display: block; flex: 1; height: auto; min-height: 0; }
 }
 
 .split.logs-max .split-left { display: none; }
@@ -752,8 +754,9 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 
 .tuner-pairing .pair-link {
   height: auto;
-  align-self: start;
-  margin-top: 1rem;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
 }
 
 @media (max-width: 560px) {
