@@ -2,43 +2,45 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Available Routes</title>
-    <!-- Bootstrap CSS -->
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <title>Available Routes — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
 </head>
-<body class="container mt-4">
+<body>
+    <div class="page">
+        <div class="topbar">
+            <a class="brand" href="/">
+                <img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+                <span>API Routes<small>AH4C</small></span>
+            </a>
+        </div>
 
-    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
-        <a class="navbar-brand" href="/">Available Routes</a>
-    </nav>
+        <div class="card">
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>HTTP Method</th>
+                            <th>Path</th>
+                            <th>Handler</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ range . }}
+                        <tr>
+                            <td><span class="badge badge-idle">{{ .Method }}</span></td>
+                            <td class="mono">{{ .Path }}</td>
+                            <td class="mono muted">{{ .Handler }}</td>
+                        </tr>
+                        {{ end }}
+                    </tbody>
+                </table>
+            </div>
+        </div>
 
-    <table class="table table-striped table-bordered">
-        <thead>
-            <tr>
-                <th>HTTP Method</th>
-                <th>Path</th>
-                <th>Handler</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{ range . }}
-            <tr>
-                <td>{{ .Method }}</td>
-                <td>{{ .Path }}</td>
-                <td>{{ .Handler }}</td>
-            </tr>
-            {{ end }}
-        </tbody>
-    </table>
-
-    <button class="btn btn-danger mt-4" onclick="cancel()">Cancel</button>
-
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
-
+        <div class="btn-row">
+            <button class="btn btn-danger" onclick="cancel()">Cancel</button>
+        </div>
+    </div>
     <script>
         function cancel() {
             window.location.href = "/";

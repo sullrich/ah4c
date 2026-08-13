@@ -1,112 +1,105 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Config</title>
-    <!-- Bootstrap CSS -->
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
-    <style>
-        .form-group {
-            margin-bottom: 1rem;
-        }
-        .bordered {
-            margin-bottom: 2rem;
-            padding: 1rem;
-            border: 1px solid #dee2e6;
-            border-radius: .5rem;
-        }
-        .tuner {
-            margin-bottom: 2rem;  /* Increased margin-bottom */
-            padding: 1rem;
-            padding-bottom: 2rem;
-            border: 1px solid #dee2e6;
-            border-radius: .5rem;
-        }
-        .tuner-header {
-            font-weight: bold;
-            margin-bottom: .5rem;
-            font-size: 1.25rem;  /* Increased font size */
-        }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Config — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
     <script>
         let tunerCount = {{len .Tuners}};
         function addTuner() {
             tunerCount++;
             let html = `
-            <div class="tuner">
-                <div class="tuner-header">Tuner ${tunerCount}</div>
-                <div class="form-group">
+            <div class="tuner-card">
+                <div class="tuner-card-header">
+                    <span class="tuner-number">${tunerCount}</span>
+                    <h3>Tuner ${tunerCount}</h3>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteTuner(this)">Delete</button>
+                </div>
+                <div class="pair">
+                    <div class="field">
+                        <label>Tuner IP <span class="muted">(device)</span></label>
+                        <input type="text" name="TUNER${tunerCount}_IP" value="" placeholder="hostname:5555">
+                    </div>
+                    <div class="pair-link">⇄</div>
+                    <div class="field">
+                        <label>Encoder URL</label>
+                        <input type="text" name="ENCODER${tunerCount}_URL" value="" placeholder="http://encoder/0.ts">
+                    </div>
+                </div>
+                <div class="field">
                     <label>CMD</label>
-                    <input type="text" class="form-control" name="CMD${tunerCount}" value="">
+                    <input type="text" name="CMD${tunerCount}" value="">
                 </div>
-                <div class="form-group">
-                    <label>Encoder IP</label>
-                    <input type="text" class="form-control" name="ENCODER${tunerCount}_IP" value="">
-                </div>
-                <div class="form-group">
-                    <label>Tuner URL</label>
-                    <input type="text" class="form-control" name="TUNER${tunerCount}_URL" value="">
-                </div>
-                <button type="button" class="btn btn-danger" onclick="deleteTuner(this)">Delete</button>
             </div>`;
-            let tunersDiv = document.getElementById('tuners');
-            tunersDiv.insertAdjacentHTML('beforeend', html);
+            document.getElementById('tuners').insertAdjacentHTML('beforeend', html);
         }
         function deleteTuner(button) {
-            let div = button.parentElement;
-            div.parentElement.removeChild(div);
+            button.closest('.tuner-card').remove();
         }
         function cancelForm() {
             window.location.href = "/";
         }
     </script>
 </head>
-<body class="container mt-4">
-    <h2>Global Variables</h2>
-    <form action="/configsave" method="post">
-        <div class="bordered">
-            {{range .EnvVariables}}
-            <div class="form-group row">
-                <label class="col-sm-3 col-form-label">{{.Key}}</label>  <!-- Adjusted column size -->
-                <div class="col-sm-9">
-                    <input type="text" class="form-control" name="{{.Key}}" value="{{.Value}}">
+<body>
+    <div class="page">
+        <div class="topbar">
+            <a class="brand" href="/">
+                <img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+                <span>Configuration<small>AH4C</small></span>
+            </a>
+        </div>
+
+        <form action="/configsave" method="post">
+            <div class="card">
+                <div class="card-title">Global Variables</div>
+                {{range .EnvVariables}}
+                <div class="field-row">
+                    <label>{{.Key}}</label>
+                    <input type="text" name="{{.Key}}" value="{{.Value}}">
+                </div>
+                {{end}}
+            </div>
+
+            <div class="card">
+                <div class="card-title">Tuners <span class="muted" style="text-transform:none;letter-spacing:0;">— each card pairs a streaming device with its encoder</span></div>
+                <div id="tuners" class="tuner-grid">
+                    {{range .Tuners}}
+                    <div class="tuner-card">
+                        <div class="tuner-card-header">
+                            <span class="tuner-number">{{.Number}}</span>
+                            <h3>Tuner {{.Number}}</h3>
+                            <span class="spacer"></span>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="deleteTuner(this)">Delete</button>
+                        </div>
+                        <div class="pair">
+                            <div class="field">
+                                <label>Tuner IP <span class="muted">(device)</span></label>
+                                <input type="text" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}" placeholder="hostname:5555">
+                            </div>
+                            <div class="pair-link">⇄</div>
+                            <div class="field">
+                                <label>Encoder URL</label>
+                                <input type="text" name="ENCODER{{.Number}}_URL" value="{{.EncoderUrl}}" placeholder="http://encoder/0.ts">
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>CMD</label>
+                            <input type="text" name="CMD{{.Number}}" value="{{.Cmd}}">
+                        </div>
+                    </div>
+                    {{end}}
                 </div>
             </div>
-            {{end}}
-        </div>
-        <div class="mb-4"></div>
-        <h2>Tuners</h2>
-        <div id="tuners">
-            {{range .Tuners}}
-            <div class="tuner">
-                <div class="tuner-header">Tuner {{.Number}}</div>
-                <div class="form-group">
-                    <label>CMD</label>
-                    <input type="text" class="form-control" name="CMD{{.Number}}" value="{{.Cmd}}">
-                </div>
-                <div class="form-group">
-                    <label>Encoder URL</label>
-                    <input type="text" class="form-control" name="ENCODER{{.Number}}_URL" value="{{.EncoderUrl}}">
-                </div>
-                <div class="form-group">
-                    <label>Tuner IP</label>
-                    <input type="text" class="form-control" name="TUNER{{.Number}}_IP" value="{{.TunerIp}}">
-                </div>
-				<div style="display: flex;">
-				    <button type="button" class="btn btn-danger ml-auto" onclick="deleteTuner(this)">Delete</button>
-				</div>
+
+            <div class="btn-row">
+                <button type="button" class="btn" onClick="addTuner()">＋ Add Tuner</button>
+                <button type="submit" class="btn btn-success">Save</button>
+                <button type="button" class="btn btn-danger" onClick="cancelForm()">Cancel</button>
             </div>
-            {{end}}
-        </div>
-        <div class="mb-4">
-            <button type="button" class="btn btn-primary" onClick="addTuner()">Add Tuner</button>
-            <button type="submit" class="btn btn-success">Save</button>
-            <button type="button" class="btn btn-danger" onClick="cancelForm()">Cancel</button>
-        </div>
-    </form>
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+        </form>
+    </div>
 </body>
 </html>

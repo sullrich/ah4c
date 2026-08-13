@@ -1,55 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
-	<head>
-	    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-	    <style>
-	        body, html {
-	            height: 100%;
-	            margin: 0;
-	        }
-	        #main-container {
-	            display: flex;
-	            height: calc(100% - 40px); /* Subtracting the height of the 'Last Updated' bar */
-	        }
-	        .left-column {
-	            width: 45%;
-	            padding: 10px;
-	            overflow-y: auto; /* To make left content scrollable */
-	        }
-	        .right-column {
-	            width: 55%;
-	        }
-	        iframe {
-	            width: 100%;
-	            height: 100%;
-	        }
-	        h3 {
-	            margin: 0;
-	            padding: 10px;
-	            background: #000;
-	            color: #fff;
-	            padding: 3px;
-	        }
-	    </style>
-	</head>
-	<body>
-	    <div style="width: 100%;">
-	        <h3>Last updated: <span id="last-update"></span></h3>
-	    </div>
-	    <div id="main-container">
-	        <div class="left-column">
-				<iframe frameborder="0" style="border: none;" src="/status"></iframe>
-	        </div>
-	        <div class="right-column">
-	            <iframe frameborder="0" style="border: none;" src="/logs?notime" frameborder="0" style="border: none;"></iframe>
-	        </div>
-	    </div>
-	    <script>
-		    function fetchLogs() {
-				var now = new Date();
-	        	$('#last-update').text(now.toLocaleString());
-			}
-	        setInterval(fetchLogs, 1000); 
-	    </script>
-	</body>
+<head>
+	<meta charset="UTF-8">
+	<title>Activity &amp; Logs — AH4C</title>
+	<link rel="stylesheet" href="/static/css/ah4c.css">
+	<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+	<div class="shell">
+		<div class="pagebar">
+			<strong>Activity &amp; Logs</strong>
+			<span>Last updated: <span id="last-update"></span></span>
+			<a href="/" style="margin-left:auto;">Home</a>
+		</div>
+		<div class="shell-body">
+			<div class="split">
+				<div class="split-pane split-left">
+					<iframe src="/status"></iframe>
+				</div>
+				<div class="split-pane split-right">
+					<iframe src="/logs?notime"></iframe>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script>
+		function fetchLogs() {
+			var now = new Date();
+			$('#last-update').text(now.toLocaleString());
+		}
+		fetchLogs();
+		setInterval(fetchLogs, 1000);
+	</script>
+</body>
 </html>

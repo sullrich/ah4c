@@ -1,38 +1,51 @@
-	<!DOCTYPE html>
-	<html lang="en">
-	<head>
-		<meta charset="UTF-8">
-		<title>Stream Page</title>
-		<script src="https://unpkg.com/mpegts.js/dist/mpegts.js"></script>
-	</head>
-	<body>
-		<h2>Select Tuner:</h2>
-		<select name="tuner">
-		    {{ range .TunerIndices }}
-		        <option value="{{ . }}">Tuner {{ . }}</option>
-		    {{ end }}
-		</select>
-		<p/>
-		<video id="videoElement" controls width="600"></video>
-		<script>
-				document.getElementById("tunerSelect").addEventListener("change", function(e) {
-				var index = e.target.value;
-				var player = mpegts.createPlayer({
-					type: 'mse',
-					isLive: true,
-					url: '/video?index=' + index
-				}, {
-					isLive: true
-				});
-				var videoElement = document.getElementById('videoElement');
-				player.attachMediaElement(videoElement);
-				videoElement.addEventListener('loadedmetadata', function() {
-					// Seek to the end of the video
-					videoElement.currentTime = videoElement.duration;
-				}, { once: true });
-				player.load();
-				player.play();
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Stream Preview — AH4C</title>
+	<link rel="stylesheet" href="/static/css/ah4c.css">
+	<script src="https://unpkg.com/mpegts.js/dist/mpegts.js"></script>
+</head>
+<body>
+	<div class="page">
+		<div class="topbar">
+			<a class="brand" href="/">
+				<img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+				<span>Stream Preview<small>AH4C</small></span>
+			</a>
+		</div>
+
+		<div class="card">
+			<div class="field">
+				<label for="tunerSelect">Select Tuner</label>
+				<select name="tuner" id="tunerSelect">
+				    {{ range .TunerIndices }}
+				        <option value="{{ . }}">Tuner {{ . }}</option>
+				    {{ end }}
+				</select>
+			</div>
+			<video id="videoElement" controls></video>
+		</div>
+	</div>
+	<script>
+			document.getElementById("tunerSelect").addEventListener("change", function(e) {
+			var index = e.target.value;
+			var player = mpegts.createPlayer({
+				type: 'mse',
+				isLive: true,
+				url: '/video?index=' + index
+			}, {
+				isLive: true
 			});
-		</script>
-	</body>
-	</html>
+			var videoElement = document.getElementById('videoElement');
+			player.attachMediaElement(videoElement);
+			videoElement.addEventListener('loadedmetadata', function() {
+				// Seek to the end of the video
+				videoElement.currentTime = videoElement.duration;
+			}, { once: true });
+			player.load();
+			player.play();
+		});
+	</script>
+</body>
+</html>

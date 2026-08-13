@@ -1,37 +1,39 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>M3U Files</title>
-    <!-- Bootstrap CSS -->
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <meta charset="UTF-8">
+    <title>M3U Files — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
 </head>
-<body class="container mt-4">
+<body>
+    <div class="page">
+        <div class="topbar">
+            <a class="brand" href="/">
+                <img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+                <span>Channel M3Us<small>AH4C</small></span>
+            </a>
+        </div>
 
-    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
-        <a class="navbar-brand" href="/">M3U Files</a>
-    </nav>
+        <div class="card">
+            <div class="card-title">M3U Files</div>
+            <div class="menu-grid">
+                {{range .m3us}}
+                <a href="/editm3u/{{.}}" class="menu-item">
+                    <span class="menu-icon">📺</span>
+                    <span class="menu-label">{{.}}</span>
+                </a>
+                {{end}}
+            </div>
+        </div>
 
-    <div class="list-group mb-4">
-        {{range .m3us}}
-        <a href="/editm3u/{{.}}" class="list-group-item list-group-item-action">{{.}}</a>
-        {{end}}
+        <div class="btn-row">
+            <button class="btn btn-danger" onclick="cancel()">Cancel</button>
+        </div>
     </div>
-
-	
-    <button class="btn btn-danger" onclick="cancel()">Cancel</button> 
-
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
-
-	<script>
-
+    <script>
         function cancel() {
             window.location.href = "/";
         }
-	</script>
-	
+    </script>
 </body>
 </html>

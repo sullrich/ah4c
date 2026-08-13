@@ -621,6 +621,15 @@ func bToMb(b uint64) uint64 {
 	return (b + 1024*1024 - 1) / 1024 / 1024
 }
 
+func scrcpyPort() string {
+	for _, key := range []string{"WSCR_PORT", "SCRC_PORT"} {
+		if port := os.Getenv(key); port != "" {
+			return port
+		}
+	}
+	return "8000"
+}
+
 // Called from main()
 func run() error {
 	// Lets get to playing!
@@ -633,8 +642,7 @@ func run() error {
 	r.StaticFS("/static", http.Dir("static"))
 	r.GET("/", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
-		routes := r.Routes()
-		c.HTML(http.StatusOK, "index.html", routes)
+		c.HTML(http.StatusOK, "index.html", gin.H{"ScrcpyPort": scrcpyPort()})
 	})
 	r.GET("/routes", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
@@ -704,6 +712,14 @@ func run() error {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if n, err := strconv.Atoi(c.Query("tail")); err == nil && n > 0 {
+			lines := strings.Split(strings.TrimRight(string(content), "\n"), "\n")
+			if len(lines) > n {
+				lines = lines[len(lines)-n:]
+			}
+			c.String(http.StatusOK, "%s", strings.Join(lines, "\n"))
+			return
+		}
 		c.String(http.StatusOK, "%s", content)
 	})
 	r.GET("/logs", func(c *gin.Context) {
@@ -764,6 +780,34 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	r.POST("/api/tuner/:index/control/:action", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		if err := adbControl(tuners[index].tunerip, action); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.POST("/api/tuners/control/:action", func(c *gin.Context) {
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		for i := range tuners {
+			go adbControl(tuners[i].tunerip, action)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 	// Route for /stream - if video preview is enabled
 	r.GET("/stream", func(c *gin.Context) {
 		streamPageHandler(c)
@@ -1784,6 +1828,35 @@ func adbAudio(tunerip string) []byte {
 		return nil
 	}
 	return out
+}
+
+var adbKeycodes = map[string]string{
+	"up":     "KEYCODE_DPAD_UP",
+	"down":   "KEYCODE_DPAD_DOWN",
+	"left":   "KEYCODE_DPAD_LEFT",
+	"right":  "KEYCODE_DPAD_RIGHT",
+	"select": "KEYCODE_DPAD_CENTER",
+	"back":   "KEYCODE_BACK",
+	"home":   "KEYCODE_HOME",
+	"play":   "KEYCODE_MEDIA_PLAY_PAUSE",
+	"wake":   "KEYCODE_WAKEUP",
+	"sleep":  "KEYCODE_SLEEP",
+}
+
+func adbControl(tunerip string, action string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	exec.CommandContext(ctx, "adb", "connect", tunerip).Run()
+	if action == "reboot" {
+		logger("[CONTROL] reboot -> %s", tunerip)
+		return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "reboot").Run()
+	}
+	keycode, ok := adbKeycodes[action]
+	if !ok {
+		return fmt.Errorf("unknown action %q", action)
+	}
+	logger("[CONTROL] %s -> %s", action, tunerip)
+	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
 }
 
 func audioBaseline(tunerip string) map[string]bool {

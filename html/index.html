@@ -1,52 +1,74 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AH4C</title>
-    <!-- Bootstrap CSS -->
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
-    <style>
-        body {
-            padding: 20px;
-        }
-        .navbar-brand img {
-            max-height: 100%;
-            padding: 0;h
-            margin: 0;
-        }
-        .navbar-brand img {
-            max-height: 100%;
-            padding: 0;
-            margin: 0;
-            border-radius: 50%;  /* This line will make the image rounded */
-        }
-    </style>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
 </head>
 <body>
+    <div class="page">
+        <div class="topbar">
+            <a class="brand" href="/">
+                <img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+                <span>AH4C<small>androidhdmi-for-channels</small></span>
+            </a>
+            <div class="topbar-actions">
+                <a id="device-control" class="btn btn-primary" href="#" target="_blank" rel="noopener">🕹️ Device Control</a>
+            </div>
+        </div>
 
-    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
-        <a class="navbar-brand" href="/">
-            <img src="static/logos/androidhdmi-for-channels.jpeg" width="200" alt="Androidhdmi For Channels">
-            AH4C
-        </a>
-    </nav>
-
-    <div class="list-group">
-        <a href="/status" class="list-group-item list-group-item-action">Activity</a>
-        <a href="/status/andlogs" class="list-group-item list-group-item-action">Activity & logs</a>
-        <a href="/logs" class="list-group-item list-group-item-action">Logs</a>
-        <a href="/config" class="list-group-item list-group-item-action">Edit ENV configuration & tuners</a>
-        <a href="/m3us" class="list-group-item list-group-item-action">Edit channel M3Us</a>
-        <a href="/routes" class="list-group-item list-group-item-action">Show API routes</a>
-        <a href="/env" class="list-group-item list-group-item-action">Show ENV variables and current loaded config</a>
-        <a href="/test/webhook" class="list-group-item list-group-item-action">Test alert WebHook</a>
-        <a href="/test/email" class="list-group-item list-group-item-action">Test alert E-Mail</a>
+        <div class="menu-grid">
+            <a href="/status" class="menu-item">
+                <span class="menu-icon">📡</span>
+                <span class="menu-label">Activity</span>
+                <span class="menu-desc">Tuners, streams, system stats &amp; charts</span>
+            </a>
+            <a href="/status/andlogs" class="menu-item">
+                <span class="menu-icon">🖥️</span>
+                <span class="menu-label">Activity &amp; Logs</span>
+                <span class="menu-desc">Side-by-side dashboard and live log view</span>
+            </a>
+            <a href="/logs" class="menu-item">
+                <span class="menu-icon">📜</span>
+                <span class="menu-label">Logs</span>
+                <span class="menu-desc">Live, colorized application log</span>
+            </a>
+            <a href="/config" class="menu-item">
+                <span class="menu-icon">⚙️</span>
+                <span class="menu-label">Configuration</span>
+                <span class="menu-desc">Edit ENV settings and tuner ⇄ encoder mappings</span>
+            </a>
+            <a href="/m3us" class="menu-item">
+                <span class="menu-icon">📺</span>
+                <span class="menu-label">Channel M3Us</span>
+                <span class="menu-desc">Edit channel lineup files</span>
+            </a>
+            <a href="/routes" class="menu-item">
+                <span class="menu-icon">🧭</span>
+                <span class="menu-label">API Routes</span>
+                <span class="menu-desc">All registered HTTP endpoints</span>
+            </a>
+            <a href="/env" class="menu-item">
+                <span class="menu-icon">🔤</span>
+                <span class="menu-label">Environment</span>
+                <span class="menu-desc">ENV variables and loaded config</span>
+            </a>
+            <a href="/test/webhook" class="menu-item">
+                <span class="menu-icon">🪝</span>
+                <span class="menu-label">Test WebHook</span>
+                <span class="menu-desc">Send a test alert to your webhook</span>
+            </a>
+            <a href="/test/email" class="menu-item">
+                <span class="menu-icon">✉️</span>
+                <span class="menu-label">Test E-Mail</span>
+                <span class="menu-desc">Send a test alert e-mail</span>
+            </a>
+        </div>
     </div>
-
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
-
+    <script>
+        document.getElementById('device-control').href =
+            'http://' + window.location.hostname + ':{{ .ScrcpyPort }}/';
+    </script>
 </body>
 </html>
