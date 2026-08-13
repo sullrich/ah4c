@@ -718,6 +718,11 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   overflow-wrap: break-word;
 }
 
+@media (max-width: 560px) {
+  .tuner-pairing { grid-template-columns: 1fr; gap: 0.45rem; }
+  .tuner-pairing .pair-link { display: none; }
+}
+
 .tuner-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 /* --------------------------------------------------------------------------
