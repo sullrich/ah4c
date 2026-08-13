@@ -53,7 +53,7 @@ var (
 // Misc
 var (
 	envdebug     bool = true
-	allowPreview bool = false
+	allowPreview bool = true
 )
 
 // /status page reader handling
@@ -1081,8 +1081,8 @@ func loadenv() {
 	}
 	// Get the proxy IP address used to rewrite m3u ip addresses
 	IPADDRESS := os.Getenv("IPADDRESS")
-	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "TRUE" {
-		allowPreview = true
+	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "FALSE" {
+		allowPreview = false
 	}
 	logger("[ENV] IPADDRESS                  %s", IPADDRESS)
 	logger("[ENV] ALERT_SMTP_SERVER          %s", os.Getenv("ALERT_SMTP_SERVER"))

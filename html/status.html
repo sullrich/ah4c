@@ -23,7 +23,7 @@
                 <div class="stat-grid" id="systemStats"></div>
             </div>
             <div class="card">
-                <div class="card-title"><span class="live-dot"></span> DVR Activity <span id="activity" class="muted" style="text-transform:none;letter-spacing:0;"></span></div>
+                <div class="card-title"><span class="live-dot"></span> DVR Activity <span id="activity" class="hint"></span></div>
                 <div class="activity-feed">
                     <table id="activityTable"></table>
                 </div>
@@ -34,9 +34,9 @@
             <div class="card-title">
                 Tuners
                 <span class="topbar-actions">
-                    <button class="btn btn-sm" onclick="controlAll('wake')">⏰ Wake All</button>
-                    <button class="btn btn-sm" onclick="controlAll('sleep')">🌙 Sleep All</button>
-                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot ALL tuner devices?'))controlAll('reboot')">🔄 Reboot All</button>
+                    <button class="btn btn-sm" onclick="controlAll('wake')">Wake all</button>
+                    <button class="btn btn-sm" onclick="controlAll('sleep')">Sleep all</button>
+                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot ALL tuner devices?'))controlAll('reboot')">Reboot all</button>
                 </span>
             </div>
             <div class="tuner-status-grid" id="tunerGrid"></div>
@@ -70,29 +70,29 @@
             <div class="modal-head">
                 <span class="tuner-number" id="modalTunerNumber"></span>
                 <h3 id="modalTitle">Tuner</h3>
-                <button class="btn btn-sm modal-close" onclick="closeTunerModal()">✕ Close</button>
+                <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
             </div>
             <video id="modalVideo" controls muted></video>
-            <p class="modal-hint" id="modalHint">Live preview requires ALLOW_DEBUG_VIDEO_PREVIEW=TRUE and an active stream.</p>
+            <p class="modal-hint" id="modalHint">Live preview appears while this tuner is actively streaming.</p>
             <div class="remote">
                 <div class="remote-dpad">
                     <span></span>
-                    <button class="btn" onclick="sendKey('up')" title="Up">▲</button>
+                    <button class="btn" onclick="sendKey('up')" title="Up"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg></button>
                     <span></span>
-                    <button class="btn" onclick="sendKey('left')" title="Left">◀</button>
+                    <button class="btn" onclick="sendKey('left')" title="Left"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 6 8 12 14 18"/></svg></button>
                     <button class="btn dpad-center" onclick="sendKey('select')" title="Select">OK</button>
-                    <button class="btn" onclick="sendKey('right')" title="Right">▶</button>
+                    <button class="btn" onclick="sendKey('right')" title="Right"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 6 16 12 10 18"/></svg></button>
                     <span></span>
-                    <button class="btn" onclick="sendKey('down')" title="Down">▼</button>
+                    <button class="btn" onclick="sendKey('down')" title="Down"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 10 12 16 18 10"/></svg></button>
                     <span></span>
                 </div>
                 <div class="remote-keys">
-                    <button class="btn btn-sm" onclick="sendKey('back')">↩ Back</button>
-                    <button class="btn btn-sm" onclick="sendKey('home')">🏠 Home</button>
-                    <button class="btn btn-sm" onclick="sendKey('play')">⏯ Play/Pause</button>
-                    <button class="btn btn-sm" onclick="sendKey('wake')">⏰ Wake</button>
-                    <button class="btn btn-sm" onclick="sendKey('sleep')">🌙 Sleep</button>
-                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot this device?'))sendKey('reboot')">🔄 Reboot</button>
+                    <button class="btn btn-sm" onclick="sendKey('back')">Back</button>
+                    <button class="btn btn-sm" onclick="sendKey('home')">Home</button>
+                    <button class="btn btn-sm" onclick="sendKey('play')">Play / Pause</button>
+                    <button class="btn btn-sm" onclick="sendKey('wake')">Wake</button>
+                    <button class="btn btn-sm" onclick="sendKey('sleep')">Sleep</button>
+                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot this device?'))sendKey('reboot')">Reboot</button>
                 </div>
             </div>
         </div>
@@ -227,10 +227,10 @@
 		                statTile('CPU', `${data.CPU}<small>%</small>`) +
 		                statTile('Memory', `${data.Memory}<small>%</small>`) +
 		                statTile('Disk', `${data.Disk}<small>%</small>`) +
-		                statTile('Net In', `${data.NetRecv}<small> bytes</small>`) +
-		                statTile('Net Out', `${data.NetSent}<small> bytes</small>`) +
-		                statTile('Net In', `${networkInMegabits}<small> Mbps</small>`) +
-		                statTile('Net Out', `${networkOutMegabits}<small> Mbps</small>`);
+		                statTile('Net In (total)', `${data.NetRecv}<small> bytes</small>`) +
+		                statTile('Net Out (total)', `${data.NetSent}<small> bytes</small>`) +
+		                statTile('Net In (rate)', `${networkInMegabits}<small> Mbps</small>`) +
+		                statTile('Net Out (rate)', `${networkOutMegabits}<small> Mbps</small>`);
 
 					if(data.GPUCPUUsage) {
 						systemStatsHtml +=
@@ -267,7 +267,7 @@
 		                            </div>
 		                        </div>
 		                        <div class="tuner-actions">
-		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">👁 View &amp; Control</button>
+		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
 		                        </div>
 		                    </div>
 		                `;

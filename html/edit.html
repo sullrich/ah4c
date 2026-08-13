@@ -4,20 +4,15 @@
     <meta charset="UTF-8">
     <title>Text Editor — AH4C</title>
     <link rel="stylesheet" href="/static/css/ah4c.css">
-    <style>
-        textarea {
-            height: calc(100vh - 130px);
-        }
-    </style>
 </head>
 <body>
     <div class="page page--wide">
-        <div class="pagebar" style="position:static;border-radius:var(--radius-sm);margin-bottom:0.8rem;">
+        <div class="pagebar pagebar--inline">
             <strong>Text Editor</strong>
-            <a href="/" style="margin-left:auto;">Home</a>
+            <a href="/" class="push-right">Home</a>
         </div>
         <form action="/save" method="POST">
-            <textarea name="content">{{ .content }}</textarea>
+            <textarea name="content" class="editor">{{ .content }}</textarea>
             <div class="btn-row">
                 <input type="submit" class="btn btn-success" value="Save">
             </div>

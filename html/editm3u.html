@@ -51,14 +51,14 @@
                     </tbody>
                 </table>
             </div>
-            <p class="muted small" style="margin:0.8rem 0 0;">Total Channels: {{ len .entries }}</p>
+            <p class="footnote">Total channels: {{ len .entries }}</p>
         </div>
 
         <div class="btn-row">
             <button class="btn btn-success" onclick="saveData()">Save</button>
             <button class="btn btn-danger" onclick="cancel()">Cancel</button>
-            <span style="margin-left:auto;">
-                <button class="btn btn-primary" onclick="addRow()">＋ Add Channel</button>
+            <span class="push-right">
+                <button class="btn btn-primary" onclick="addRow()">Add channel</button>
             </span>
         </div>
     </div>
