@@ -429,6 +429,8 @@ select:focus {
   margin-bottom: 0.8rem;
 }
 
+.pair .field { margin-bottom: 0; }
+
 .pair-link {
   display: flex;
   align-items: center;
