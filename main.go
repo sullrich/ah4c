@@ -370,20 +370,17 @@ func parseCommand(cmd string) []string {
 
 // Tune into a application or network encoder
 func tune(idx, channel string) (io.ReadCloser, error) {
+	tunerLock.Lock()
+	defer tunerLock.Unlock()
 	intidx, _ := strconv.Atoi(idx)
 	var t *tuner
-	for i := range tuners {
+	for i, ti := range tuners {
 		if i == intidx || idx == "" || idx == "auto" {
-			tunerLock.Lock()
-			if tuners[i].active {
-				tunerLock.Unlock()
+			if ti.active {
 				logger("Tuner %d is active - skipping", i)
 				continue
 			}
 			t = &tuners[i]
-			t.active = true
-			t.index = i
-			tunerLock.Unlock()
 			// Handle application encoder
 			if t.cmd != "" {
 				logger("Attempting application tune for device %s %v", t.cmd, idx)
@@ -395,7 +392,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				err := cmd.Start()
 				if err != nil {
 					logger("[ERR] Failed to run command %s", err)
-					releaseTuner(t)
+					t.active = false
 					continue
 				}
 				go func() {
@@ -404,9 +401,11 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				}()
 				if err := execute(t.pre, t.tunerip, channel); err != nil {
 					logger("[ERR] Failed to run pre script: %v", err)
-					releaseTuner(t)
+					t.active = false
 					continue
 				}
+				t.active = true
+				t.index = i
 				return &reader{
 					ReadCloser: pipeReader,
 					channel:    channel,
@@ -419,7 +418,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			tuneStart := time.Now()
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
-				releaseTuner(t)
+				t.active = false
 				continue
 			}
 			var ready chan struct{}
@@ -449,9 +448,11 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				}
 				if err != nil {
 					logger("[ERR] Failed to start ffmpeg for PLAYBACK_DELAY: %v", err)
-					releaseTuner(t)
+					t.active = false
 					continue
 				}
+				t.active = true
+				t.index = i
 				return &reader{
 					ReadCloser: pipe,
 					channel:    channel,
@@ -462,12 +463,12 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			resp, err := http.Get(t.url)
 			if err != nil {
 				logger("[ERR] Failed to fetch source: %v", err)
-				releaseTuner(t)
+				t.active = false
 				continue
 			} else if resp.StatusCode != 200 {
 				logger("[ERR] Failed to fetch source: %v", resp.Status)
 				resp.Body.Close()
-				releaseTuner(t)
+				t.active = false
 				continue
 			}
 			// NULL_FRAME_INSERTION=TRUE (case-insensitive): fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
@@ -488,6 +489,8 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			if ready != nil {
 				body = newGateReader(body, ready)
 			}
+			t.active = true
+			t.index = i
 			r := &reader{
 				ReadCloser: body,
 				channel:    channel,
@@ -499,12 +502,6 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 		}
 	}
 	return nil, fmt.Errorf("device(s) not available")
-}
-
-func releaseTuner(t *tuner) {
-	tunerLock.Lock()
-	t.active = false
-	tunerLock.Unlock()
 }
 
 // Custom execute command with timing stats
