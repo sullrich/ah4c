@@ -28,6 +28,27 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+[data-theme="light"] {
+  --bg: #f2f3f6;
+  --bg-raised: #ffffff;
+  --surface: #ffffff;
+  --surface-hover: #e9ebef;
+  --border: #d2d7de;
+  --border-soft: #e2e5eb;
+  --text: #1b1f26;
+  --text-muted: #5a6370;
+  --text-faint: #8b939f;
+  --accent: #a8761a;
+  --accent-dim: #8f620e;
+  --accent-soft: rgba(168, 118, 26, 0.10);
+  --live: #1d9e4c;
+  --live-soft: rgba(29, 158, 76, 0.10);
+  --danger: #c74534;
+  --danger-soft: rgba(199, 69, 52, 0.08);
+  --warning: #a8761a;
+  --info: #2673ad;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -293,6 +314,10 @@ h3 { font-size: 0.95rem; }
 
 .btn-sm { padding: 0.26rem 0.6rem; font-size: 0.76rem; }
 .btn-icon { padding: 0.3rem 0.45rem; line-height: 0; }
+
+.theme-toggle .icon-moon { display: none; }
+[data-theme="light"] .theme-toggle .icon-sun { display: none; }
+[data-theme="light"] .theme-toggle .icon-moon { display: block; }
 
 .btn-row {
   display: flex;
