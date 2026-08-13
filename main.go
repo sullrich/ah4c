@@ -1405,6 +1405,25 @@ func apiStatusHandler(c *gin.Context) {
 }
 
 // Add a new reader to activeReaders
+func addReader(r *reader) {
+	readersLock.Lock()
+	defer readersLock.Unlock()
+	r.startedAt = time.Now()
+	activeReaders = append(activeReaders, r)
+}
+
+// Remove a reader from activeReaders
+func removeReader(r *reader) {
+	readersLock.Lock()
+	defer readersLock.Unlock()
+	for i, reader := range activeReaders {
+		if reader == r {
+			activeReaders = append(activeReaders[:i], activeReaders[i+1:]...)
+			break
+		}
+	}
+}
+
 func channelName(channel string) string {
 	if channel == "" {
 		return ""
@@ -1435,25 +1454,6 @@ func channelName(channel string) string {
 		}
 	}
 	return ""
-}
-
-func addReader(r *reader) {
-	readersLock.Lock()
-	defer readersLock.Unlock()
-	r.startedAt = time.Now()
-	activeReaders = append(activeReaders, r)
-}
-
-// Remove a reader from activeReaders
-func removeReader(r *reader) {
-	readersLock.Lock()
-	defer readersLock.Unlock()
-	for i, reader := range activeReaders {
-		if reader == r {
-			activeReaders = append(activeReaders[:i], activeReaders[i+1:]...)
-			break
-		}
-	}
 }
 
 func parseEnvFile(filePath string) ConfigData {
