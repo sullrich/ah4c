@@ -547,7 +547,7 @@
 					], NEToptions);
 
 					// Toggle points on hover
-					$("#cpu-usage").on("mouseenter", function() {
+					$("#cpu-usage").off("mouseenter").on("mouseenter", function() {
 					    CPUoptions.points.show = true;
 						showplotscpu = true;
 					    plot = $.plot("#cpu-usage", [
@@ -556,7 +556,7 @@
 					    ], CPUoptions);
 					});
 
-					$("#cpu-usage").on("mouseleave", function() {
+					$("#cpu-usage").off("mouseleave").on("mouseleave", function() {
 					    CPUoptions.points.show = false;
 						showplotscpu = false;
 					    plot = $.plot("#cpu-usage", [
@@ -566,7 +566,7 @@
 					});
 
 					// Toggle points on hover
-					$("#network-io").on("mouseenter", function() {
+					$("#network-io").off("mouseenter").on("mouseenter", function() {
 					    NEToptions.points.show = true;
 						showplotsnet = true;
 					    plot = $.plot("#network-io", [
@@ -575,7 +575,7 @@
 					    ], NEToptions);
 					});
 
-					$("#network-io").on("mouseleave", function() {
+					$("#network-io").off("mouseleave").on("mouseleave", function() {
 					    NEToptions.points.show = false;
 						showplotsnet = false;
 					    plot = $.plot("#network-io", [
