@@ -139,7 +139,7 @@
         function setModalHint() {
             if (modalIndex === null) return;
             $('#modalHint').text(tunerActive[modalIndex]
-                ? 'Streaming ' + (tunerLabels[modalIndex] || 'a channel') + '. Preview opens a second encoder connection, which single-client encoders may not allow.'
+                ? 'Streaming ' + (tunerLabels[modalIndex] || 'a channel') + '.'
                 : 'Tuner is idle. This is the device\'s current HDMI output, not an active tune.');
         }
 
