@@ -723,6 +723,11 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   .tuner-pairing .pair-link { display: none; }
 }
 
+@media (max-width: 760px) {
+  .log-viewport { font-size: 0.95rem; }
+  .activity-feed { font-size: 0.85rem; }
+}
+
 .tuner-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 /* --------------------------------------------------------------------------
