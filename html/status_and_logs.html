@@ -33,6 +33,10 @@
 					<iframe src="/status"></iframe>
 				</div>
 				<div class="split-pane split-right">
+					<button class="split-handle" onclick="toggleLogs()" title="Expand logs">
+						<svg id="triUp" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg>
+						<svg id="triDown" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+					</button>
 					<iframe src="/logs?notime"></iframe>
 				</div>
 			</div>
@@ -44,6 +48,8 @@
 			document.getElementById('iconExpand').classList.toggle('hidden', expanded);
 			document.getElementById('iconCollapse').classList.toggle('hidden', !expanded);
 			document.getElementById('expandLogs').title = expanded ? 'Show activity' : 'Expand logs';
+			document.getElementById('triUp').classList.toggle('hidden', expanded);
+			document.getElementById('triDown').classList.toggle('hidden', !expanded);
 		}
 		function fetchLogs() {
 			var now = new Date();

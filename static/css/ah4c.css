@@ -627,11 +627,29 @@ table.table {
 .split-left { width: 45%; border-right: 1px solid var(--border-soft); }
 .split-right { width: 55%; }
 
+.split-handle {
+  display: none;
+  width: 100%;
+  padding: 0.2rem 0;
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  line-height: 0;
+  cursor: pointer;
+}
+
+.split-handle:hover { color: var(--text); background: var(--surface-hover); }
+
 @media (max-width: 860px) {
   .split { flex-direction: column; }
   .split-left, .split-right { width: 100%; }
-  .split-left { height: 55%; border-right: none; border-bottom: 1px solid var(--border-soft); }
-  .split-right { height: 45%; }
+  .split-left { height: 55%; border-right: none; }
+  .split-right { height: 45%; display: flex; flex-direction: column; }
+  .split-right iframe { flex: 1; height: auto; min-height: 0; }
+  .split-handle { display: block; }
+  #expandLogs { display: none; }
 }
 
 .split.logs-max .split-left { display: none; }
