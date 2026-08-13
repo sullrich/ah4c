@@ -94,6 +94,7 @@ type reader struct {
 	gateReady     chan struct{}
 	gateDone      chan struct{}
 	gateStop      sync.Once
+	startedAt     time.Time
 }
 
 // Create a global file object to write logs to
@@ -111,6 +112,7 @@ type ExportedReader struct {
 	T        int
 	Channel  string
 	Started  string
+	Elapsed  int64
 	FileName string
 	Cmd      string
 }
@@ -1332,6 +1334,7 @@ func apiStatusHandler(c *gin.Context) {
 			T:        r.t.index,
 			Channel:  r.channel,
 			Started:  fmt.Sprintf("%v", r.started),
+			Elapsed:  int64(time.Since(r.startedAt).Seconds()),
 			FileName: fileName,
 			Cmd:      cmdString,
 		}
@@ -1403,6 +1406,7 @@ func apiStatusHandler(c *gin.Context) {
 func addReader(r *reader) {
 	readersLock.Lock()
 	defer readersLock.Unlock()
+	r.startedAt = time.Now()
 	activeReaders = append(activeReaders, r)
 }
 

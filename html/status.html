@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tuner Status — AH4C</title>
-    <link rel="stylesheet" href="/static/css/ah4c.css?v=2">
-    <script src="/static/js/theme.js?v=2"></script>
+    <link rel="stylesheet" href="/static/css/ah4c.css?v=3">
+    <script src="/static/js/theme.js?v=3"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.time.min.js"></script>
@@ -230,6 +230,21 @@
             $.post('/api/tuners/control/' + action);
         }
 
+        function fmtElapsed(s) {
+            var h = Math.floor(s / 3600);
+            var m = Math.floor((s % 3600) / 60);
+            var sec = s % 60;
+            return h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+        }
+
+        setInterval(function() {
+            var now = Math.floor(Date.now() / 1000);
+            $('.tune-timer').each(function() {
+                var started = parseInt(this.getAttribute('data-started'), 10);
+                if (started > 0) this.textContent = fmtElapsed(Math.max(0, now - started));
+            });
+        }, 1000);
+
         $('#tunerModal').on('click', function(e) {
             if (e.target === this) closeTunerModal();
         });
@@ -315,11 +330,17 @@
 
 		            // Populate Tuner cards
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
+		            var readerByTuner = {};
+		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });
 		            var tunerHtml = '';
 		            $.each(data.Tuners, function(index, tuner) {
 		                var badge = tuner.Active
 		                    ? `<span class="badge badge-active">Streaming</span>`
 		                    : `<span class="badge badge-idle">Idle</span>`;
+		                var reader = readerByTuner[index];
+		                if (tuner.Active && reader && reader.Elapsed >= 0) {
+		                    badge += `<span class="tune-timer" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}" title="Tune duration">${fmtElapsed(reader.Elapsed)}</span>`;
+		                }
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
 		                        <div class="tuner-status-head">

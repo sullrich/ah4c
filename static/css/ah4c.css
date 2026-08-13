@@ -520,6 +520,17 @@ table.table {
 .badge-active { background: var(--live-soft); border-color: rgba(82, 210, 115, 0.3); color: var(--live); }
 .badge-idle { color: var(--text-faint); border-color: var(--border-soft); }
 
+.tune-timer {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid rgba(82, 210, 115, 0.3);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--live);
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------------------
    Status page — stat tiles and charts
    -------------------------------------------------------------------------- */
