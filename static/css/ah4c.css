@@ -754,15 +754,16 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 
 .tuner-pairing {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 0.5rem;
-  align-items: start;
-  margin-bottom: 0.7rem;
+  grid-template-areas:
+    "dl . el"
+    "dv ar ev";
+  grid-template-columns: fit-content(45%) auto minmax(0, 1fr);
+  column-gap: 0.9rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
 }
 
-.tuner-endpoint { min-width: 0; }
-
-.tuner-endpoint .endpoint-label {
+.endpoint-label {
   font-size: 0.62rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -770,23 +771,34 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   color: var(--text-faint);
 }
 
-.tuner-endpoint .endpoint-value {
+.endpoint-value {
   font-family: var(--mono);
   font-size: 0.74rem;
   color: var(--text);
   overflow-wrap: break-word;
+  min-width: 0;
 }
 
+.lbl-device { grid-area: dl; }
+.lbl-encoder { grid-area: el; }
+.val-device { grid-area: dv; }
+.val-encoder { grid-area: ev; }
+
 .tuner-pairing .pair-link {
+  grid-area: ar;
   height: auto;
-  align-self: stretch;
   display: flex;
   align-items: center;
 }
 
 @media (max-width: 560px) {
-  .tuner-pairing { grid-template-columns: 1fr; gap: 0.45rem; }
+  .tuner-pairing {
+    grid-template-areas: "dl" "dv" "el" "ev";
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.1rem;
+  }
   .tuner-pairing .pair-link { display: none; }
+  .tuner-pairing .lbl-encoder { margin-top: 0.5rem; }
 }
 
 @media (max-width: 760px) {

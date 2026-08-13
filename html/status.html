@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tuner Status — AH4C</title>
-    <link rel="stylesheet" href="/static/css/ah4c.css">
-    <script src="/static/js/theme.js"></script>
+    <link rel="stylesheet" href="/static/css/ah4c.css?v=2">
+    <script src="/static/js/theme.js?v=2"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.time.min.js"></script>
@@ -328,15 +328,11 @@
 		                            ${badge}
 		                        </div>
 		                        <div class="tuner-pairing">
-		                            <div class="tuner-endpoint">
-		                                <div class="endpoint-label">Device</div>
-		                                <div class="endpoint-value">${esc(tuner.Tunerip) || '—'}</div>
-		                            </div>
+		                            <div class="endpoint-label lbl-device">Device</div>
+		                            <div class="endpoint-label lbl-encoder">Encoder</div>
+		                            <div class="endpoint-value val-device">${esc(tuner.Tunerip) || '—'}</div>
 		                            <div class="pair-link">⇄</div>
-		                            <div class="tuner-endpoint">
-		                                <div class="endpoint-label">Encoder</div>
-		                                <div class="endpoint-value">${esc(tuner.Url) || '—'}</div>
-		                            </div>
+		                            <div class="endpoint-value val-encoder">${esc(tuner.Url) || '—'}</div>
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
