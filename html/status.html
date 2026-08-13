@@ -239,7 +239,7 @@
 
         setInterval(function() {
             var now = Math.floor(Date.now() / 1000);
-            $('.tune-timer').each(function() {
+            $('.tune-clock').each(function() {
                 var started = parseInt(this.getAttribute('data-started'), 10);
                 if (started > 0) this.textContent = fmtElapsed(Math.max(0, now - started));
             });
@@ -339,7 +339,8 @@
 		                    : `<span class="badge badge-idle">Idle</span>`;
 		                var reader = readerByTuner[index];
 		                if (tuner.Active && reader && reader.Elapsed >= 0) {
-		                    badge += `<span class="tune-timer" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}" title="Tune duration">${fmtElapsed(reader.Elapsed)}</span>`;
+		                    var chan = reader.Channel ? esc(reader.Channel) + ' · ' : '';
+		                    badge += `<span class="tune-timer" title="Channel and tune duration">${chan}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
@@ -380,7 +381,7 @@
 		                    <tr>
 		                        <td class="num">${reader.T}</td>
 		                        <td>${esc(reader.Channel)}</td>
-		                        <td><span class="tune-timer" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></td>
+		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
 		                        <td class="mono">${esc(reader.FileName)}</td>
 		                        <td class="mono">${esc(reader.Cmd)}</td>
 		                    </tr>
