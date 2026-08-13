@@ -53,7 +53,7 @@ var (
 // Misc
 var (
 	envdebug     bool = true
-	allowPreview bool = true
+	allowPreview bool = false
 )
 
 // /status page reader handling
@@ -797,6 +797,31 @@ func run() error {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	r.GET("/api/tuner/:index/preview", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		if tuners[index].url == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no encoder url for this tuner"})
+			return
+		}
+		req, err := http.NewRequestWithContext(c.Request.Context(), "GET", tuners[index].url, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		c.Header("Content-Type", "video/mp2t")
+		c.Writer.WriteHeaderNow()
+		io.Copy(c.Writer, resp.Body)
+	})
 	r.POST("/api/tuners/control/:action", func(c *gin.Context) {
 		action := c.Param("action")
 		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
@@ -1081,8 +1106,8 @@ func loadenv() {
 	}
 	// Get the proxy IP address used to rewrite m3u ip addresses
 	IPADDRESS := os.Getenv("IPADDRESS")
-	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "FALSE" {
-		allowPreview = false
+	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "TRUE" {
+		allowPreview = true
 	}
 	logger("[ENV] IPADDRESS                  %s", IPADDRESS)
 	logger("[ENV] ALERT_SMTP_SERVER          %s", os.Getenv("ALERT_SMTP_SERVER"))

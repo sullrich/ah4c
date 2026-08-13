@@ -12,6 +12,14 @@
                 <img src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
                 <span>Channel M3Us<small>AH4C</small></span>
             </a>
+            <nav class="nav">
+                <a href="/">Home</a>
+                <a href="/status">Activity</a>
+                <a href="/status/andlogs">Activity &amp; Logs</a>
+                <a href="/logs">Logs</a>
+                <a href="/m3us" class="active">M3Us</a>
+                <a href="/routes">Routes</a>
+            </nav>
         </div>
 
         <div class="card">
@@ -19,8 +27,8 @@
             <div class="menu-grid">
                 {{range .m3us}}
                 <a href="/editm3u/{{.}}" class="menu-item">
-                    <span class="menu-icon">📺</span>
-                    <span class="menu-label">{{.}}</span>
+                    <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
+                    <span class="menu-label mono">{{.}}</span>
                 </a>
                 {{end}}
             </div>

@@ -73,7 +73,7 @@
                 <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
             </div>
             <video id="modalVideo" controls muted></video>
-            <p class="modal-hint" id="modalHint">Live preview appears while this tuner is actively streaming.</p>
+            <p class="modal-hint" id="modalHint">Live view direct from this tuner's encoder.</p>
             <div class="remote">
                 <div class="remote-dpad">
                     <span></span>
@@ -130,7 +130,7 @@
             player = mpegts.createPlayer({
                 type: 'mse',
                 isLive: true,
-                url: '/video?index=' + index
+                url: '/api/tuner/' + index + '/preview'
             }, {
                 isLive: true
             });

@@ -107,6 +107,30 @@ h3 { font-size: 0.95rem; }
   gap: 0.5rem;
 }
 
+.topbar .nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-wrap: wrap;
+}
+
+.topbar .nav a {
+  padding: 0.32rem 0.7rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.topbar .nav a:hover { color: var(--text); background: var(--surface-hover); }
+
+.topbar .nav a.active {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+
 /* Slim header used on embedded/iframe pages */
 .pagebar {
   display: flex;
