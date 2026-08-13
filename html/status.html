@@ -339,8 +339,9 @@
 		                    : `<span class="badge badge-idle">Idle</span>`;
 		                var reader = readerByTuner[index];
 		                if (tuner.Active && reader && reader.Elapsed >= 0) {
-		                    var chan = reader.Channel ? esc(reader.Channel) + ' · ' : '';
-		                    badge += `<span class="tune-timer" title="Channel and tune duration">${chan}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
+		                    var chan = reader.Name ? reader.Name + ' ' + (reader.Channel || '') : (reader.Channel || '');
+		                    var prefix = chan.trim() ? esc(chan.trim()) + ' · ' : '';
+		                    badge += `<span class="tune-timer" title="Channel and tune duration">${prefix}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
@@ -380,7 +381,7 @@
 		                readerStatusHtml += `
 		                    <tr>
 		                        <td class="num">${reader.T}</td>
-		                        <td>${esc(reader.Channel)}</td>
+		                        <td>${esc(reader.Name ? reader.Name + ' (' + reader.Channel + ')' : reader.Channel)}</td>
 		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
 		                        <td class="mono">${esc(reader.FileName)}</td>
 		                        <td class="mono">${esc(reader.Cmd)}</td>

@@ -111,6 +111,7 @@ type ExportedTuner struct {
 type ExportedReader struct {
 	T        int
 	Channel  string
+	Name     string
 	Started  string
 	Elapsed  int64
 	FileName string
@@ -1333,6 +1334,7 @@ func apiStatusHandler(c *gin.Context) {
 		exportedReaders[i] = ExportedReader{
 			T:        r.t.index,
 			Channel:  r.channel,
+			Name:     channelName(r.channel),
 			Started:  fmt.Sprintf("%v", r.started),
 			Elapsed:  int64(time.Since(r.startedAt).Seconds()),
 			FileName: fileName,
@@ -1403,6 +1405,38 @@ func apiStatusHandler(c *gin.Context) {
 }
 
 // Add a new reader to activeReaders
+func channelName(channel string) string {
+	if channel == "" {
+		return ""
+	}
+	files, err := os.ReadDir("m3u")
+	if err != nil {
+		return ""
+	}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".m3u") {
+			continue
+		}
+		content, err := os.ReadFile("m3u/" + f.Name())
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(content), "\n")
+		for i := 0; i < len(lines)-1; i++ {
+			line := strings.TrimSpace(lines[i])
+			if !strings.HasPrefix(line, "#EXTINF:") {
+				continue
+			}
+			if strings.HasSuffix(strings.TrimSpace(lines[i+1]), "/"+channel) {
+				if idx := strings.LastIndex(line, ","); idx != -1 {
+					return strings.TrimSpace(line[idx+1:])
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func addReader(r *reader) {
 	readersLock.Lock()
 	defer readersLock.Unlock()
