@@ -132,6 +132,7 @@
         }
 
         function openTunerModal(index) {
+            previewRetries = 0;
             modalIndex = index;
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
@@ -148,6 +149,7 @@
         var stallTimer = null;
         var lastFrames = -1;
         var stallTicks = 0;
+        var previewRetries = 0;
 
         function startPreview(index) {
             stopPreview();
@@ -192,11 +194,12 @@
                 if (frames === lastFrames) {
                     stallTicks++;
                     if (stallTicks >= 3) {
-                        startPreview(modalIndex);
+                        restartPreview();
                         return;
                     }
                 } else {
                     stallTicks = 0;
+                    previewRetries = 0;
                 }
                 lastFrames = frames;
             }, 2000);
@@ -210,9 +213,17 @@
         }
 
         function restartSoon() {
-            setTimeout(function() {
-                if (modalIndex !== null) startPreview(modalIndex);
-            }, 2000);
+            setTimeout(restartPreview, 2000);
+        }
+
+        function restartPreview() {
+            if (modalIndex === null || document.hidden) return;
+            if (++previewRetries > 5) {
+                stopPreview();
+                $('#modalHint').text('Preview gave up after repeated stalls — close and reopen to retry.');
+                return;
+            }
+            startPreview(modalIndex);
         }
 
         function sendKey(action) {
