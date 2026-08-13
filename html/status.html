@@ -92,7 +92,7 @@
                 <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
             </div>
             <video id="modalVideo" controls muted></video>
-            <p class="modal-hint" id="modalHint">Live view direct from this tuner's encoder.</p>
+            <p class="modal-hint" id="modalHint"></p>
             <div class="remote">
                 <div class="remote-dpad">
                     <span></span>
@@ -124,6 +124,8 @@
         var modalIndex = null;
         var player = null;
         var tunerIps = [];
+        var tunerActive = [];
+        var tunerLabels = [];
 
         function esc(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
@@ -131,11 +133,19 @@
             });
         }
 
+        function setModalHint() {
+            if (modalIndex === null) return;
+            $('#modalHint').text(tunerActive[modalIndex]
+                ? 'Streaming ' + (tunerLabels[modalIndex] || 'a channel') + '. Preview opens a second encoder connection, which single-client encoders may not allow.'
+                : 'Tuner is idle. This is the device\'s current HDMI output, not an active tune.');
+        }
+
         function openTunerModal(index) {
             previewRetries = 0;
             modalIndex = index;
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
+            setModalHint();
             $('#tunerModal').addClass('open');
             startPreview(index);
         }
@@ -229,11 +239,8 @@
         function sendKey(action) {
             if (modalIndex === null) return;
             $.post('/api/tuner/' + modalIndex + '/control/' + action).fail(function() {
-                var hint = $('#modalHint');
-                hint.text('Control failed — this device may not be reachable over adb.');
-                setTimeout(function() {
-                    hint.text("Live view direct from this tuner's encoder.");
-                }, 4000);
+                $('#modalHint').text('Control failed — this device may not be reachable over adb.');
+                setTimeout(setModalHint, 4000);
             });
         }
 
@@ -341,6 +348,8 @@
 
 		            // Populate Tuner cards
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
+		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
+		            tunerLabels = [];
 		            var readerByTuner = {};
 		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });
 		            var tunerHtml = '';
@@ -351,6 +360,7 @@
 		                var reader = readerByTuner[index];
 		                if (tuner.Active && reader && reader.Elapsed >= 0) {
 		                    var label = reader.Name || reader.Channel || '';
+		                    tunerLabels[index] = label;
 		                    var labelHtml = label ? `<span class="tune-label">${esc(label)}</span>` : '';
 		                    badge += `<span class="tune-timer" title="${esc(label || 'Tune duration')}">${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
