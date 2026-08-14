@@ -399,7 +399,7 @@
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
-		                            <button class="btn btn-danger btn-sm" onclick="releaseTuner(${index})">Release lock</button>
+		                            ${tuner.Active ? `<button class="btn btn-danger btn-sm" onclick="releaseTuner(${index})">Release lock</button>` : ''}
 		                        </div>
 		                    </div>
 		                `;
