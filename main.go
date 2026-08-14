@@ -838,6 +838,14 @@ func run() error {
 		c.Writer.WriteHeaderNow()
 		io.Copy(c.Writer, resp.Body)
 	})
+	r.POST("/api/tuner/:index/release", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": releaseTuner(index)})
+	})
 	r.POST("/api/tuners/control/:action", func(c *gin.Context) {
 		action := c.Param("action")
 		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
@@ -1917,6 +1925,56 @@ var adbKeycodes = map[string]string{
 	"play":   "KEYCODE_MEDIA_PLAY_PAUSE",
 	"wake":   "KEYCODE_WAKEUP",
 	"sleep":  "KEYCODE_SLEEP",
+}
+
+const stopScriptTimeout = 20 * time.Second
+
+func runStopScript(t *tuner, channel string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), stopScriptTimeout)
+	defer cancel()
+	logger("[CONTROL] stop script %s %s %s", t.stop, t.tunerip, channel)
+	out, err := exec.CommandContext(ctx, t.stop, t.tunerip, channel).CombinedOutput()
+	if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+		logger("[CONTROL] stop script output: %s", trimmed)
+	}
+	if err != nil {
+		logger("[ERR] stop script failed: %v", err)
+	}
+	return err
+}
+
+func releaseTuner(index int) string {
+	var target *reader
+	readersLock.Lock()
+	for _, ar := range activeReaders {
+		if ar.t == &tuners[index] {
+			target = ar
+			break
+		}
+	}
+	readersLock.Unlock()
+	status := "stopped"
+	if target != nil {
+		done := make(chan struct{})
+		go func() {
+			target.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(stopScriptTimeout):
+			logger("[CONTROL] tuner %d did not release in time, forcing it free", index)
+			removeReader(target)
+			status = "forced"
+		}
+	} else {
+		runStopScript(&tuners[index], "")
+	}
+	tunerLock.Lock()
+	tuners[index].active = false
+	tunerLock.Unlock()
+	logger("[CONTROL] tuner %d released (%s)", index, status)
+	return status
 }
 
 func adbControl(tunerip string, action string) error {

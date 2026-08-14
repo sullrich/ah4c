@@ -260,6 +260,13 @@
             $.post('/api/tuners/control/' + action);
         }
 
+        function releaseTuner(index) {
+            if (tunerActive[index] && !confirm('Tuner ' + index + ' is streaming. Run the stop script and release its lock?')) return;
+            $.post('/api/tuner/' + index + '/release').fail(function() {
+                alert('Release failed for tuner ' + index + ' — check the logs.');
+            });
+        }
+
         function fmtElapsed(s) {
             var h = Math.floor(s / 3600);
             var m = Math.floor((s % 3600) / 60);
@@ -392,6 +399,7 @@
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
+		                            <button class="btn btn-danger btn-sm" onclick="releaseTuner(${index})">Release lock</button>
 		                        </div>
 		                    </div>
 		                `;
