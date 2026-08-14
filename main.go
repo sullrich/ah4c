@@ -23,6 +23,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -93,6 +94,7 @@ type reader struct {
 	gateReady     chan struct{}
 	gateDone      chan struct{}
 	gateStop      sync.Once
+	startedAt     time.Time
 }
 
 // Create a global file object to write logs to
@@ -109,7 +111,9 @@ type ExportedTuner struct {
 type ExportedReader struct {
 	T        int
 	Channel  string
+	Name     string
 	Started  string
+	Elapsed  int64
 	FileName string
 	Cmd      string
 }
@@ -636,6 +640,22 @@ func run() error {
 		routes := r.Routes()
 		c.HTML(http.StatusOK, "index.html", routes)
 	})
+	scrcpyProxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:8000"})
+	r.GET("/device", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "device.html", nil)
+	})
+	r.GET("/scrcpy", func(c *gin.Context) {
+		loc := "/scrcpy/"
+		if q := c.Request.URL.RawQuery; q != "" {
+			loc += "?" + q
+		}
+		c.Redirect(http.StatusMovedPermanently, loc)
+	})
+	r.Any("/scrcpy/*proxyPath", func(c *gin.Context) {
+		c.Request.URL.Path = c.Param("proxyPath")
+		c.Request.URL.RawPath = strings.TrimPrefix(c.Request.URL.RawPath, "/scrcpy")
+		scrcpyProxy.ServeHTTP(c.Writer, c.Request)
+	})
 	r.GET("/routes", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
 		routes := r.Routes()
@@ -704,6 +724,14 @@ func run() error {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if n, err := strconv.Atoi(c.Query("tail")); err == nil && n > 0 {
+			lines := strings.Split(strings.TrimRight(string(content), "\n"), "\n")
+			if len(lines) > n {
+				lines = lines[len(lines)-n:]
+			}
+			c.String(http.StatusOK, "%s", strings.Join(lines, "\n"))
+			return
+		}
 		c.String(http.StatusOK, "%s", content)
 	})
 	r.GET("/logs", func(c *gin.Context) {
@@ -764,6 +792,80 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	r.POST("/api/tuner/:index/control/:action", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		if err := adbControl(tuners[index].tunerip, action); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/api/tuner/:index/preview", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		if tuners[index].url == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no encoder url for this tuner"})
+			return
+		}
+		req, err := http.NewRequestWithContext(c.Request.Context(), "GET", tuners[index].url, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("encoder returned %s", resp.Status)})
+			return
+		}
+		c.Header("Content-Type", "video/mp2t")
+		c.Writer.WriteHeaderNow()
+		io.Copy(c.Writer, resp.Body)
+	})
+	r.POST("/api/tuner/:index/release", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": releaseTuner(index)})
+	})
+	r.POST("/api/tuners/control/:action", func(c *gin.Context) {
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		skipped := 0
+		for i := range tuners {
+			tunerLock.Lock()
+			busy := tuners[i].active
+			tunerLock.Unlock()
+			if busy {
+				logger("[CONTROL] skipping %s for tuner %d, it is streaming", action, i)
+				skipped++
+				continue
+			}
+			go adbControl(tuners[i].tunerip, action)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "skipped": skipped})
+	})
 	// Route for /stream - if video preview is enabled
 	r.GET("/stream", func(c *gin.Context) {
 		streamPageHandler(c)
@@ -1249,7 +1351,9 @@ func apiStatusHandler(c *gin.Context) {
 		exportedReaders[i] = ExportedReader{
 			T:        r.t.index,
 			Channel:  r.channel,
+			Name:     channelName(r.channel),
 			Started:  fmt.Sprintf("%v", r.started),
+			Elapsed:  int64(time.Since(r.startedAt).Seconds()),
 			FileName: fileName,
 			Cmd:      cmdString,
 		}
@@ -1321,6 +1425,7 @@ func apiStatusHandler(c *gin.Context) {
 func addReader(r *reader) {
 	readersLock.Lock()
 	defer readersLock.Unlock()
+	r.startedAt = time.Now()
 	activeReaders = append(activeReaders, r)
 }
 
@@ -1334,6 +1439,38 @@ func removeReader(r *reader) {
 			break
 		}
 	}
+}
+
+func channelName(channel string) string {
+	if channel == "" {
+		return ""
+	}
+	files, err := os.ReadDir("m3u")
+	if err != nil {
+		return ""
+	}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".m3u") {
+			continue
+		}
+		content, err := os.ReadFile("m3u/" + f.Name())
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(content), "\n")
+		for i := 0; i < len(lines)-1; i++ {
+			line := strings.TrimSpace(lines[i])
+			if !strings.HasPrefix(line, "#EXTINF:") {
+				continue
+			}
+			if strings.HasSuffix(strings.TrimSpace(lines[i+1]), "/"+channel) {
+				if idx := strings.LastIndex(line, ","); idx != -1 {
+					return strings.TrimSpace(line[idx+1:])
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func parseEnvFile(filePath string) ConfigData {
@@ -1784,6 +1921,117 @@ func adbAudio(tunerip string) []byte {
 		return nil
 	}
 	return out
+}
+
+var adbKeycodes = map[string]string{
+	"up":     "KEYCODE_DPAD_UP",
+	"down":   "KEYCODE_DPAD_DOWN",
+	"left":   "KEYCODE_DPAD_LEFT",
+	"right":  "KEYCODE_DPAD_RIGHT",
+	"select": "KEYCODE_DPAD_CENTER",
+	"back":   "KEYCODE_BACK",
+	"home":   "KEYCODE_HOME",
+	"play":   "KEYCODE_MEDIA_PLAY_PAUSE",
+	"wake":   "KEYCODE_WAKEUP",
+	"sleep":  "KEYCODE_SLEEP",
+}
+
+const stopScriptTimeout = 20 * time.Second
+
+func runStopScript(t *tuner, channel string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), stopScriptTimeout)
+	defer cancel()
+	logger("[CONTROL] stop script %s %s %s", t.stop, t.tunerip, channel)
+	out, err := exec.CommandContext(ctx, t.stop, t.tunerip, channel).CombinedOutput()
+	if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+		logger("[CONTROL] stop script output: %s", trimmed)
+	}
+	if err != nil {
+		logger("[ERR] stop script failed: %v", err)
+	}
+	return err
+}
+
+func readerGone(r *reader) bool {
+	readersLock.Lock()
+	defer readersLock.Unlock()
+	for _, ar := range activeReaders {
+		if ar == r {
+			return false
+		}
+	}
+	return true
+}
+
+func releaseTuner(index int) string {
+	var target *reader
+	readersLock.Lock()
+	for _, ar := range activeReaders {
+		if ar.t == &tuners[index] {
+			target = ar
+			break
+		}
+	}
+	readersLock.Unlock()
+	status := "stopped"
+	if target != nil {
+		if target.ReadCloser != nil {
+			target.ReadCloser.Close()
+		}
+		deadline := time.Now().Add(stopScriptTimeout)
+		for !readerGone(target) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !readerGone(target) {
+			logger("[CONTROL] tuner %d source closed but teardown is still running, leaving the lock held", index)
+			return "stopping"
+		}
+	} else {
+		tunerLock.Lock()
+		locked := tuners[index].active
+		tunerLock.Unlock()
+		if !locked {
+			return "idle"
+		}
+		time.Sleep(time.Second)
+		readersLock.Lock()
+		for _, ar := range activeReaders {
+			if ar.t == &tuners[index] {
+				target = ar
+				break
+			}
+		}
+		readersLock.Unlock()
+		if target != nil {
+			logger("[CONTROL] tuner %d is starting a tune, leaving it alone", index)
+			return "busy"
+		}
+		runStopScript(&tuners[index], "")
+		status = "unstuck"
+	}
+	tunerLock.Lock()
+	tuners[index].active = false
+	tunerLock.Unlock()
+	logger("[CONTROL] tuner %d released (%s)", index, status)
+	return status
+}
+
+func adbControl(tunerip string, action string) error {
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), adbTimeout)
+	exec.CommandContext(connectCtx, "adb", "connect", tunerip).Run()
+	connectCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	if action == "reboot" {
+		logger("[CONTROL] reboot -> %s", tunerip)
+		return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "reboot").Run()
+	}
+	keycode, ok := adbKeycodes[action]
+	if !ok {
+		return fmt.Errorf("unknown action %q", action)
+	}
+	logger("[CONTROL] %s -> %s", action, tunerip)
+	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
 }
 
 func audioBaseline(tunerip string) map[string]bool {

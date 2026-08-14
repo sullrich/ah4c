@@ -1,55 +1,67 @@
 <!DOCTYPE html>
 <html lang="en">
-	<head>
-	    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-	    <style>
-	        body, html {
-	            height: 100%;
-	            margin: 0;
-	        }
-	        #main-container {
-	            display: flex;
-	            height: calc(100% - 40px); /* Subtracting the height of the 'Last Updated' bar */
-	        }
-	        .left-column {
-	            width: 45%;
-	            padding: 10px;
-	            overflow-y: auto; /* To make left content scrollable */
-	        }
-	        .right-column {
-	            width: 55%;
-	        }
-	        iframe {
-	            width: 100%;
-	            height: 100%;
-	        }
-	        h3 {
-	            margin: 0;
-	            padding: 10px;
-	            background: #000;
-	            color: #fff;
-	            padding: 3px;
-	        }
-	    </style>
-	</head>
-	<body>
-	    <div style="width: 100%;">
-	        <h3>Last updated: <span id="last-update"></span></h3>
-	    </div>
-	    <div id="main-container">
-	        <div class="left-column">
-				<iframe frameborder="0" style="border: none;" src="/status"></iframe>
-	        </div>
-	        <div class="right-column">
-	            <iframe frameborder="0" style="border: none;" src="/logs?notime" frameborder="0" style="border: none;"></iframe>
-	        </div>
-	    </div>
-	    <script>
-		    function fetchLogs() {
-				var now = new Date();
-	        	$('#last-update').text(now.toLocaleString());
-			}
-	        setInterval(fetchLogs, 1000); 
-	    </script>
-	</body>
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Activity &amp; Logs — AH4C</title>
+	<link rel="stylesheet" href="/static/css/ah4c.css?v=3">
+	<script src="/static/js/theme.js?v=3"></script>
+	<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+	<div class="shell">
+		<div class="pagebar">
+			<a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
+			<strong>Activity &amp; Logs</strong>
+			<span>Last updated: <span id="last-update"></span></span>
+			<button class="btn btn-sm btn-icon" id="expandLogs" onclick="toggleLogs()" title="Expand logs">
+				<svg id="iconExpand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+				<svg id="iconCollapse" class="hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+			</button>
+			<nav class="nav push-right">
+				<a href="/">Home</a>
+				<a href="/device">Device Control</a>
+				<a href="/status">Activity</a>
+				<a href="/status/andlogs" class="active">Activity &amp; Logs</a>
+				<a href="/logs">Logs</a>
+				<a href="/m3us">Channel M3Us</a>
+				<a href="/routes">API Routes</a>
+			</nav>
+			<button class="btn btn-sm btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+				<svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="7" y2="7"/><line x1="17" y1="17" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="7" y2="17"/><line x1="17" y1="7" x2="19.1" y2="4.9"/></svg>
+				<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+			</button>
+		</div>
+		<div class="shell-body">
+			<div class="split" id="split">
+				<div class="split-pane split-left">
+					<iframe src="/status"></iframe>
+				</div>
+				<div class="split-pane split-right">
+					<button class="split-handle" onclick="toggleLogs()" title="Expand logs">
+						<svg id="triUp" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg>
+						<svg id="triDown" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+					</button>
+					<iframe src="/logs?notime"></iframe>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script>
+		function toggleLogs() {
+			var expanded = document.getElementById('split').classList.toggle('logs-max');
+			document.getElementById('iconExpand').classList.toggle('hidden', expanded);
+			document.getElementById('iconCollapse').classList.toggle('hidden', !expanded);
+			document.getElementById('expandLogs').title = expanded ? 'Show activity' : 'Expand logs';
+			document.getElementById('triUp').classList.toggle('hidden', expanded);
+			document.getElementById('triDown').classList.toggle('hidden', !expanded);
+		}
+		function fetchLogs() {
+			var now = new Date();
+			$('#last-update').text(now.toLocaleString());
+		}
+		fetchLogs();
+		setInterval(fetchLogs, 1000);
+	</script>
+</body>
 </html>
