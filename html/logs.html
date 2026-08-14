@@ -41,11 +41,16 @@
 	<script>
 		var autoScroll = true;
 		var MAX_LOG_LINES = 500;
+		var MAX_LOG_BYTES = 262144;
+		var lastRendered = '';
 		$('#line-cap').text(MAX_LOG_LINES);
 		function fetchLogs() {
 			$.get('/logs/text?tail=' + MAX_LOG_LINES, function(data) {
 				var logContentDiv = $('#log-content');
 				var shouldScroll = autoScroll && (logContentDiv.scrollTop() + logContentDiv.innerHeight() >= logContentDiv[0].scrollHeight);
+				if (data.length > MAX_LOG_BYTES) {
+				    data = data.slice(data.length - MAX_LOG_BYTES);
+				}
 				// Cap displayed lines so the DOM can't grow without bound
 				var lines = data.split('\n');
 				if (lines.length > MAX_LOG_LINES) {
@@ -84,12 +89,18 @@
 				    data = data.replace(new RegExp(item.search, 'g'), item.replace);
 				});
 				// Replace line breaks with HTML line breaks
-				$('#log-content').html(data.replace(/\n/g, '<br>'));
+				var rendered = data.replace(/\n/g, '<br>');
+				if (rendered !== lastRendered) {
+				    lastRendered = rendered;
+				    $('#log-content').html(rendered);
+				}
 				var now = new Date();
 				$('#last-update').text(now.toLocaleString());
 				if (shouldScroll) {
 				    logContentDiv.scrollTop(logContentDiv[0].scrollHeight);
 				}
+			}).always(function() {
+				setTimeout(fetchLogs, 1000);
 			});
 		}
 		$(document).ready(function() {
@@ -97,7 +108,6 @@
 				autoScroll = $(this).scrollTop() + $(this).innerHeight() >= $(this)[0].scrollHeight;
 			});
 			fetchLogs();
-			setInterval(fetchLogs, 1000);
 		});
 	</script>
 </body>
