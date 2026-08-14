@@ -267,7 +267,7 @@
             if (tunerActive[index] && !confirm('Tuner ' + index + ' is streaming. Run the stop script and release its lock?')) return;
             releasing[index] = true;
             $('.release-btn-' + index).prop('disabled', true).text('Releasing…');
-            $.post('/api/tuner/' + index + '/release')
+            $.ajax({ url: '/api/tuner/' + index + '/release', type: 'POST', timeout: 30000 })
                 .fail(function() { alert('Release failed for tuner ' + index + ' — check the logs.'); })
                 .always(function() { releasing[index] = false; });
         }
@@ -286,6 +286,9 @@
                 if (started > 0) this.textContent = fmtElapsed(Math.max(0, now - started));
             });
         }, 1000);
+
+        window.addEventListener('pagehide', stopPreview);
+        window.addEventListener('beforeunload', stopPreview);
 
         $('#tunerModal').on('click', function(e) {
             if (e.target === this) closeTunerModal();
@@ -374,12 +377,6 @@
 		            // Populate Tuner cards
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
 		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
-		            if (player && modalIndex !== null && tunerActive[modalIndex]) {
-		                stopPreview();
-		                $('#modalVideo').addClass('hidden');
-		                $('#previewStart').removeClass('hidden');
-		                $('#modalHint').text('Preview stopped — this tuner started streaming.');
-		            }
 		            tunerLabels = [];
 		            var readerByTuner = {};
 		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });

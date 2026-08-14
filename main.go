@@ -1983,9 +1983,8 @@ func releaseTuner(index int) string {
 			time.Sleep(50 * time.Millisecond)
 		}
 		if !readerGone(target) {
-			logger("[CONTROL] tuner %d did not release in time, forcing it free", index)
-			removeReader(target)
-			status = "forced"
+			logger("[CONTROL] tuner %d source closed but teardown is still running, leaving the lock held", index)
+			return "stopping"
 		}
 	} else {
 		tunerLock.Lock()
@@ -1993,6 +1992,19 @@ func releaseTuner(index int) string {
 		tunerLock.Unlock()
 		if !locked {
 			return "idle"
+		}
+		time.Sleep(time.Second)
+		readersLock.Lock()
+		for _, ar := range activeReaders {
+			if ar.t == &tuners[index] {
+				target = ar
+				break
+			}
+		}
+		readersLock.Unlock()
+		if target != nil {
+			logger("[CONTROL] tuner %d is starting a tune, leaving it alone", index)
+			return "busy"
 		}
 		runStopScript(&tuners[index], "")
 		status = "unstuck"
