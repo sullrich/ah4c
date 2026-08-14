@@ -785,13 +785,17 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 .tuner-status-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.6rem;
+  gap: 0.6rem;
   margin-bottom: 0.7rem;
 }
 
+.tuner-status-head .tuner-number,
+.tuner-status-head strong,
+.tuner-status-head .badge { flex-shrink: 0; }
+
 .tuner-status-head strong { font-size: 0.88rem; }
-.tuner-status-head .badge { margin-left: auto; }
+.tuner-status-head .badge,
+.tuner-status-head .tune-timer { margin-left: auto; }
 
 .tuner-pairing {
   display: grid;

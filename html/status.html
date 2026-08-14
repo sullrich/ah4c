@@ -395,7 +395,7 @@
 		                    var label = reader.Name || reader.Channel || '';
 		                    tunerLabels[index] = label;
 		                    var labelHtml = label ? `<span class="tune-label">${esc(label)}</span>` : '';
-		                    badge += `<span class="tune-timer" title="${esc(label || 'Tune duration')}">${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
+		                    badge = `<span class="tune-timer" title="${esc(label ? label + ' — streaming' : 'Streaming')}">${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
