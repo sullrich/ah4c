@@ -137,6 +137,10 @@
             });
         }
 
+        function escUrl(s) {
+            return esc(s).replace(/(:\/\/|[:/])/g, '$1<wbr>');
+        }
+
         function setModalHint() {
             if (modalIndex === null) return;
             $('#modalHint').text(tunerActive[modalIndex]
@@ -403,9 +407,9 @@
 		                        <div class="tuner-pairing">
 		                            <div class="endpoint-label lbl-device">Device</div>
 		                            <div class="endpoint-label lbl-encoder">Encoder</div>
-		                            <div class="endpoint-value val-device">${esc(tuner.Tunerip) || '—'}</div>
+		                            <div class="endpoint-value val-device">${escUrl(tuner.Tunerip) || '—'}</div>
 		                            <div class="pair-link">⇄</div>
-		                            <div class="endpoint-value val-encoder">${esc(tuner.Url) || '—'}</div>
+		                            <div class="endpoint-value val-encoder">${escUrl(tuner.Url) || '—'}</div>
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
