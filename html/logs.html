@@ -45,6 +45,10 @@
 		var lastRendered = '';
 		$('#line-cap').text(MAX_LOG_LINES);
 		function fetchLogs() {
+			if (document.hidden) {
+				setTimeout(fetchLogs, 1000);
+				return;
+			}
 			$.get('/logs/text?tail=' + MAX_LOG_LINES, function(data) {
 				var logContentDiv = $('#log-content');
 				var shouldScroll = autoScroll && (logContentDiv.scrollTop() + logContentDiv.innerHeight() >= logContentDiv[0].scrollHeight);

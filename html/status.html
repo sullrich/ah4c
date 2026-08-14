@@ -347,6 +347,7 @@
 
 			// Function to fetch and update data
 		    function fetchDataAndUpdate() {
+		        if (document.hidden) return;
 		        // Fetch data from /api/status
 		        $.getJSON("/api/status", function(data) {
 		            var currentTimestamp = Date.now();
@@ -639,6 +640,7 @@
     <script>
         $(document).ready(function() {
             function fetchDataAndUpdateDVR() {
+                if (document.hidden) return;
                 // Fetch data from /dvr
                 $.getJSON("/status/channelsactivity", function(data) {
 					statusA = data.busy;
