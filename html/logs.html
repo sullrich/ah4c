@@ -44,64 +44,78 @@
 		var MAX_LOG_BYTES = 262144;
 		var lastRendered = '';
 		$('#line-cap').text(MAX_LOG_LINES);
+		var HIGHLIGHTS = [
+			{re: /Failure/g, cls: 'tk-err-soft'},
+			{re: /404/g, cls: 'tk-err-soft'},
+			{re: /200/g, cls: 'tk-ok'},
+			{re: /304/g, cls: 'tk-ok-soft'},
+			{re: /started/g, cls: 'tk-ok-soft'},
+			{re: /successfully/g, cls: 'tk-ok-soft'},
+			{re: /ready/g, cls: 'tk-ok-soft'},
+			{re: /START/g, cls: 'tk-ok'},
+			{re: /SUCCESS/g, cls: 'tk-ok'},
+			{re: /ENV/g, cls: 'tk-info'},
+			{re: /ERROR/g, cls: 'tk-err'},
+			{re: /FAIL/g, cls: 'tk-err'},
+			{re: /WAITING/g, cls: 'tk-muted'},
+			{re: /WARNING/g, cls: 'tk-warn'},
+			{re: /EXECUTE/g, cls: 'tk-info'},
+			{re: /STOPPING/g, cls: 'tk-warn'},
+			{re: /CONNECTING/g, cls: 'tk-info'},
+			{re: /TUNEIN/g, cls: 'tk-info'},
+			{re: /STATS/g, cls: 'tk-info'},
+			{re: /GIN-debug/g, cls: 'tk-accent'},
+			{re: /waiting/g, cls: 'tk-muted'}
+		];
+		function renderLine(line) {
+			var out = line.replace(/[&<>"']/g, function(c) {
+			    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+			});
+			HIGHLIGHTS.forEach(function(h) {
+				out = out.replace(h.re, function(m) { return '<span class="' + h.cls + '">' + m + '</span>'; });
+			});
+			return '<div class="log-line">' + out + '</div>';
+		}
 		function fetchLogs() {
 			if (document.hidden) {
 				setTimeout(fetchLogs, 1000);
 				return;
 			}
 			$.get('/logs/text?tail=' + MAX_LOG_LINES, function(data) {
-				var logContentDiv = $('#log-content');
-				var shouldScroll = autoScroll && (logContentDiv.scrollTop() + logContentDiv.innerHeight() >= logContentDiv[0].scrollHeight);
+				var el = document.getElementById('log-content');
+				var shouldScroll = autoScroll && (el.scrollTop + el.clientHeight >= el.scrollHeight - 4);
 				if (data.length > MAX_LOG_BYTES) {
 				    data = data.slice(data.length - MAX_LOG_BYTES);
 				}
-				// Cap displayed lines so the DOM can't grow without bound
 				var lines = data.split('\n');
 				if (lines.length > MAX_LOG_LINES) {
 					lines = lines.slice(lines.length - MAX_LOG_LINES);
 				}
-				data = lines.join('\n');
-				// Array of search and replace items
-				var replaceItems = [
-					{search: 'Failure', replace: '<span class="tk-err-soft">Failure</span>'},
-					{search: '404', replace: '<span class="tk-err-soft">404</span>'},
-					{search: '200', replace: '<span class="tk-ok">200</span>'},
-					{search: '304', replace: '<span class="tk-ok-soft">304</span>'},
-					{search: 'started', replace: '<span class="tk-ok-soft">started</span>'},
-					{search: 'successfully', replace: '<span class="tk-ok-soft">successfully</span>'},
-					{search: 'ready', replace: '<span class="tk-ok-soft">ready</span>'},
-					{search: 'START', replace: '<span class="tk-ok">START</span>'},
-					{search: 'SUCCESS', replace: '<span class="tk-ok">SUCCESS</span>'},
-					{search: 'ENV', replace: '<span class="tk-info">ENV</span>'},
-					{search: 'ERROR', replace: '<span class="tk-err">ERROR</span>'},
-					{search: 'FAIL', replace: '<span class="tk-err">FAIL</span>'},
-					{search: 'WAITING', replace: '<span class="tk-muted">WAITING</span>'},
-					{search: 'WARNING', replace: '<span class="tk-warn">WARNING</span>'},
-					{search: 'EXECUTE', replace: '<span class="tk-info">EXECUTE</span>'},
-					{search: 'STOPPING', replace: '<span class="tk-warn">STOPPING</span>'},
-					{search: 'CONNECTING', replace: '<span class="tk-info">CONNECTING</span>'},
-					{search: 'TUNEIN', replace: '<span class="tk-info">TUNEIN</span>'},
-					{search: 'STATS', replace: '<span class="tk-info">STATS</span>'},
-					{search: 'GIN-debug', replace: '<span class="tk-accent">GIN-debug</span>'},
-					{search: 'waiting', replace: '<span class="tk-muted">waiting</span>'}
-				];
-				data = data.replace(/[&<>"']/g, function(c) {
-				    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-				});
-				// For each item in the array, replace in the data
-				replaceItems.forEach(function(item) {
-				    data = data.replace(new RegExp(item.search, 'g'), item.replace);
-				});
-				// Replace line breaks with HTML line breaks
-				var rendered = data.replace(/\n/g, '<br>');
-				if (rendered !== lastRendered) {
-				    lastRendered = rendered;
-				    $('#log-content').html(rendered);
+				var text = lines.join('\n');
+				if (text !== lastRendered) {
+					if (lastRendered && text.indexOf(lastRendered) === 0) {
+						var added = text.slice(lastRendered.length).split('\n');
+						var html = '';
+						for (var i = 0; i < added.length; i++) {
+							if (added[i] !== '') html += renderLine(added[i]);
+						}
+						if (html) el.insertAdjacentHTML('beforeend', html);
+						while (el.childElementCount > MAX_LOG_LINES) {
+							el.removeChild(el.firstElementChild);
+						}
+					} else {
+						var full = '';
+						for (var j = 0; j < lines.length; j++) {
+							if (lines[j] !== '') full += renderLine(lines[j]);
+						}
+						el.innerHTML = full;
+					}
+					lastRendered = text;
 				}
 				var now = new Date();
 				$('#last-update').text(now.toLocaleString());
 				if (shouldScroll) {
-				    logContentDiv.scrollTop(logContentDiv[0].scrollHeight);
+				    el.scrollTop = el.scrollHeight;
 				}
 			}).always(function() {
 				setTimeout(fetchLogs, 1000);
