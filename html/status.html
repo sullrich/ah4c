@@ -260,11 +260,16 @@
             $.post('/api/tuners/control/' + action);
         }
 
+        var releasing = {};
+
         function releaseTuner(index) {
+            if (releasing[index]) return;
             if (tunerActive[index] && !confirm('Tuner ' + index + ' is streaming. Run the stop script and release its lock?')) return;
-            $.post('/api/tuner/' + index + '/release').fail(function() {
-                alert('Release failed for tuner ' + index + ' — check the logs.');
-            });
+            releasing[index] = true;
+            $('.release-btn-' + index).prop('disabled', true).text('Releasing…');
+            $.post('/api/tuner/' + index + '/release')
+                .fail(function() { alert('Release failed for tuner ' + index + ' — check the logs.'); })
+                .always(function() { releasing[index] = false; });
         }
 
         function fmtElapsed(s) {
@@ -399,7 +404,7 @@
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
-		                            ${tuner.Active ? `<button class="btn btn-danger btn-sm" onclick="releaseTuner(${index})">Release lock</button>` : ''}
+		                            ${tuner.Active ? `<button class="btn btn-danger btn-sm release-btn-${index}" onclick="releaseTuner(${index})" ${releasing[index] ? 'disabled' : ''}>${releasing[index] ? 'Releasing…' : 'Release lock'}</button>` : ''}
 		                        </div>
 		                    </div>
 		                `;

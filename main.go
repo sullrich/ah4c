@@ -1943,6 +1943,17 @@ func runStopScript(t *tuner, channel string) error {
 	return err
 }
 
+func readerGone(r *reader) bool {
+	readersLock.Lock()
+	defer readersLock.Unlock()
+	for _, ar := range activeReaders {
+		if ar == r {
+			return false
+		}
+	}
+	return true
+}
+
 func releaseTuner(index int) string {
 	var target *reader
 	readersLock.Lock()
@@ -1955,20 +1966,27 @@ func releaseTuner(index int) string {
 	readersLock.Unlock()
 	status := "stopped"
 	if target != nil {
-		done := make(chan struct{})
-		go func() {
-			target.Close()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(stopScriptTimeout):
+		if target.ReadCloser != nil {
+			target.ReadCloser.Close()
+		}
+		deadline := time.Now().Add(stopScriptTimeout)
+		for !readerGone(target) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !readerGone(target) {
 			logger("[CONTROL] tuner %d did not release in time, forcing it free", index)
 			removeReader(target)
 			status = "forced"
 		}
 	} else {
+		tunerLock.Lock()
+		locked := tuners[index].active
+		tunerLock.Unlock()
+		if !locked {
+			return "idle"
+		}
 		runStopScript(&tuners[index], "")
+		status = "unstuck"
 	}
 	tunerLock.Lock()
 	tuners[index].active = false
