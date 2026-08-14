@@ -439,6 +439,11 @@
 		});
     </script>
     <script>
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+                return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+            });
+        }
         $(document).ready(function() {
             function fetchDataAndUpdateDVR() {
                 // Fetch data from /dvr
@@ -457,7 +462,7 @@
                     $.each(data.activity, function(key, details) {
                         activityHtml += `
                             <tr>
-                                <td>${details}</td>
+                                <td>${escapeHtml(details)}</td>
                             </tr>
                         `;
 						isempty = false;
