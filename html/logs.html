@@ -57,6 +57,9 @@
 					{search: 'GIN-debug', replace: '<span style="color: darkviolet;">GIN-debug</span>'},
 					{search: 'waiting', replace: '<span style="color: darkkhaki;">waiting</span>'}
 				];
+				data = data.replace(/[&<>"']/g, function(c) {
+				    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+				});
 				// For each item in the array, replace in the data
 				replaceItems.forEach(function(item) {
 				    data = data.replace(new RegExp(item.search, 'g'), item.replace);
