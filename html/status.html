@@ -54,7 +54,7 @@
                 Tuners
                 <span class="topbar-actions">
                     <button class="btn btn-sm" onclick="controlAll('wake')">Wake all</button>
-                    <button class="btn btn-sm" onclick="controlAll('sleep')">Sleep all</button>
+                    <button class="btn btn-sm" onclick="if(confirm('Sleep ALL tuner devices?'))controlAll('sleep')">Sleep all</button>
                     <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot ALL tuner devices?'))controlAll('reboot')">Reboot all</button>
                 </span>
             </div>
@@ -169,7 +169,7 @@
         }
 
         var stallTimer = null;
-        var lastFrames = -1;
+        var lastFrames = 0;
         var stallTicks = 0;
         var previewRetries = 0;
 
@@ -203,7 +203,7 @@
         }
 
         function startWatchdog() {
-            lastFrames = -1;
+            lastFrames = 0;
             stallTicks = 0;
             stallTimer = setInterval(function() {
                 if (!player || modalIndex === null) return;
@@ -373,6 +373,12 @@
 		            // Populate Tuner cards
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
 		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
+		            if (player && modalIndex !== null && tunerActive[modalIndex]) {
+		                stopPreview();
+		                $('#modalVideo').addClass('hidden');
+		                $('#previewStart').removeClass('hidden');
+		                $('#modalHint').text('Preview stopped — this tuner started streaming.');
+		            }
 		            tunerLabels = [];
 		            var readerByTuner = {};
 		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });
@@ -648,7 +654,7 @@
                     $.each(data.activity, function(key, details) {
                         activityHtml += `
                             <tr>
-                                <td>${details}</td>
+                                <td>${esc(details)}</td>
                             </tr>
                         `;
 						isempty = false;

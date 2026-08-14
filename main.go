@@ -852,10 +852,19 @@ func run() error {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
 			return
 		}
+		skipped := 0
 		for i := range tuners {
+			tunerLock.Lock()
+			busy := tuners[i].active
+			tunerLock.Unlock()
+			if busy {
+				logger("[CONTROL] skipping %s for tuner %d, it is streaming", action, i)
+				skipped++
+				continue
+			}
 			go adbControl(tuners[i].tunerip, action)
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "skipped": skipped})
 	})
 	// Route for /stream - if video preview is enabled
 	r.GET("/stream", func(c *gin.Context) {
@@ -1996,9 +2005,11 @@ func releaseTuner(index int) string {
 }
 
 func adbControl(tunerip string, action string) error {
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), adbTimeout)
+	exec.CommandContext(connectCtx, "adb", "connect", tunerip).Run()
+	connectCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
 	defer cancel()
-	exec.CommandContext(ctx, "adb", "connect", tunerip).Run()
 	if action == "reboot" {
 		logger("[CONTROL] reboot -> %s", tunerip)
 		return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "reboot").Run()
