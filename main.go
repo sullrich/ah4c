@@ -205,10 +205,10 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	go func() {
 		cmd.Wait()
 		r.cmdMutex.Lock()
-		defer r.cmdMutex.Unlock()
 		r.teecmd = nil
 		r.teecmdIn = nil
 		r.teecmdRunning = false
+		r.cmdMutex.Unlock()
 		if err := r.startTeeCMD(); err != nil {
 			fmt.Printf("[ERR] Failed to restart TEECMD: %v\n", err)
 		}
@@ -323,6 +323,7 @@ func (r *reader) Close() error {
 			logger("[ERR] Failed to remove video file: %v", err)
 		}
 	}
+	r.cmdMutex.Lock()
 	if r.teecmd != nil && r.teecmdRunning {
 		if err := r.teecmd.Process.Kill(); err != nil {
 			logger("Error killing ffmpeg process: %v", err)
@@ -339,6 +340,7 @@ func (r *reader) Close() error {
 		}
 		r.teecmdIn = nil
 	}
+	r.cmdMutex.Unlock()
 	removeReader(r)
 	return r.ReadCloser.Close()
 }
