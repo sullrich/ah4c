@@ -12,6 +12,10 @@
 			localStorage.setItem('ah4c-theme', 'light');
 		}
 	};
+	window.toggleNav = function () {
+		var nav = document.querySelector('.pagebar .nav, .topbar .nav');
+		if (nav) nav.classList.toggle('open');
+	};
 	window.addEventListener('storage', function (e) {
 		if (e.key !== 'ah4c-theme') return;
 		if (e.newValue === 'light') {

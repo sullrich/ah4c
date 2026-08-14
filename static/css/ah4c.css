@@ -153,11 +153,22 @@ h3 { font-size: 0.95rem; }
 
 .topbar .nav { margin-left: auto; }
 
+.nav-toggle { display: none; }
+
 @media (max-width: 760px) {
-  .topbar { flex-wrap: wrap; }
-  .topbar .nav { margin-left: 0; width: 100%; }
-  .pagebar { flex-wrap: wrap; }
-  .pagebar .nav { margin-left: 0; width: 100%; }
+  .topbar, .pagebar { flex-wrap: wrap; }
+  .nav-toggle { display: inline-flex; margin-left: auto; }
+  .topbar .nav, .pagebar .nav {
+    display: none;
+    order: 10;
+    width: 100%;
+    margin: 0.4rem 0 0.2rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.1rem;
+  }
+  .topbar .nav.open, .pagebar .nav.open { display: flex; }
+  .nav a { padding: 0.5rem 0.7rem; border-radius: var(--radius-sm); }
 }
 
 /* Slim header used on embedded/iframe pages */

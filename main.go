@@ -633,6 +633,12 @@ func run() error {
 	r := gin.New()
 	r.SetTrustedProxies(nil)
 	r.Use(CustomLogger())
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static") {
+			c.Header("Cache-Control", "no-store")
+		}
+		c.Next()
+	})
 	r.StaticFile("/favicon.ico", "./static/favicon.ico")
 	//	r.Use(CustomRecovery())
 	r.LoadHTMLGlob("html/*")
