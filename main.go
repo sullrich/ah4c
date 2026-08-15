@@ -820,6 +820,10 @@ func run() error {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
 			return
 		}
+		if _, ok := findEngineVariant(cfg.Engine); !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown engine"})
+			return
+		}
 		if cfg.OffsetSec < 0 || cfg.OffsetSec > 15 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be between 0 and 15 seconds"})
 			return
@@ -831,8 +835,8 @@ func run() error {
 		logger("[CC] Settings saved: enabled=%v model=%s language=%s", cfg.Enabled, cfg.Model, cfg.Language)
 		c.JSON(http.StatusOK, captionStatusPayload())
 	})
-	r.POST("/api/captions/runtime", func(c *gin.Context) {
-		if err := startRuntimeDownload(); err != nil {
+	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
+		if err := startRuntimeDownload(c.Param("variant")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}

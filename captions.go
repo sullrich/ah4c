@@ -58,23 +58,125 @@ const (
 // no cgo, no ONNX Runtime and nothing linked into the binary.
 const parakeetRelease = "v0.5.0"
 
+// engineVariant is a build of the engine: which processor it runs the model on.
+//
+// All of them are downloaded at run time, so choosing one costs nothing in the
+// image. What they differ in is what has to already be present in the container
+// for the library to load at all, which is why each one names its requirement
+// and is offered only when that requirement is actually there.
+type engineVariant struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	Desc string `json:"desc"`
+	// Suffix picks the release archive; SizeMB is roughly what that costs.
+	Suffix string `json:"-"`
+	SizeMB int    `json:"sizeMB"`
+	// Needs is the shared library that has to be loadable for this build to
+	// work. Empty means nothing beyond the base image.
+	Needs string `json:"needs"`
+	// Why explains, in the page's words, what provides that library.
+	Why string `json:"why"`
+}
+
+// engineVariants is ordered cheapest-first; the page offers whichever ones this
+// container can actually load.
+var engineVariants = []engineVariant{
+	{
+		Key: "cpu", Name: "CPU", Suffix: "cpu",
+		Desc:   "Runs on the processor. Needs nothing beyond what is already in the image and is fast enough for several tuners at once.",
+		SizeMB: 1,
+	},
+	{
+		Key: "vulkan", Name: "GPU via Vulkan", Suffix: "vulkan",
+		Desc:   "Runs the model on an Intel, AMD or NVIDIA GPU through Vulkan.",
+		SizeMB: 59,
+		Needs:  "libvulkan.so.1",
+		Why:    "Needs a Vulkan loader and driver in the container, plus /dev/dri passed through. The base image ships neither, so this only appears if you have added them.",
+	},
+	{
+		Key: "cuda", Name: "GPU via CUDA", Suffix: "cuda",
+		Desc:   "Runs the model on an NVIDIA GPU. The download carries its own CUDA runtime, so only the driver has to come from outside.",
+		SizeMB: 537,
+		Needs:  "libcuda.so.1",
+		Why:    "Needs the NVIDIA container runtime, which injects the driver. Add the GPU to your compose file; nothing changes in the image.",
+	},
+	{
+		Key: "cuda12", Name: "GPU via CUDA 12", Suffix: "cuda12",
+		Desc:   "The same, built against CUDA 12 for older drivers. Try this if the CUDA build will not load.",
+		SizeMB: 722,
+		Needs:  "libcuda.so.1",
+		Why:    "Needs the NVIDIA container runtime, which injects the driver. Add the GPU to your compose file; nothing changes in the image.",
+	},
+}
+
+// variantSuffix maps a variant key to its archive suffix.
+func variantSuffix(key string) string {
+	if v, ok := findEngineVariant(key); ok {
+		return v.Suffix
+	}
+	return "cpu"
+}
+
+func findEngineVariant(key string) (engineVariant, bool) {
+	for _, v := range engineVariants {
+		if v.Key == key {
+			return v, true
+		}
+	}
+	return engineVariant{}, false
+}
+
+// engineUsable reports whether this container can load a variant, by trying the
+// library it depends on. Asking the loader is the only honest test: a driver
+// can be present without the device, or injected by a container runtime that
+// left no other trace.
+func engineUsable(v engineVariant) bool {
+	if v.Needs == "" {
+		return true
+	}
+	h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil || h == 0 {
+		return false
+	}
+	return true
+}
+
 // engineAsset names the engine archive for this build and the library inside
 // it. The architecture is decided at compile time, so an arm64 image fetches
 // the arm64 build without being told which it is.
 func engineAsset() (url, local string, ok bool) {
-	return engineAssetFor(runtime.GOOS, runtime.GOARCH)
+	return engineAssetFor(runtime.GOOS, runtime.GOARCH, currentEngineVariant())
+}
+
+// currentEngineVariant is the configured build, falling back to the processor
+// if the chosen one cannot load here.
+func currentEngineVariant() string {
+	cfg := currentCaptionConfig()
+	v, found := findEngineVariant(cfg.Engine)
+	if !found || !engineUsable(v) {
+		return "cpu"
+	}
+	return v.Key
 }
 
 // engineAssetFor is the platform table, separated so every entry can be checked
 // rather than only the one this machine happens to be.
-func engineAssetFor(goos, goarch string) (url, local string, ok bool) {
+func engineAssetFor(goos, goarch, variant string) (url, local string, ok bool) {
 	base := "https://github.com/mudler/parakeet.cpp/releases/download/" + parakeetRelease + "/parakeet-" + parakeetRelease + "-lib-"
+	if variant == "" {
+		variant = "cpu"
+	}
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-		return base + "linux-cpu-x64.tar.gz", "libparakeet.so", true
+		return base + "linux-" + variant + "-x64.tar.gz", "libparakeet.so", true
 	case "linux/arm64":
-		return base + "linux-cpu-arm64.tar.gz", "libparakeet.so", true
+		// Only the processor and Vulkan builds are published for arm64.
+		if variant != "cpu" && variant != "vulkan" {
+			variant = "cpu"
+		}
+		return base + "linux-" + variant + "-arm64.tar.gz", "libparakeet.so", true
 	case "darwin/arm64":
+		// Metal is built in on Apple silicon; there is no separate choice.
 		return base + "macos-metal-arm64.tar.gz", "libparakeet.dylib", true
 	case "darwin/amd64":
 		return base + "macos-cpu-x64.tar.gz", "libparakeet.dylib", true
@@ -88,7 +190,7 @@ func engineLibPath() string {
 	if !ok {
 		return ""
 	}
-	return filepath.Join(captionRuntime, local)
+	return filepath.Join(captionRuntime, currentEngineVariant(), local)
 }
 
 func engineInstalled() bool {
@@ -220,6 +322,9 @@ type captionConfig struct {
 	// delays the video: the stream is passed through untouched apart from the
 	// caption bytes, so a tune is exactly as fast with captions on as off.
 	OffsetSec int `json:"offsetSec"`
+	// Engine selects which build of the recognizer to run: the processor, or a
+	// GPU through Vulkan or CUDA.
+	Engine string `json:"engine"`
 	// SaveSRT writes a subtitle file alongside every captioned stream, for
 	// keeping with a recording.
 	SaveSRT bool `json:"saveSRT"`
@@ -234,6 +339,7 @@ func defaultCaptionConfig() captionConfig {
 		Language:  "en",
 		Style:     "rollup3",
 		Uppercase: true,
+		Engine:    "cpu",
 		OffsetSec: 0,
 	}
 }
@@ -430,8 +536,11 @@ func streamToFile(client *http.Client, url, dst string) error {
 // startRuntimeDownload fetches the parakeet.cpp engine in the background. It is
 // the one piece of native code captions need, it is about a megabyte, and it is
 // pulled on demand rather than shipped in the image.
-func startRuntimeDownload() error {
-	url, local, ok := engineAsset()
+func startRuntimeDownload(variant string) error {
+	if _, found := findEngineVariant(variant); !found {
+		variant = currentEngineVariant()
+	}
+	url, local, ok := engineAssetFor(runtime.GOOS, runtime.GOARCH, variantSuffix(variant))
 	if !ok {
 		return fmt.Errorf("no speech engine is published for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -440,12 +549,12 @@ func startRuntimeDownload() error {
 		dlLock.Unlock()
 		return fmt.Errorf("a download is already running")
 	}
-	dlState = captionDownload{Model: "engine", Active: true, Count: 1, Index: 1, File: "parakeet.cpp " + parakeetRelease}
+	dlState = captionDownload{Model: "engine", Active: true, Count: 1, Index: 1, File: "parakeet.cpp " + parakeetRelease + " (" + variant + ")"}
 	dlLock.Unlock()
 
 	logger("[CC] Downloading the speech engine from %s", url)
 	go func() {
-		err := fetchRuntime(url, local)
+		err := fetchRuntime(url, local, variant)
 		dlLock.Lock()
 		dlState.Active = false
 		dlState.Finished = true
@@ -463,8 +572,9 @@ func startRuntimeDownload() error {
 // fetchRuntime downloads the release archive and extracts the shared library
 // out of it, matching on file name so a change to the directory prefix inside
 // the archive does not break the download.
-func fetchRuntime(url, local string) error {
-	if err := os.MkdirAll(captionRuntime, 0o755); err != nil {
+func fetchRuntime(url, local, variant string) error {
+	dir := filepath.Join(captionRuntime, variant)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 30 * time.Minute}
@@ -498,7 +608,7 @@ func fetchRuntime(url, local string) error {
 		if h.Typeflag != tar.TypeReg || path.Base(h.Name) != local {
 			continue
 		}
-		dst := filepath.Join(captionRuntime, local)
+		dst := filepath.Join(dir, local)
 		tmp := dst + ".part"
 		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
@@ -2412,16 +2522,25 @@ func (cs *captionStream) Close() error {
 
 // captionStatus is what the Closed Captions page renders.
 type captionStatus struct {
-	Config         captionConfig        `json:"config"`
-	Models         []captionStatusModel `json:"models"`
-	Languages      map[string]string    `json:"languageNames"`
-	Download       captionDownload      `json:"download"`
-	Runtime        string               `json:"runtime"`
-	RuntimeReady   bool                 `json:"runtimeReady"`
-	RuntimeSizeMB  int                  `json:"runtimeSizeMB"`
-	RuntimeVersion string               `json:"runtimeVersion"`
-	RuntimeURL     string               `json:"runtimeURL"`
-	Tuners         int                  `json:"tuners"`
+	Config         captionConfig         `json:"config"`
+	Models         []captionStatusModel  `json:"models"`
+	Languages      map[string]string     `json:"languageNames"`
+	Download       captionDownload       `json:"download"`
+	Runtime        string                `json:"runtime"`
+	RuntimeReady   bool                  `json:"runtimeReady"`
+	RuntimeSizeMB  int                   `json:"runtimeSizeMB"`
+	RuntimeVersion string                `json:"runtimeVersion"`
+	RuntimeURL     string                `json:"runtimeURL"`
+	Engines        []captionStatusEngine `json:"engines"`
+	Tuners         int                   `json:"tuners"`
+}
+
+type captionStatusEngine struct {
+	engineVariant
+	Usable    bool   `json:"usable"`
+	Installed bool   `json:"installed"`
+	Selected  bool   `json:"selected"`
+	URL       string `json:"url"`
 }
 
 type captionStatusModel struct {
@@ -2437,6 +2556,29 @@ func captionStatusPayload() captionStatus {
 		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m), URL: modelURL(m)})
 	}
 	engineURL, _, _ := engineAsset()
+	cur := currentEngineVariant()
+	cpuURL, _, _ := engineAssetFor(runtime.GOOS, runtime.GOARCH, "cpu")
+	engines := make([]captionStatusEngine, 0, len(engineVariants))
+	for _, v := range engineVariants {
+		url, local, ok := engineAssetFor(runtime.GOOS, runtime.GOARCH, v.Suffix)
+		if !ok {
+			continue
+		}
+		// A variant with no build of its own for this platform is not a choice.
+		// Apple silicon is the clear case: Metal is in the one build there, and
+		// arm64 Linux has no CUDA build at all.
+		if v.Key != "cpu" && url == cpuURL {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(captionRuntime, v.Key, local))
+		engines = append(engines, captionStatusEngine{
+			engineVariant: v,
+			Usable:        engineUsable(v),
+			Installed:     err == nil && st.Size() > 0,
+			Selected:      v.Key == cur,
+			URL:           url,
+		})
+	}
 	state := "ready"
 	switch {
 	case engineLibPath() == "":
@@ -2457,6 +2599,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeSizeMB:  1,
 		RuntimeVersion: parakeetRelease,
 		RuntimeURL:     engineURL,
+		Engines:        engines,
 		Tuners:         len(tuners),
 	}
 }

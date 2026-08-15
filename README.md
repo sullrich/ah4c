@@ -69,8 +69,26 @@ The page offers a small engine plus your choice of model. Nothing is bundled and
 nothing is fetched until you ask for it. Every download URL is shown on the page next to
 the button, so it is always clear what is being fetched and from where.
 
-**Speech engine** (~1 MB, required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
-built for your platform, from that project's GitHub releases.
+**Speech engine** (required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp) built for
+your platform, from that project's GitHub releases. Four builds exist and the page offers
+whichever this container can actually load:
+
+| Build | Size | Needs |
+| --- | --- | --- |
+| CPU | ~1 MB | Nothing. Fast enough for several tuners at once |
+| GPU via Vulkan | 59 MB | A Vulkan driver in the container and `/dev/dri` passed through |
+| GPU via CUDA | 537 MB | The NVIDIA container runtime; the download carries its own CUDA runtime |
+| GPU via CUDA 12 | 722 MB | The same, for older drivers |
+
+None of them change the image. A GPU build is greyed out until the library it needs is
+loadable, which is tested by asking the dynamic loader rather than by guessing, so CUDA
+appears by itself once you give the container a GPU in your compose file. Apple silicon
+gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA build
+upstream and is offered CPU and Vulkan.
+
+Quick Sync is not on that list and cannot be. It is fixed-function video encode and decode
+hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
+in the image are for video and are unrelated.
 
 **Models**, all from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
 on Hugging Face:
