@@ -65,17 +65,32 @@ the usual subtitles button.
   time on an ordinary CPU.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
-Two downloads are offered on the page, both on demand and neither bundled:
+The page offers a small engine plus your choice of model. Nothing is bundled and
+nothing is fetched until you ask for it. Every download URL is shown on the page next to
+the button, so it is always clear what is being fetched and from where.
 
-| Download | Size | What it is |
-| --- | --- | --- |
-| Speech engine | ~1 MB | parakeet.cpp for this machine, needed before any model will run |
-| Parakeet TDT 0.6B v3 | ~897 MB | 25 European languages, detected automatically or pinned |
-| Parakeet TDT-CTC 110M | ~170 MB | English only, a fifth of the size and quicker still |
+**Speech engine** (~1 MB, required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
+built for your platform, from that project's GitHub releases.
 
-Both land in `scripts/captions`, inside the bind mount ah4c already uses for scripts, so
-they survive a container rebuild with no change to your compose file. Remove either from
-the page to reclaim the space.
+**Models**, all from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
+on Hugging Face:
+
+| Model | Delay | Size | Languages | Runs well on |
+| --- | --- | --- | --- | --- |
+| **Parakeet Realtime 120M** — transcribes continuously as audio arrives | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
+| **Nemotron 3.5 Streaming 0.6B** — the same, multilingual | Under a second | 938 MB | 25 | A modern multi-core CPU |
+| **Parakeet TDT 0.6B v3** — waits for a phrase, most accurate multilingual | 3–4 seconds | 897 MB | 25 | A modern multi-core CPU |
+| **Parakeet TDT-CTC 110M** — phrase at a time, English | 3–4 seconds | 170 MB | English | Modest hardware; comfortable on a NAS |
+
+The two streaming models transcribe as the audio arrives rather than waiting for a
+phrase to finish, which is the difference between captions about a second behind and
+captions three or four seconds behind. Being a small streaming model, the 120M writes
+plain lowercase without punctuation; the phrase-at-a-time models punctuate and
+capitalize. Pick on that trade, not on size.
+
+Both engine and model land in `scripts/captions`, inside the bind mount ah4c already
+uses for scripts, so they survive a container rebuild with no change to your compose
+file. Remove either from the page to reclaim the space.
 
 Captions appear a second or two after the words are spoken, because a phrase has to
 finish before it can be recognized — the same lag live broadcast captioning has. An

@@ -30,6 +30,26 @@
         .bar { height: 5px; background: var(--border-soft); border-radius: 3px; overflow: hidden; margin-top: 0.5rem; }
         .bar span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.25s ease; }
         .tuner-picks { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+        .model-src {
+            display: block;
+            margin-top: 0.35rem;
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--text-faint);
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        .model-src a { color: var(--text-faint); text-decoration: underline; }
+        .model-src a:hover { color: var(--accent); }
+        .model-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+        .tag {
+            font-size: 0.68rem;
+            padding: 0.1rem 0.4rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+        }
+        .tag-live { border-color: rgba(82,210,115,0.4); color: var(--live); }
         @media (max-width: 640px) {
             .model-row { grid-template-columns: auto 1fr; }
             .model-actions { grid-column: 1 / -1; justify-content: flex-start; }
@@ -181,6 +201,7 @@ function render() {
             <div>
                 <div class="model-name">Speech engine</div>
                 <div class="model-meta">parakeet.cpp ${esc(state.runtimeVersion)} for this machine, about ${state.runtimeSizeMB} MB. Required before any model will run.</div>
+                <span class="model-src">Downloads from: <a href="${esc(state.runtimeURL)}" target="_blank" rel="noopener">${esc(state.runtimeURL)}</a></span>
             </div>
             <div class="model-actions">
                 ${state.runtimeReady
@@ -195,7 +216,15 @@ function render() {
             <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''} onchange="pickModel('${esc(m.key)}')">
             <div>
                 <div class="model-name">${esc(m.name)}</div>
-                <div class="model-meta">${esc(m.desc)} About ${m.sizeMB} MB.</div>
+                <div class="model-meta">${esc(m.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Continuous' : 'Phrase at a time'}</span>
+                    <span class="tag">Delay: ${esc(m.latency)}</span>
+                    <span class="tag">${m.sizeMB} MB</span>
+                    <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.length - 1 + ' languages'}</span>
+                </div>
+                <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
+                <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
                 ${m.installed
