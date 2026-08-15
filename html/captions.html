@@ -108,10 +108,24 @@
                 <label for="offset">Extra delay</label>
                 <select id="offset"></select>
             </div>
+            <div class="field-row">
+                <label for="saveSRT">Recordings</label>
+                <label class="cc-switch">
+                    <input type="checkbox" id="saveSRT">
+                    <span>Save a subtitle file for each stream</span>
+                </label>
+            </div>
             <p class="footnote">
                 Captions appear a couple of seconds after the words are spoken, the same as live
                 broadcast captioning, because the sentence has to finish before it can be recognized.
                 Extra delay only pushes the text further back if you want it to line up more loosely.
+            </p>
+            <p class="footnote">
+                A recording already carries the captions in the picture. The subtitle file is a
+                separate <code>.srt</code> in <code>scripts/captions/srt</code>, named for the channel
+                and the time the stream started, and it is stamped with the real speech times &mdash; so
+                it lines up slightly better than the on-screen captions, which cannot appear until a
+                phrase has been spoken. Files with nothing recognized are cleaned up.
             </p>
         </div>
 
@@ -216,6 +230,7 @@ function render() {
     if (!langs.includes(cfg.language)) sel.value = langs[0];
 
     document.getElementById('style').value = cfg.style || 'rollup3';
+    document.getElementById('saveSRT').checked = !!cfg.saveSRT;
 
     const off = document.getElementById('offset');
     off.innerHTML = Array.from({length: 16}, (_, i) =>
@@ -243,6 +258,7 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         offsetSec: parseInt(document.getElementById('offset').value, 10),
+        saveSRT: document.getElementById('saveSRT').checked,
         tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
     };
 }
