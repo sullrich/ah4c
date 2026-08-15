@@ -409,7 +409,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: pipeReader,
+					ReadCloser: maybeWrapCaptions(pipeReader, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -456,7 +456,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: pipe,
+					ReadCloser: maybeWrapCaptions(pipe, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -491,6 +491,9 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			if ready != nil {
 				body = newGateReader(body, ready)
 			}
+			// Captions wrap the outermost reader so they see the same bytes the
+			// DVR will, after any stall filling or playback gating.
+			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
 			r := &reader{
@@ -800,6 +803,65 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	// Closed captions
+	r.GET("/captions", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "captions.html", nil)
+	})
+	r.GET("/api/captions", func(c *gin.Context) {
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
+	r.POST("/api/captions", func(c *gin.Context) {
+		cfg := currentCaptionConfig()
+		if err := c.ShouldBindJSON(&cfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if _, ok := findCaptionModel(cfg.Model); !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if cfg.OffsetSec < 0 || cfg.OffsetSec > 15 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be between 0 and 15 seconds"})
+			return
+		}
+		if err := saveCaptionConfig(cfg); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		logger("[CC] Settings saved: enabled=%v model=%s language=%s", cfg.Enabled, cfg.Model, cfg.Language)
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
+	r.POST("/api/captions/runtime", func(c *gin.Context) {
+		if err := startRuntimeDownload(); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.POST("/api/captions/download/:model", func(c *gin.Context) {
+		m, ok := findCaptionModel(c.Param("model"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if err := startModelDownload(m); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.DELETE("/api/captions/model/:model", func(c *gin.Context) {
+		m, ok := findCaptionModel(c.Param("model"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if err := removeCaptionModel(m); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
 	r.POST("/api/tuner/:index/control/:action", func(c *gin.Context) {
 		index, err := strconv.Atoi(c.Param("index"))
 		if err != nil || index < 0 || index >= len(tuners) {
@@ -1208,6 +1270,7 @@ func loadenv() {
 func main() {
 	logger("[START] ah4c is starting")
 	loadenv()
+	loadCaptionConfig()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {
