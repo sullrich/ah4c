@@ -586,6 +586,11 @@ func (c *cea608) begin() {
 	c.col = 0
 }
 
+// ccMaxBacklog is the most unshown caption data we will hold, in byte pairs.
+// The channel moves two bytes per picture, so at 30 fps this is about five
+// seconds of text. Reaching it means recognition has outrun the display.
+const ccMaxBacklog = 150
+
 // push queues a phrase for display, wrapping it to the 32 column caption grid.
 func (c *cea608) push(text string) {
 	text = strings.TrimSpace(text)
@@ -594,6 +599,15 @@ func (c *cea608) push(text string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Captions have to track what is being said now. If a burst of recognition
+	// has queued more than the channel can carry, showing all of it would put
+	// the text permanently behind the picture, so drop what has not aired and
+	// start the roll-up again on the current phrase.
+	if len(c.queue) > ccMaxBacklog {
+		c.queue = c.queue[:0]
+		c.started = false
+		c.col = 0
+	}
 	if !c.started {
 		c.begin()
 	}
@@ -1611,14 +1625,25 @@ func (e *captionEngine) pumpAudio() {
 	}
 }
 
-// Voice activity settings. Audio is cut on silence rather than on a fixed
-// clock, so a phrase is recognized whole and reads like a sentence instead of a
-// string of fragments.
+// Voice activity settings.
+//
+// Live speech rarely leaves a clean half second of silence: on a newscast the
+// talking is continuous, so a segmenter that waits for a real pause never fires
+// and every phrase ends up cut at the ceiling instead. That ceiling then
+// becomes the caption delay, because nothing can be recognized until the audio
+// is complete.
+//
+// So there are three ways a phrase can end. A real pause closes it at any
+// length. Past vadMinPhrase, the short gap between two words is enough, which
+// is what normally fires during continuous speech and keeps the cut off the
+// middle of a word. The hard ceiling is only a backstop.
 const (
 	vadFrame     = asrSampleRate / 50 // 20 ms
 	vadMinSpeech = 0.6                // ignore blips shorter than this
-	vadMaxPhrase = 10.0               // force a cut so captions never fall behind
-	vadSilence   = 0.45               // trailing silence that ends a phrase
+	vadMinPhrase = 1.8                // past this, a word gap is enough to cut
+	vadWordGap   = 0.15               // the gap between two spoken words
+	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
+	vadMaxPhrase = 3.5                // backstop, so captions never fall this far behind
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
 )
 
@@ -1682,8 +1707,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 
 		phrase := float64(len(pending)) / asrSampleRate
 		ended := silenceRun >= vadSilence
+		gapped := phrase >= vadMinPhrase && silenceRun >= vadWordGap
 		forced := phrase >= vadMaxPhrase
-		if !ended && !forced {
+		if !ended && !gapped && !forced {
 			continue
 		}
 
