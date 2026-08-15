@@ -44,6 +44,20 @@ Streaming apps hand the encoder a picture with the captions already stripped off
 everything downstream of ah4c has nothing to display. The **Closed Captions** page adds
 them back.
 
+> **One volume has to be added before you use this.** The speech model and everything else
+> is downloaded on demand, and without somewhere on the host to put it, all of it lives
+> inside the container and is thrown away the moment the container is recreated. Add this
+> to the `ah4c` service and recreate it:
+>
+> ```yaml
+>       - ${HOST_DIR}/ah4c/captions:/opt/captions
+> ```
+>
+> ah4c checks for this at startup, says so in the log, and puts a warning at the top of the
+> Closed Captions page if it is missing, so you will not lose a download without being told.
+> Nothing else about the image or the compose file changes, and the directory stays empty
+> unless captions are switched on.
+
 Audio is pulled out of the encoder's transport stream, transcribed on the CPU by an
 NVIDIA Parakeet model, and written back into the video as CEA-608 caption data carried
 in ATSC A/53 user data — the same carriage an HDHomeRun uses for over-the-air captions.
@@ -145,10 +159,10 @@ files keep the natural sentence case regardless, since a file is read close up.
 The right build for the machine is chosen automatically, so the arm64 image fetches the
 arm64 engine without being told.
 
-Both engine and model land in `/opt/captions`, which is bound to
-`${HOST_DIR}/ah4c/captions` on the host, so they survive a container rebuild. Add that
-volume to your compose file; it stays empty unless you turn captions on. Remove either
-download from the page to reclaim the space.
+Both engine and model land in `/opt/captions`, which is why that volume has to exist. On
+the host they sit in `${HOST_DIR}/ah4c/captions`, beside the `scripts`, `m3u` and `adb`
+directories ah4c already keeps there. Remove either download from the page to reclaim the
+space.
 
 Captions appear a second or two after the words are spoken, because a phrase has to
 finish before it can be recognized — the same lag live broadcast captioning has. An
