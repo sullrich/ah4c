@@ -1103,9 +1103,15 @@ func odd608(b byte) byte {
 	return v
 }
 
-// cc608Char maps a rune onto the 608 basic character set, which is ASCII with a
-// handful of substitutions. Anything outside it becomes a space rather than
-// garbage on screen.
+// cc608Char maps a rune onto the CEA-608 basic character set.
+//
+// That set is ASCII with a few substitutions and nothing else, which is a
+// problem for a feature that offers twenty five languages: an accented letter
+// has no code point here. Dropping it leaves a hole in the middle of a word,
+// so "café" arrived as "caf ", which reads as a typo rather than as a missing
+// glyph. Every such letter is folded to its unaccented form instead, and the
+// handful of symbols that carry meaning are spelled out, so the caption stays
+// a readable word.
 func cc608Char(r rune) byte {
 	switch {
 	case r >= 0x20 && r <= 0x7F:
@@ -1116,16 +1122,72 @@ func cc608Char(r rune) byte {
 			return ' '
 		}
 		return byte(r)
-	case r == '‘' || r == '’':
-		return '\''
-	case r == '“' || r == '”':
-		return '"'
-	case r == '—' || r == '–':
-		return '-'
-	case r == '…':
-		return '.'
+	}
+	if b, ok := cc608Fold[r]; ok {
+		return b
 	}
 	return ' '
+}
+
+// cc608Fold folds the letters the European languages need onto the basic set.
+// It is not a transliteration scheme, just the nearest letter a viewer would
+// recognise, which is what a caption needs.
+var cc608Fold = map[rune]byte{
+	'á': 'a', 'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'ā': 'a', 'ă': 'a', 'ą': 'a',
+	'Á': 'A', 'À': 'A', 'Â': 'A', 'Ä': 'A', 'Ã': 'A', 'Å': 'A', 'Ā': 'A', 'Ă': 'A', 'Ą': 'A',
+	'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e', 'ĕ': 'e', 'ė': 'e', 'ę': 'e', 'ě': 'e',
+	'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E', 'Ē': 'E', 'Ė': 'E', 'Ę': 'E', 'Ě': 'E',
+	'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i', 'ī': 'i', 'į': 'i', 'ı': 'i',
+	'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I', 'Ī': 'I', 'Į': 'I', 'İ': 'I',
+	'ó': 'o', 'ò': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o', 'ø': 'o', 'ō': 'o', 'ő': 'o',
+	'Ó': 'O', 'Ò': 'O', 'Ô': 'O', 'Ö': 'O', 'Õ': 'O', 'Ø': 'O', 'Ō': 'O', 'Ő': 'O',
+	'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u', 'ū': 'u', 'ů': 'u', 'ű': 'u', 'ų': 'u',
+	'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U', 'Ū': 'U', 'Ů': 'U', 'Ű': 'U', 'Ų': 'U',
+	'ý': 'y', 'ÿ': 'y', 'Ý': 'Y', 'Ŷ': 'Y', 'ŷ': 'y',
+	'ñ': 'n', 'ń': 'n', 'ň': 'n', 'ņ': 'n', 'Ñ': 'N', 'Ń': 'N', 'Ň': 'N', 'Ņ': 'N',
+	'ç': 'c', 'ć': 'c', 'č': 'c', 'ĉ': 'c', 'Ç': 'C', 'Ć': 'C', 'Č': 'C', 'Ĉ': 'C',
+	'š': 's', 'ś': 's', 'ş': 's', 'ŝ': 's', 'Š': 'S', 'Ś': 'S', 'Ş': 'S', 'Ŝ': 'S',
+	'ž': 'z', 'ź': 'z', 'ż': 'z', 'Ž': 'Z', 'Ź': 'Z', 'Ż': 'Z',
+	'ł': 'l', 'ľ': 'l', 'ĺ': 'l', 'ļ': 'l', 'Ł': 'L', 'Ľ': 'L', 'Ĺ': 'L', 'Ļ': 'L',
+	'ť': 't', 'ţ': 't', 'ŧ': 't', 'Ť': 'T', 'Ţ': 'T', 'Ŧ': 'T',
+	'ď': 'd', 'đ': 'd', 'ð': 'd', 'Ď': 'D', 'Đ': 'D', 'Ð': 'D',
+	'ř': 'r', 'ŕ': 'r', 'Ř': 'R', 'Ŕ': 'R',
+	'ğ': 'g', 'ģ': 'g', 'ġ': 'g', 'Ğ': 'G', 'Ģ': 'G', 'Ġ': 'G',
+	'ķ': 'k', 'Ķ': 'K', 'ħ': 'h', 'Ħ': 'H',
+	'þ': 'p', 'Þ': 'P', 'ŭ': 'u', 'Ŭ': 'U',
+	'‘': '\'', '’': '\'', '‚': '\'', '‹': '<', '›': '>',
+	'“': '"', '”': '"', '„': '"', '«': '"', '»': '"',
+	'—': '-', '–': '-', '‑': '-', '−': '-',
+	'…': '.', '·': '.', '•': '-',
+	'\u00a0': ' ', '\u202f': ' ', '\u2009': ' ',
+}
+
+// cc608Expand spells out the characters that carry meaning and have no letter
+// to fold onto, so a price or a fraction is not silently blanked.
+var cc608Expand = map[rune]string{
+	'€': "EUR", '£': "GBP", '¥': "YEN", '¢': "c", '¤': "",
+	'æ': "ae", 'Æ': "AE", 'œ': "oe", 'Œ': "OE", 'ß': "ss",
+	'½': "1/2", '¼': "1/4", '¾': "3/4", '°': " degrees",
+	'±': "+/-", '×': "x", '÷': "/", '™': "(TM)", '©': "(C)", '®': "(R)",
+	'µ': "u", '§': "S", '¶': "P", '†': "+", '‡': "++",
+}
+
+// cc608ExpandText spells out the characters that have no single letter to fold
+// onto, before the text is laid out on the caption grid.
+func cc608ExpandText(text string) string {
+	if !strings.ContainsFunc(text, func(r rune) bool { _, ok := cc608Expand[r]; return ok }) {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text) + 8)
+	for _, r := range text {
+		if s, ok := cc608Expand[r]; ok {
+			b.WriteString(s)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // cea608 turns lines of recognized text into the byte pairs that ride in the
@@ -1190,6 +1252,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	if text == "" {
 		return
 	}
+	text = cc608ExpandText(text)
 	if c.upper {
 		text = strings.ToUpper(text)
 	}
