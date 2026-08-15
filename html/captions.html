@@ -196,7 +196,7 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Tuners <span class="hint">leave all unchecked to caption every tuner</span></div>
+            <div class="card-title">Tuners <span class="hint">numbered as they are on the Activity page; leave all unchecked to caption every tuner</span></div>
             <div class="tuner-picks" id="tuners"></div>
         </div>
 
@@ -300,8 +300,7 @@ function render() {
                 <div class="model-meta">${esc(e.desc)}</div>
                 <div class="model-tags">
                     <span class="tag">${e.sizeMB} MB</span>
-                    ${e.usable ? '<span class="tag tag-live">Available here</span>'
-                               : '<span class="tag">Not available in this container</span>'}
+                    ${e.usable ? '' : '<span class="tag">Not available in this container</span>'}
                 </div>
                 ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
                 <span class="model-src">Downloads from: <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
@@ -373,7 +372,7 @@ function render() {
     document.getElementById('tuners').innerHTML = state.tuners === 0
         ? '<span class="small muted">No tuners are configured.</span>'
         : Array.from({length: state.tuners}, (_, i) =>
-            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i + 1}</span></label>`).join('');
+            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i}</span></label>`).join('');
 }
 
 function pickModel(key) {
