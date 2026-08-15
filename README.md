@@ -80,11 +80,40 @@ whichever this container can actually load:
 | GPU via CUDA | 537 MB | The NVIDIA container runtime; the download carries its own CUDA runtime |
 | GPU via CUDA 12 | 722 MB | The same, for older drivers |
 
-None of them change the image. A GPU build is greyed out until the library it needs is
-loadable, which is tested by asking the dynamic loader rather than by guessing, so CUDA
-appears by itself once you give the container a GPU in your compose file. Apple silicon
-gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA build
-upstream and is offered CPU and Vulkan.
+None of them change the image, and the page tells you at a glance whether acceleration is
+actually working or which piece is missing.
+
+**Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
+downloads it the same way it downloads a model: the packages and everything they depend on
+are saved into `scripts/captions/drivers` inside the bind mount, and put back automatically
+at startup after a rebuild, without needing the network again.
+
+You also have to pass the graphics device through, which the stock compose file does not do.
+Add this to the `ah4c` service and recreate the container:
+
+```yaml
+    devices:
+      - /dev/dri:/dev/dri
+```
+
+**CUDA** needs nothing installed: the download carries its own CUDA runtime, and the NVIDIA
+container runtime supplies the driver. Give the container a GPU the usual way, for example:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+A GPU build is greyed out until the library it needs is loadable, which is settled by asking
+the dynamic loader rather than by guessing. If a GPU build is selected but cannot run, the
+engine falls back to the processor rather than failing, so captions keep working. Apple
+silicon gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA
+build upstream and is offered CPU and Vulkan.
 
 Quick Sync is not on that list and cannot be. It is fixed-function video encode and decode
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
