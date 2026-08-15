@@ -372,12 +372,12 @@ func loadCaptionConfig() {
 }
 
 func saveCaptionConfig(cfg captionConfig) error {
-	// Choosing a GPU build is also choosing to keep its driver in place, so the
-	// restore at startup has something to act on without a second setting.
+	// Choosing a GPU build also means keeping its driver in place. Selecting the
+	// processor deliberately does not clear that: a downloaded driver is kept
+	// working across restarts whatever the engine happens to be set to, so
+	// switching to the processor for an evening does not throw it away.
 	if v, ok := findEngineVariant(cfg.Engine); ok && v.Key == "vulkan" {
 		cfg.GPURuntime = "vulkan"
-	} else if cfg.Engine == "cpu" {
-		cfg.GPURuntime = ""
 	}
 	if err := os.MkdirAll(captionDir, 0o755); err != nil {
 		return err
@@ -726,7 +726,7 @@ func driverDownloaded(g gpuRuntime) bool {
 		return false
 	}
 	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".deb") {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".deb") {
 			return true
 		}
 	}
@@ -792,6 +792,18 @@ func startDriverDownload(kind string) error {
 			logger("[CC] %s could not be set up: %v", g.Name, err)
 		} else {
 			logger("[CC] %s is ready", g.Name)
+			// Record that this driver is wanted. Downloading it is the only
+			// point at which the intent is expressed: the engine picker will
+			// not offer a GPU build until the driver already loads, so waiting
+			// for that selection to save the choice means it is never saved and
+			// the driver disappears on the next restart.
+			cfg := currentCaptionConfig()
+			if cfg.GPURuntime != g.Key {
+				cfg.GPURuntime = g.Key
+				if e := saveCaptionConfig(cfg); e != nil {
+					logger("[CC] Could not record the driver choice: %v", e)
+				}
+			}
 		}
 		gpuLock.Unlock()
 	}()
@@ -805,7 +817,11 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return "", fmt.Errorf("this image has no apt-get, so the driver cannot be fetched from here")
 	}
 	dir := driverDir(g)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// apt downloads into a partial subdirectory of its archive cache and moves
+	// the finished files up. Without that directory it refuses to start, which
+	// is the difference between the packages landing in the bind mount and not
+	// being downloaded at all.
+	if err := os.MkdirAll(filepath.Join(dir, "partial"), 0o755); err != nil {
 		return "", err
 	}
 	abs, err := filepath.Abs(dir)
@@ -824,31 +840,74 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	if err := run("apt-get", "update"); err != nil {
 		return log.String(), fmt.Errorf("apt-get update: %w", err)
 	}
-	// --download-only with the cache pointed at the bind mount leaves the
-	// packages, and their dependencies, somewhere a rebuild cannot reach.
 	args := append([]string{"apt-get", "install", "-y", "--no-install-recommends",
 		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}, g.Packages...)
-	if err := run(args...); err != nil {
-		return log.String(), fmt.Errorf("downloading %s: %w", strings.Join(g.Packages, " "), err)
+	aptErr := run(args...)
+
+	// Whether or not apt honoured the archive directory, the packages have to
+	// end up in the bind mount, because that is the only thing a rebuild does
+	// not erase. If they went to the default cache instead, move them.
+	if !driverDownloaded(g) {
+		if n := harvestDebs(dir); n > 0 {
+			logger("[CC] Recovered %d packages from the default apt cache", n)
+		}
 	}
 	if !driverDownloaded(g) {
-		return log.String(), fmt.Errorf("no packages were downloaded")
+		if aptErr != nil {
+			return log.String(), fmt.Errorf("downloading %s: %w", strings.Join(g.Packages, " "), aptErr)
+		}
+		return log.String(), fmt.Errorf("no packages ended up in %s", dir)
 	}
+	n, _ := savedDebs(g)
+	logger("[CC] Saved %d packages for %s in %s", len(n), g.Name, dir)
 	return log.String(), nil
+}
+
+// harvestDebs copies anything apt left in the default cache into the bind
+// mount, and returns how many it moved.
+func harvestDebs(dir string) int {
+	ents, err := os.ReadDir("/var/cache/apt/archives")
+	if err != nil {
+		return 0
+	}
+	moved := 0
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".deb") {
+			continue
+		}
+		src := filepath.Join("/var/cache/apt/archives", e.Name())
+		b, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		if os.WriteFile(filepath.Join(dir, e.Name()), b, 0o644) == nil {
+			moved++
+		}
+	}
+	return moved
+}
+
+// savedDebs lists the packages held for a driver.
+func savedDebs(g gpuRuntime) ([]string, error) {
+	ents, err := os.ReadDir(driverDir(g))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".deb") {
+			out = append(out, filepath.Join(driverDir(g), e.Name()))
+		}
+	}
+	return out, nil
 }
 
 // applyDriver unpacks the saved packages into the running container. This is
 // what runs after a rebuild, and it needs no network.
 func applyDriver(g gpuRuntime) (string, error) {
-	ents, err := os.ReadDir(driverDir(g))
+	debs, err := savedDebs(g)
 	if err != nil {
 		return "", err
-	}
-	var debs []string
-	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".deb") {
-			debs = append(debs, filepath.Join(driverDir(g), e.Name()))
-		}
 	}
 	if len(debs) == 0 {
 		return "", fmt.Errorf("no saved packages to install")
@@ -941,19 +1000,27 @@ func accelStatus() accelReport {
 // copy in the bind mount. Called at startup, so the choice survives without
 // anyone pressing anything or the network being reachable.
 func restoreGPURuntime() {
+	if runtime.GOOS != "linux" {
+		return
+	}
 	cfg := currentCaptionConfig()
-	if cfg.GPURuntime == "" || runtime.GOOS != "linux" {
-		return
-	}
-	g, ok := findGPURuntime(cfg.GPURuntime)
-	if !ok || driverActive(g) || !driverDownloaded(g) {
-		return
-	}
-	logger("[CC] %s is configured but not loaded, restoring it from %s", g.Name, driverDir(g))
-	if out, err := applyDriver(g); err != nil {
-		logger("[CC] %s could not be restored: %v %s", g.Name, err, tailLines(out, 6))
-	} else {
+	for _, g := range gpuRuntimes {
+		// Anything with packages saved in the bind mount gets put back, whether
+		// or not the config remembers asking for it. The packages being there
+		// is the intent; a rebuild wipes the installed copy but not them.
+		if !driverDownloaded(g) || driverActive(g) {
+			continue
+		}
+		logger("[CC] %s is saved but not loaded, restoring it from %s", g.Name, driverDir(g))
+		if out, err := applyDriver(g); err != nil {
+			logger("[CC] %s could not be restored: %v %s", g.Name, err, tailLines(out, 6))
+			continue
+		}
 		logger("[CC] %s restored", g.Name)
+		if cfg.GPURuntime != g.Key {
+			cfg.GPURuntime = g.Key
+			saveCaptionConfig(cfg)
+		}
 	}
 }
 
