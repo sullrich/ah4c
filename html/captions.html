@@ -125,6 +125,13 @@
                 </select>
             </div>
             <div class="field-row">
+                <label for="case">Letter case</label>
+                <select id="case">
+                    <option value="upper">Capitals (broadcast standard)</option>
+                    <option value="mixed">As recognized</option>
+                </select>
+            </div>
+            <div class="field-row">
                 <label for="offset">Extra delay</label>
                 <select id="offset"></select>
             </div>
@@ -135,6 +142,10 @@
                     <span>Save a subtitle file for each stream</span>
                 </label>
             </div>
+            <p class="footnote">
+                Capitals are the long-standing convention for broadcast captioning and are easier to
+                read across a room. They also even out the streaming models, which write in lower case.
+            </p>
             <p class="footnote">
                 Captions appear a couple of seconds after the words are spoken, the same as live
                 broadcast captioning, because the sentence has to finish before it can be recognized.
@@ -260,6 +271,7 @@ function render() {
 
     document.getElementById('style').value = cfg.style || 'rollup3';
     document.getElementById('saveSRT').checked = !!cfg.saveSRT;
+    document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     const off = document.getElementById('offset');
     off.innerHTML = Array.from({length: 16}, (_, i) =>
@@ -288,6 +300,7 @@ function collect() {
         style: document.getElementById('style').value,
         offsetSec: parseInt(document.getElementById('offset').value, 10),
         saveSRT: document.getElementById('saveSRT').checked,
+        uppercase: document.getElementById('case').value === 'upper',
         tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
     };
 }

@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -57,11 +58,18 @@ const (
 // no cgo, no ONNX Runtime and nothing linked into the binary.
 const parakeetRelease = "v0.5.0"
 
-// engineAsset names the engine archive for a platform and the library inside
-// it. The archive is roughly a megabyte on CPU builds.
+// engineAsset names the engine archive for this build and the library inside
+// it. The architecture is decided at compile time, so an arm64 image fetches
+// the arm64 build without being told which it is.
 func engineAsset() (url, local string, ok bool) {
+	return engineAssetFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// engineAssetFor is the platform table, separated so every entry can be checked
+// rather than only the one this machine happens to be.
+func engineAssetFor(goos, goarch string) (url, local string, ok bool) {
 	base := "https://github.com/mudler/parakeet.cpp/releases/download/" + parakeetRelease + "/parakeet-" + parakeetRelease + "-lib-"
-	switch runtime.GOOS + "/" + runtime.GOARCH {
+	switch goos + "/" + goarch {
 	case "linux/amd64":
 		return base + "linux-cpu-x64.tar.gz", "libparakeet.so", true
 	case "linux/arm64":
@@ -130,20 +138,9 @@ var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "
 // three or four seconds behind.
 var captionModelCatalog = []captionModel{
 	{
-		Key:       "realtime-120m",
-		Name:      "Parakeet Realtime 120M",
-		Desc:      "Transcribes continuously as the audio arrives, so captions appear about as fast as broadcast captioning. Being a small streaming model it writes plain lowercase without punctuation.",
-		Latency:   "Under a second",
-		Hardware:  "Runs on almost anything. A low-power NAS, a mini PC or a Raspberry Pi class board is plenty.",
-		File:      "realtime_eou_120m-v1-q8_0.gguf",
-		SizeMB:    168,
-		Streaming: true,
-		Languages: []string{"en"},
-	},
-	{
 		Key:       "realtime-multilingual",
-		Name:      "Nemotron 3.5 Streaming 0.6B",
-		Desc:      "The same continuous transcription in any of its languages, pinned or detected. Choose this over the 120M only if you need something other than English.",
+		Name:      "Nemotron 3.5 Streaming 0.6B (recommended)",
+		Desc:      "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. This is the one that reads like real captions.",
 		Latency:   "Under a second",
 		Hardware:  "A modern multi-core CPU. Roughly five times the work of the 120M.",
 		File:      "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
@@ -152,9 +149,20 @@ var captionModelCatalog = []captionModel{
 		Languages: euroLanguages,
 	},
 	{
+		Key:       "realtime-120m",
+		Name:      "Parakeet Realtime 120M",
+		Desc:      "Just as quick and a fifth of the size, for hardware that cannot spare the cores. Writes no punctuation at all: the model produces none, and no setting changes that.",
+		Latency:   "Under a second",
+		Hardware:  "Runs on almost anything. A low-power NAS, a mini PC or a Raspberry Pi class board is plenty.",
+		File:      "realtime_eou_120m-v1-q8_0.gguf",
+		SizeMB:    168,
+		Streaming: true,
+		Languages: []string{"en"},
+	},
+	{
 		Key:       "parakeet-v3",
 		Name:      "Parakeet TDT 0.6B v3",
-		Desc:      "Waits for a whole phrase and then transcribes it. The most accurate of the multilingual options, at the cost of arriving later.",
+		Desc:      "Waits for a whole phrase and then transcribes it, with punctuation. The most accurate of the multilingual options, at the cost of arriving later.",
 		Latency:   "Three to four seconds",
 		Hardware:  "A modern multi-core CPU.",
 		File:      "tdt-0.6b-v3-q8_0.gguf",
@@ -164,7 +172,7 @@ var captionModelCatalog = []captionModel{
 	{
 		Key:       "parakeet-110m",
 		Name:      "Parakeet TDT-CTC 110M",
-		Desc:      "Phrase at a time, English only. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
+		Desc:      "Phrase at a time, English only, with punctuation. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
 		Latency:   "Three to four seconds",
 		Hardware:  "Modest hardware. Comfortable on a NAS.",
 		File:      "tdt_ctc-110m-q8_0.gguf",
@@ -204,6 +212,10 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
+	// Uppercase renders captions in capitals, which is the long-standing
+	// convention for broadcast captioning and is easier to read at a distance.
+	// It also squares up the streaming models, which write in lower case.
+	Uppercase bool `json:"uppercase"`
 	// OffsetSec delays caption display, for trimming sync by hand. It never
 	// delays the video: the stream is passed through untouched apart from the
 	// caption bytes, so a tune is exactly as fast with captions on as off.
@@ -218,9 +230,10 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:   false,
-		Model:     "realtime-120m",
+		Model:     "realtime-multilingual",
 		Language:  "en",
 		Style:     "rollup3",
+		Uppercase: true,
 		OffsetSec: 0,
 	}
 }
@@ -611,9 +624,10 @@ type cea608 struct {
 	started bool
 	col     int
 	maxCol  int
+	upper   bool
 }
 
-func newCEA608(style string) *cea608 {
+func newCEA608(style string, upper bool) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -621,7 +635,7 @@ func newCEA608(style string) *cea608 {
 	case "rollup4":
 		rows = ccRU4
 	}
-	return &cea608{rows: rows, maxCol: 32}
+	return &cea608{rows: rows, maxCol: 32, upper: upper}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -662,6 +676,9 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
+	}
+	if c.upper {
+		text = strings.ToUpper(text)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1604,7 +1621,7 @@ func (p *parakeet) transcribe(pcm []float32) (string, error) {
 		}
 		return "", fmt.Errorf("recognition failed")
 	}
-	return cStringFree(out), nil
+	return cleanRecognized(cStringFree(out)), nil
 }
 
 // beginStream opens a cache-aware streaming session. Only a streaming
@@ -1660,9 +1677,10 @@ func (r *streamResult) words() string {
 	if len(r.Words) == 0 {
 		return ""
 	}
+	_ = r.Text
 	parts := make([]string, 0, len(r.Words))
 	for _, w := range r.Words {
-		if t := strings.TrimSpace(w.W); t != "" {
+		if t := cleanRecognized(w.W); t != "" {
 			parts = append(parts, t)
 		}
 	}
@@ -1705,6 +1723,21 @@ func parseStreamResult(doc string) *streamResult {
 		return nil
 	}
 	return &r
+}
+
+// specialToken matches the control tokens a model emits alongside the words:
+// the language tag a prompt-conditioned model stamps on each utterance, and the
+// end-of-utterance and backchannel markers. They belong to the model, not to
+// the caption, and would otherwise be read out on screen as "<en-US>".
+var specialToken = regexp.MustCompile(`<[^<>]*>`)
+
+// cleanRecognized removes those tokens and tidies the spacing they leave.
+func cleanRecognized(text string) string {
+	if !strings.ContainsRune(text, '<') {
+		return strings.TrimSpace(text)
+	}
+	text = specialToken.ReplaceAllString(text, " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
 }
 
 // cStringFree copies a NUL-terminated string out of engine memory and releases
@@ -1921,7 +1954,7 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) 
 		return nil, err
 	}
 	e := &captionEngine{
-		enc:     newCEA608(cfg.Style),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase),
 		label:   label,
 		cfg:     cfg,
 		model:   model,
