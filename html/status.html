@@ -149,7 +149,7 @@
         }
 
         function openTunerModal(index) {
-            previewRetries = 0;
+            previewDeadline = 0;
             modalIndex = index;
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
@@ -161,7 +161,7 @@
 
         function startPreviewClicked() {
             if (modalIndex === null) return;
-            previewRetries = 0;
+            previewDeadline = Date.now() + PREVIEW_GRACE;
             $('#previewStart').addClass('hidden');
             $('#modalVideo').removeClass('hidden');
             startPreview(modalIndex);
@@ -174,9 +174,11 @@
         }
 
         var stallTimer = null;
+        var restartTimer = null;
         var lastFrames = 0;
         var stallTicks = 0;
-        var previewRetries = 0;
+        var previewDeadline = 0;
+        var PREVIEW_GRACE = 90000;
 
         function startPreview(index) {
             stopPreview();
@@ -194,6 +196,7 @@
                 videoElement.currentTime = videoElement.duration;
             }, { once: true });
             videoElement.addEventListener('ended', restartSoon, { once: true });
+            player.on(mpegts.Events.ERROR, restartSoon);
             player.load();
             player.play().catch(function() {});
             startWatchdog();
@@ -226,7 +229,8 @@
                     }
                 } else {
                     stallTicks = 0;
-                    previewRetries = 0;
+                    previewDeadline = Date.now() + PREVIEW_GRACE;
+                    setModalHint();
                 }
                 lastFrames = frames;
             }, 2000);
@@ -237,24 +241,37 @@
                 clearInterval(stallTimer);
                 stallTimer = null;
             }
+            if (restartTimer) {
+                clearTimeout(restartTimer);
+                restartTimer = null;
+            }
         }
 
         function restartSoon() {
-            setTimeout(restartPreview, 2000);
+            if (restartTimer) return;
+            restartTimer = setTimeout(function() {
+                restartTimer = null;
+                restartPreview();
+            }, 2000);
         }
 
         function restartPreview() {
             if (modalIndex === null || document.hidden) return;
-            if (++previewRetries > 5) {
+            if (Date.now() > previewDeadline) {
                 stopPreview();
-                $('#modalHint').text('Preview gave up after repeated stalls — close and reopen to retry.');
+                previewDeadline = 0;
+                $('#modalVideo').addClass('hidden');
+                $('#previewStart').removeClass('hidden');
+                $('#modalHint').text('No video from the encoder — if the device was asleep, give it a moment and start the preview again.');
                 return;
             }
+            $('#modalHint').text('Waiting for video from the encoder…');
             startPreview(modalIndex);
         }
 
         function sendKey(action) {
             if (modalIndex === null) return;
+            if (previewDeadline) previewDeadline = Date.now() + PREVIEW_GRACE;
             $.post('/api/tuner/' + modalIndex + '/control/' + action).fail(function() {
                 $('#modalHint').text('Control failed — this device may not be reachable over adb.');
                 setTimeout(setModalHint, 4000);
