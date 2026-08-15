@@ -835,6 +835,13 @@ func run() error {
 		logger("[CC] Settings saved: enabled=%v model=%s language=%s", cfg.Enabled, cfg.Model, cfg.Language)
 		c.JSON(http.StatusOK, captionStatusPayload())
 	})
+	r.POST("/api/captions/driver/:kind", func(c *gin.Context) {
+		if err := startDriverDownload(c.Param("kind")); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
 		if err := startRuntimeDownload(c.Param("variant")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -1275,6 +1282,7 @@ func main() {
 	logger("[START] ah4c is starting")
 	loadenv()
 	loadCaptionConfig()
+	restoreGPURuntime()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {

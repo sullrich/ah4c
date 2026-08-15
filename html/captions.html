@@ -50,6 +50,18 @@
             color: var(--text-muted);
         }
         .tag-live { border-color: rgba(82,210,115,0.4); color: var(--live); }
+        .accel {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid var(--border-soft); background: var(--bg);
+            margin-bottom: 0.7rem;
+        }
+        .accel.on { border-color: rgba(82,210,115,0.4); background: var(--live-soft); }
+        .accel .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); margin-top: 0.35rem; flex-shrink: 0; }
+        .accel.on .dot { background: var(--live); }
+        .accel .h { font-weight: 600; font-size: 0.85rem; }
+        .accel .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; margin-top: 0.2rem; }
+        .drv-log { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); white-space: pre-wrap; margin-top: 0.5rem; max-height: 150px; overflow: auto; }
         @media (max-width: 640px) {
             .model-row { grid-template-columns: auto 1fr; }
             .model-actions { grid-column: 1 / -1; justify-content: flex-start; }
@@ -98,7 +110,10 @@
 
         <div class="card">
             <div class="card-title">Speech engine <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div id="accel"></div>
             <div class="model-list" id="runtimeRow"></div>
+            <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
+            <div id="drvState"></div>
             <p class="footnote">
                 Where the model runs. The processor build needs nothing and handles several tuners
                 at once. A GPU build is only offered when this container can actually load it: CUDA
@@ -213,6 +228,43 @@ function render() {
     badge.textContent = need;
     badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
 
+    // Is acceleration actually working, and if not, which piece is missing.
+    const a = state.accel || {};
+    document.getElementById('accel').innerHTML = `
+        <div class="accel ${a.active ? 'on' : ''}">
+            <span class="dot"></span>
+            <div>
+                <div class="h">${esc(a.headline || '')}</div>
+                <div class="d">${esc(a.detail || '')}</div>
+            </div>
+        </div>`;
+
+    // Driver packages, kept in the bind mount so a rebuild does not lose them.
+    document.getElementById('driverRow').innerHTML = (state.drivers || []).map(d => `
+        <div class="model-row">
+            <span class="menu-icon" style="width:15px;"></span>
+            <div>
+                <div class="model-name">${esc(d.name)}</div>
+                <div class="model-meta">${esc(d.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag ${d.active ? 'tag-live' : ''}">${d.active ? 'Loaded' : 'Not loaded'}</span>
+                    <span class="tag">${d.downloaded ? 'Saved in scripts/captions/drivers' : 'Not downloaded'}</span>
+                </div>
+                <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from this image's own Debian archives, kept in the bind mount so a rebuild does not have to fetch them again.</span>
+            </div>
+            <div class="model-actions">
+                <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
+            </div>
+        </div>`).join('');
+
+    const di = state.driverInstall || {};
+    document.getElementById('drvState').innerHTML =
+        (di.active || di.err || di.log)
+            ? `<p class="small muted" style="margin:0.7rem 0 0;">${di.active ? 'Installing the driver…' : (di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.')}</p>` +
+              (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
+            : '';
+
     // Engine builds: processor or GPU, offered only where loadable.
     document.getElementById('runtimeRow').innerHTML = (state.engines || []).map(e => `
         <div class="model-row ${e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
@@ -316,6 +368,7 @@ function collect() {
         saveSRT: document.getElementById('saveSRT').checked,
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',
+        gpuRuntime: state.config.gpuRuntime || '',
         tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
     };
 }
@@ -346,6 +399,32 @@ async function download(key) {
 function pickEngine(key) {
     state.config.engine = key;
     render();
+}
+
+async function getDriver(kind) {
+    const r = await fetch('/api/captions/driver/' + encodeURIComponent(kind), {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the driver download';
+        return;
+    }
+    pollDriver();
+}
+
+let drvPolling = false;
+async function pollDriver() {
+    if (drvPolling) return;
+    drvPolling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        next.config = Object.assign({}, next.config, collect(), {model: state.config.model, engine: state.config.engine});
+        state = next;
+        render();
+        if (state.driverInstall && state.driverInstall.active) setTimeout(tick, 1500);
+        else drvPolling = false;
+    };
+    tick();
 }
 
 async function getRuntime(key) {

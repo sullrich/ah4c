@@ -322,6 +322,9 @@ type captionConfig struct {
 	// delays the video: the stream is passed through untouched apart from the
 	// caption bytes, so a tune is exactly as fast with captions on as off.
 	OffsetSec int `json:"offsetSec"`
+	// GPURuntime names driver packages to keep installed in the container, so a
+	// GPU build of the engine has something to talk to.
+	GPURuntime string `json:"gpuRuntime"`
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
@@ -369,6 +372,13 @@ func loadCaptionConfig() {
 }
 
 func saveCaptionConfig(cfg captionConfig) error {
+	// Choosing a GPU build is also choosing to keep its driver in place, so the
+	// restore at startup has something to act on without a second setting.
+	if v, ok := findEngineVariant(cfg.Engine); ok && v.Key == "vulkan" {
+		cfg.GPURuntime = "vulkan"
+	} else if cfg.Engine == "cpu" {
+		cfg.GPURuntime = ""
+	}
 	if err := os.MkdirAll(captionDir, 0o755); err != nil {
 		return err
 	}
@@ -659,6 +669,294 @@ func removeCaptionModel(m captionModel) error {
 	}
 	logger("[CC] Removed model %s", m.Key)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// GPU driver support
+// ---------------------------------------------------------------------------
+
+// A GPU build of the engine needs a driver in the container, and the base image
+// ships none. That is handled the same way the model is: the packages are
+// downloaded once into the bind mount, where they survive a rebuild, and put
+// back in place at startup from that copy without touching the network again.
+// Nobody who leaves captions off pays anything for it.
+//
+// The packages are the distribution's own rather than files picked by hand. A
+// Vulkan driver pulls in a dozen libraries, and letting the package manager
+// work out which is the difference between something that runs on other
+// people's machines and something that runs on mine.
+
+const captionDrivers = "scripts/captions/drivers"
+
+type gpuRuntime struct {
+	Key      string   `json:"key"`
+	Name     string   `json:"name"`
+	Desc     string   `json:"desc"`
+	Packages []string `json:"packages"`
+	// Needs is the library whose presence proves the driver is in place.
+	Needs string `json:"needs"`
+	Note  string `json:"note"`
+}
+
+var gpuRuntimes = []gpuRuntime{
+	{
+		Key:      "vulkan",
+		Name:     "Vulkan driver",
+		Desc:     "The Vulkan loader and the open source drivers, which cover Intel and AMD graphics. On NVIDIA the container runtime brings its own driver and only the loader is used.",
+		Packages: []string{"libvulkan1", "mesa-vulkan-drivers"},
+		Needs:    "libvulkan.so.1",
+		Note:     "Your compose file also has to pass the graphics device through, with a devices entry for /dev/dri.",
+	},
+}
+
+func findGPURuntime(key string) (gpuRuntime, bool) {
+	for _, g := range gpuRuntimes {
+		if g.Key == key {
+			return g, true
+		}
+	}
+	return gpuRuntime{}, false
+}
+
+func driverDir(g gpuRuntime) string { return filepath.Join(captionDrivers, g.Key) }
+
+// driverDownloaded reports whether the packages are sitting in the bind mount,
+// which is what survives a rebuild.
+func driverDownloaded(g gpuRuntime) bool {
+	ents, err := os.ReadDir(driverDir(g))
+	if err != nil {
+		return false
+	}
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".deb") {
+			return true
+		}
+	}
+	return false
+}
+
+// driverActive reports whether the driver is loadable right now.
+func driverActive(g gpuRuntime) bool {
+	h, err := purego.Dlopen(g.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	return err == nil && h != 0
+}
+
+type gpuInstallState struct {
+	Kind     string `json:"kind"`
+	Active   bool   `json:"active"`
+	Finished bool   `json:"finished"`
+	Err      string `json:"err"`
+	Log      string `json:"log"`
+}
+
+var (
+	gpuLock  sync.Mutex
+	gpuState gpuInstallState
+)
+
+func gpuInstallStatus() gpuInstallState {
+	gpuLock.Lock()
+	defer gpuLock.Unlock()
+	return gpuState
+}
+
+// startDriverDownload fetches the packages into the bind mount and puts them in
+// place, in the background.
+func startDriverDownload(kind string) error {
+	g, ok := findGPURuntime(kind)
+	if !ok {
+		return fmt.Errorf("unknown driver %q", kind)
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("drivers are only installable inside the container")
+	}
+	gpuLock.Lock()
+	if gpuState.Active {
+		gpuLock.Unlock()
+		return fmt.Errorf("a driver download is already running")
+	}
+	gpuState = gpuInstallState{Kind: kind, Active: true}
+	gpuLock.Unlock()
+
+	go func() {
+		log, err := fetchDriver(g)
+		if err == nil {
+			var l2 string
+			l2, err = applyDriver(g)
+			log += l2
+		}
+		gpuLock.Lock()
+		gpuState.Active = false
+		gpuState.Finished = true
+		gpuState.Log = tailLines(log, 12)
+		if err != nil {
+			gpuState.Err = err.Error()
+			logger("[CC] %s could not be set up: %v", g.Name, err)
+		} else {
+			logger("[CC] %s is ready", g.Name)
+		}
+		gpuLock.Unlock()
+	}()
+	return nil
+}
+
+// fetchDriver downloads the packages and everything they depend on into the
+// bind mount. Only this step needs the network.
+func fetchDriver(g gpuRuntime) (string, error) {
+	if _, err := exec.LookPath("apt-get"); err != nil {
+		return "", fmt.Errorf("this image has no apt-get, so the driver cannot be fetched from here")
+	}
+	dir := driverDir(g)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	var log strings.Builder
+	run := func(args ...string) error {
+		logger("[CC] %v", args)
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, e := cmd.CombinedOutput()
+		log.Write(b)
+		return e
+	}
+	if err := run("apt-get", "update"); err != nil {
+		return log.String(), fmt.Errorf("apt-get update: %w", err)
+	}
+	// --download-only with the cache pointed at the bind mount leaves the
+	// packages, and their dependencies, somewhere a rebuild cannot reach.
+	args := append([]string{"apt-get", "install", "-y", "--no-install-recommends",
+		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}, g.Packages...)
+	if err := run(args...); err != nil {
+		return log.String(), fmt.Errorf("downloading %s: %w", strings.Join(g.Packages, " "), err)
+	}
+	if !driverDownloaded(g) {
+		return log.String(), fmt.Errorf("no packages were downloaded")
+	}
+	return log.String(), nil
+}
+
+// applyDriver unpacks the saved packages into the running container. This is
+// what runs after a rebuild, and it needs no network.
+func applyDriver(g gpuRuntime) (string, error) {
+	ents, err := os.ReadDir(driverDir(g))
+	if err != nil {
+		return "", err
+	}
+	var debs []string
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".deb") {
+			debs = append(debs, filepath.Join(driverDir(g), e.Name()))
+		}
+	}
+	if len(debs) == 0 {
+		return "", fmt.Errorf("no saved packages to install")
+	}
+	logger("[CC] Installing %d saved packages for %s", len(debs), g.Name)
+	cmd := exec.Command("dpkg", append([]string{"-i", "--force-depends"}, debs...)...)
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	out, err := cmd.CombinedOutput()
+	if err != nil && !driverActive(g) {
+		return string(out), fmt.Errorf("installing the saved packages: %w", err)
+	}
+	if !driverActive(g) {
+		return string(out), fmt.Errorf("%s still will not load", g.Needs)
+	}
+	return string(out), nil
+}
+
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderNodes lists the graphics devices visible inside the container.
+//
+// A container gets no device nodes unless the compose file passes them, so this
+// is usually the reason a GPU build sees nothing: the driver is installed, the
+// card is in the machine, and /dev/dri simply is not here.
+func renderNodes() []string {
+	ents, err := os.ReadDir("/dev/dri")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), "render") || strings.HasPrefix(e.Name(), "card") {
+			out = append(out, "/dev/dri/"+e.Name())
+		}
+	}
+	return out
+}
+
+// accelReport is what the page shows about hardware acceleration: not just
+// whether it was asked for, but whether each thing it depends on is actually
+// there.
+type accelReport struct {
+	Variant  string   `json:"variant"`
+	Active   bool     `json:"active"`
+	Headline string   `json:"headline"`
+	Detail   string   `json:"detail"`
+	Devices  []string `json:"devices"`
+}
+
+// accelStatus works out whether the GPU is really going to be used, and if not,
+// which of the pieces is missing.
+func accelStatus() accelReport {
+	cfg := currentCaptionConfig()
+	v, ok := findEngineVariant(cfg.Engine)
+	r := accelReport{Variant: cfg.Engine, Devices: renderNodes()}
+	if !ok || v.Key == "cpu" {
+		r.Headline = "Running on the processor"
+		r.Detail = "No GPU build is selected. This is fine for a few tuners at once; a GPU build spares the cores and the heat when many are running."
+		return r
+	}
+	switch {
+	case !engineUsable(v):
+		r.Headline = "Not accelerated: the driver is missing"
+		r.Detail = fmt.Sprintf("%s is selected but %s will not load. Download the driver below.", v.Name, v.Needs)
+	case v.Key == "vulkan" && len(r.Devices) == 0:
+		r.Headline = "Not accelerated: no graphics device in the container"
+		r.Detail = "The driver is in place but /dev/dri is not here. Add a devices entry for /dev/dri to your compose file and recreate the container."
+	case !engineInstalled():
+		r.Headline = "Not accelerated: the engine build is not downloaded"
+		r.Detail = fmt.Sprintf("Download the %s build above.", v.Name)
+	default:
+		r.Active = true
+		r.Headline = "Hardware acceleration is active: " + v.Name
+		if len(r.Devices) > 0 {
+			r.Detail = "Using " + strings.Join(r.Devices, ", ") + ". The engine falls back to the processor by itself if the device stops answering, so captions keep working either way."
+		} else {
+			r.Detail = "The engine falls back to the processor by itself if the device stops answering, so captions keep working either way."
+		}
+	}
+	return r
+}
+
+// restoreGPURuntime puts the driver back after a container rebuild, from the
+// copy in the bind mount. Called at startup, so the choice survives without
+// anyone pressing anything or the network being reachable.
+func restoreGPURuntime() {
+	cfg := currentCaptionConfig()
+	if cfg.GPURuntime == "" || runtime.GOOS != "linux" {
+		return
+	}
+	g, ok := findGPURuntime(cfg.GPURuntime)
+	if !ok || driverActive(g) || !driverDownloaded(g) {
+		return
+	}
+	logger("[CC] %s is configured but not loaded, restoring it from %s", g.Name, driverDir(g))
+	if out, err := applyDriver(g); err != nil {
+		logger("[CC] %s could not be restored: %v %s", g.Name, err, tailLines(out, 6))
+	} else {
+		logger("[CC] %s restored", g.Name)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2532,7 +2830,16 @@ type captionStatus struct {
 	RuntimeVersion string                `json:"runtimeVersion"`
 	RuntimeURL     string                `json:"runtimeURL"`
 	Engines        []captionStatusEngine `json:"engines"`
+	Drivers        []captionStatusDriver `json:"drivers"`
+	Accel          accelReport           `json:"accel"`
+	DriverInstall  gpuInstallState       `json:"driverInstall"`
 	Tuners         int                   `json:"tuners"`
+}
+
+type captionStatusDriver struct {
+	gpuRuntime
+	Downloaded bool `json:"downloaded"`
+	Active     bool `json:"active"`
 }
 
 type captionStatusEngine struct {
@@ -2556,6 +2863,14 @@ func captionStatusPayload() captionStatus {
 		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m), URL: modelURL(m)})
 	}
 	engineURL, _, _ := engineAsset()
+	drivers := make([]captionStatusDriver, 0, len(gpuRuntimes))
+	for _, g := range gpuRuntimes {
+		drivers = append(drivers, captionStatusDriver{
+			gpuRuntime: g,
+			Downloaded: driverDownloaded(g),
+			Active:     driverActive(g),
+		})
+	}
 	cur := currentEngineVariant()
 	cpuURL, _, _ := engineAssetFor(runtime.GOOS, runtime.GOARCH, "cpu")
 	engines := make([]captionStatusEngine, 0, len(engineVariants))
@@ -2600,6 +2915,9 @@ func captionStatusPayload() captionStatus {
 		RuntimeVersion: parakeetRelease,
 		RuntimeURL:     engineURL,
 		Engines:        engines,
+		Drivers:        drivers,
+		Accel:          accelStatus(),
+		DriverInstall:  gpuInstallStatus(),
 		Tuners:         len(tuners),
 	}
 }
