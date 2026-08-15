@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Closed Captions — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
+    <script src="/static/js/theme.js"></script>
+    <style>
+        .cc-master { display: flex; align-items: center; gap: 0.8rem; }
+        .cc-master .cc-switch { flex-shrink: 0; }
+        .cc-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .cc-switch input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+        .model-list { display: grid; gap: 0.6rem; }
+        .model-row {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 0.75rem;
+            align-items: center;
+            padding: 0.7rem 0.8rem;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius-sm);
+        }
+        .model-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+        .model-row input[type="radio"] { width: 15px; height: 15px; accent-color: var(--accent); }
+        .model-name { font-weight: 600; font-size: 0.88rem; }
+        .model-meta { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; }
+        .model-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+        .bar { height: 5px; background: var(--border-soft); border-radius: 3px; overflow: hidden; margin-top: 0.5rem; }
+        .bar span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.25s ease; }
+        .tuner-picks { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+        .model-src {
+            display: block;
+            margin-top: 0.35rem;
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--text-faint);
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        .model-src a { color: var(--text-faint); text-decoration: underline; }
+        .model-src a:hover { color: var(--accent); }
+        .model-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+        .tag {
+            font-size: 0.68rem;
+            padding: 0.1rem 0.4rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+        }
+        .tag-live { border-color: rgba(82,210,115,0.4); color: var(--live); }
+        .accel {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid var(--border-soft); background: var(--bg);
+            margin-bottom: 0.7rem;
+        }
+        .accel.on { border-color: rgba(82,210,115,0.4); background: var(--live-soft); }
+        .accel .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); margin-top: 0.35rem; flex-shrink: 0; }
+        .accel.on .dot { background: var(--live); }
+        .accel .h { font-weight: 600; font-size: 0.85rem; }
+        .accel .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; margin-top: 0.2rem; }
+        .warn {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid rgba(224,108,94,0.45); background: var(--danger-soft);
+            margin-bottom: 0.9rem;
+        }
+        .warn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-top: 0.35rem; flex-shrink: 0; }
+        .warn .h { font-weight: 600; font-size: 0.85rem; color: var(--danger); }
+        .warn .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.2rem; }
+        .warn code { font-family: var(--mono); font-size: 0.72rem; }
+        .drv-log { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); white-space: pre-wrap; margin-top: 0.5rem; max-height: 150px; overflow: auto; }
+        @media (max-width: 640px) {
+            .model-row { grid-template-columns: auto 1fr; }
+            .model-actions { grid-column: 1 / -1; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+	<div class="pagebar">
+		<a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
+		<strong>AH4C</strong>
+		<span>Closed Captions</span>
+		<button class="btn btn-sm btn-icon nav-toggle" onclick="toggleNav()" title="Menu" aria-label="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+		<nav class="nav push-right">
+			<a href="/">Home</a>
+			<a href="/device">Device Control</a>
+			<a href="/status">Activity</a>
+			<a href="/logs">Logs</a>
+			<a href="/captions" class="active">Closed Captions</a>
+			<a href="/m3us">Channel M3Us</a>
+			<a href="/routes">API Routes</a>
+		</nav>
+		<button class="btn btn-sm btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+			<svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="7" y2="7"/><line x1="17" y1="17" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="7" y2="17"/><line x1="17" y1="7" x2="19.1" y2="4.9"/></svg>
+			<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+		</button>
+	</div>
+
+    <div class="page">
+
+        <div id="persist"></div>
+
+        <div class="card">
+            <div class="card-title">Closed Captions <span class="hint" id="runtime"></span></div>
+            <div class="cc-master">
+                <label class="cc-switch">
+                    <input type="checkbox" id="enabled">
+                    <span>Add captions to every stream</span>
+                </label>
+                <span class="badge badge-idle" id="stateBadge">Off</span>
+            </div>
+            <p class="footnote">
+                Speech is transcribed on the CPU and written into the video as CEA-608 caption data,
+                the same carriage an HDHomeRun uses for over-the-air captions. Channels DVR and any
+                other player will show it as CC1 with no sidecar file. The video itself is never
+                re-encoded, so picture quality and tune time are unchanged.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Speech engine <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div id="accel"></div>
+            <div class="model-list" id="runtimeRow"></div>
+            <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
+            <div id="drvState"></div>
+            <p class="footnote">
+                Where the model runs. The processor build needs nothing and handles several tuners
+                at once. A GPU build is only offered when this container can actually load it: CUDA
+                appears once the NVIDIA container runtime is passing the driver through, Vulkan once
+                a Vulkan driver and <code>/dev/dri</code> are present. Neither needs a change to the
+                image &mdash; only to your compose file.
+            </p>
+            <div class="card-title" style="margin-top:1rem;">Model</div>
+            <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
+            <div id="dl" class="hidden">
+                <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
+                <div class="bar"><span id="dlBar"></span></div>
+            </div>
+            <p class="footnote">
+                Both land in <code>/opt/captions</code>, a bind mount, so they survive a container rebuild.
+                Remove them any time to get the space back.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Caption settings</div>
+            <div class="field-row">
+                <label for="language">Language</label>
+                <select id="language"></select>
+            </div>
+            <div class="field-row">
+                <label for="style">Presentation</label>
+                <select id="style">
+                    <option value="rollup2">Roll-up, 2 lines</option>
+                    <option value="rollup3">Roll-up, 3 lines</option>
+                    <option value="rollup4">Roll-up, 4 lines</option>
+                </select>
+            </div>
+            <div class="field-row">
+                <label for="case">Letter case</label>
+                <select id="case">
+                    <option value="upper">Capitals (broadcast standard)</option>
+                    <option value="mixed">As recognized</option>
+                </select>
+            </div>
+            <div class="field-row">
+                <label for="offset">Extra delay</label>
+                <select id="offset"></select>
+            </div>
+            <div class="field-row">
+                <label for="saveSRT">Recordings</label>
+                <label class="cc-switch">
+                    <input type="checkbox" id="saveSRT">
+                    <span>Save a subtitle file for each stream</span>
+                </label>
+            </div>
+            <p class="footnote">
+                Capitals are the long-standing convention for broadcast captioning and are easier to
+                read across a room. They also even out the streaming models, which write in lower case.
+            </p>
+            <p class="footnote">
+                Captions appear a couple of seconds after the words are spoken, the same as live
+                broadcast captioning, because the sentence has to finish before it can be recognized.
+                Extra delay only pushes the text further back if you want it to line up more loosely.
+            </p>
+            <p class="footnote">
+                A recording already carries the captions in the picture. The subtitle file is a
+                separate <code>.srt</code> in <code>captions/srt</code>, named for the channel
+                and the time the stream started, and it is stamped with the real speech times &mdash; so
+                it lines up slightly better than the on-screen captions, which cannot appear until a
+                phrase has been spoken. Files with nothing recognized are cleaned up.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Tuners <span class="hint">numbered as they are on the Activity page; leave all unchecked to caption every tuner</span></div>
+            <div class="tuner-picks" id="tuners"></div>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-primary" onclick="save()">Save</button>
+            <span class="small muted" id="saved"></span>
+        </div>
+    </div>
+
+<script>
+let state = null;
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function mb(n) {
+    if (!n || n < 0) return '';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+
+async function load() {
+    const r = await fetch('/api/captions');
+    state = await r.json();
+    render();
+}
+
+function render() {
+    const cfg = state.config;
+    document.getElementById('enabled').checked = cfg.enabled;
+    document.getElementById('runtime').textContent = state.runtime === 'ready' ? '' : state.runtime;
+
+    const badge = document.getElementById('stateBadge');
+    const model = state.models.find(m => m.key === cfg.model);
+    const ready = cfg.enabled && model && model.installed && state.runtimeReady && state.runtime === 'ready';
+    let need = 'On';
+    if (!cfg.enabled) need = 'Off';
+    else if (!state.runtimeReady) need = 'Needs the speech engine';
+    else if (!model || !model.installed) need = 'Needs a model';
+    else if (state.runtime !== 'ready') need = 'Not ready';
+    badge.textContent = need;
+    badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
+
+    // Downloads are pointless if the directory does not outlive the container.
+    document.getElementById('persist').innerHTML = state.persistent === false ? `
+        <div class="warn">
+            <span class="dot"></span>
+            <div>
+                <div class="h">Downloads will not survive a restart</div>
+                <div class="d">The caption directory is inside the container rather than on your server, so
+                the model, the engine and any GPU driver are thrown away when the container is recreated.
+                Add this volume to your compose file and recreate it:<br>
+                <code>- \${HOST_DIR}/ah4c/captions:/opt/captions</code></div>
+            </div>
+        </div>` : '';
+
+    // Is acceleration actually working, and if not, which piece is missing.
+    const a = state.accel || {};
+    document.getElementById('accel').innerHTML = `
+        <div class="accel ${a.active ? 'on' : ''}">
+            <span class="dot"></span>
+            <div>
+                <div class="h">${esc(a.headline || '')}</div>
+                <div class="d">${esc(a.detail || '')}</div>
+            </div>
+        </div>`;
+
+    // Driver packages, kept in the bind mount so a rebuild does not lose them.
+    document.getElementById('driverRow').innerHTML = (state.drivers || []).map(d => `
+        <div class="model-row">
+            <span class="menu-icon" style="width:15px;"></span>
+            <div>
+                <div class="model-name">${esc(d.name)}</div>
+                <div class="model-meta">${esc(d.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag ${d.active ? 'tag-live' : ''}">${d.active ? 'Loaded' : 'Not loaded'}</span>
+                    <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
+                </div>
+                <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from this image's own Debian archives, kept in the bind mount so a rebuild does not have to fetch them again.</span>
+            </div>
+            <div class="model-actions">
+                <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
+            </div>
+        </div>`).join('');
+
+    const di = state.driverInstall || {};
+    document.getElementById('drvState').innerHTML =
+        (di.active || di.err || di.log)
+            ? `<p class="small muted" style="margin:0.7rem 0 0;">${di.active ? 'Installing the driver…' : (di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.')}</p>` +
+              (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
+            : '';
+
+    // Engine builds: processor or GPU, offered only where loadable.
+    document.getElementById('runtimeRow').innerHTML = (state.engines || []).map(e => `
+        <div class="model-row ${e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
+            <input type="radio" name="engine" value="${esc(e.key)}" ${e.key === cfg.engine ? 'checked' : ''}
+                   ${e.usable ? '' : 'disabled'} onchange="pickEngine('${esc(e.key)}')">
+            <div>
+                <div class="model-name">${esc(e.name)}</div>
+                <div class="model-meta">${esc(e.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag">${e.sizeMB} MB</span>
+                    ${e.usable ? '' : '<span class="tag">Not available in this container</span>'}
+                </div>
+                ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
+                <span class="model-src">Downloads from: <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
+            </div>
+            <div class="model-actions">
+                ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
+                              : (e.usable ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
+            </div>
+        </div>`).join('');
+
+    // Models
+    document.getElementById('models').innerHTML = state.models.map(m => `
+        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}">
+            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''} onchange="pickModel('${esc(m.key)}')">
+            <div>
+                <div class="model-name">${esc(m.name)}</div>
+                <div class="model-meta">${esc(m.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Continuous' : 'Phrase at a time'}</span>
+                    <span class="tag">Delay: ${esc(m.latency)}</span>
+                    <span class="tag">${m.sizeMB} MB</span>
+                    <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.length - 1 + ' languages'}</span>
+                </div>
+                <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
+                <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
+            </div>
+            <div class="model-actions">
+                ${m.installed
+                    ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeModel('${esc(m.key)}')">Remove</button>`
+                    : `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>`}
+            </div>
+        </div>`).join('');
+
+    // Download progress
+    const d = state.download;
+    const dl = document.getElementById('dl');
+    if (d && (d.active || d.err)) {
+        dl.classList.remove('hidden');
+        if (d.err) {
+            document.getElementById('dlText').textContent = 'Download failed: ' + d.err;
+            document.getElementById('dlBar').style.width = '0%';
+        } else {
+            const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
+            document.getElementById('dlText').textContent =
+                `Downloading ${d.file} (${d.index} of ${d.count}) — ${mb(d.done)}${d.total > 0 ? ' of ' + mb(d.total) : ''}`;
+            document.getElementById('dlBar').style.width = pct + '%';
+        }
+    } else {
+        dl.classList.add('hidden');
+    }
+
+    // Languages come from whichever model is selected.
+    const langs = model ? model.languages : ['auto'];
+    const sel = document.getElementById('language');
+    sel.innerHTML = langs.map(l =>
+        `<option value="${esc(l)}" ${l === cfg.language ? 'selected' : ''}>${esc(state.languageNames[l] || l)}</option>`).join('');
+    if (!langs.includes(cfg.language)) sel.value = langs[0];
+
+    document.getElementById('style').value = cfg.style || 'rollup3';
+    document.getElementById('saveSRT').checked = !!cfg.saveSRT;
+    document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
+
+    const off = document.getElementById('offset');
+    off.innerHTML = Array.from({length: 16}, (_, i) =>
+        `<option value="${i}" ${i === cfg.offsetSec ? 'selected' : ''}>${i === 0 ? 'None' : i + ' second' + (i > 1 ? 's' : '')}</option>`).join('');
+
+    // Tuners
+    const picked = cfg.tuners || [];
+    document.getElementById('tuners').innerHTML = state.tuners === 0
+        ? '<span class="small muted">No tuners are configured.</span>'
+        : Array.from({length: state.tuners}, (_, i) =>
+            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i}</span></label>`).join('');
+}
+
+function pickModel(key) {
+    state.config.model = key;
+    const m = state.models.find(x => x.key === key);
+    if (m && !m.languages.includes(state.config.language)) state.config.language = m.languages[0];
+    render();
+}
+
+function collect() {
+    return {
+        enabled: document.getElementById('enabled').checked,
+        model: state.config.model,
+        language: document.getElementById('language').value,
+        style: document.getElementById('style').value,
+        offsetSec: parseInt(document.getElementById('offset').value, 10),
+        saveSRT: document.getElementById('saveSRT').checked,
+        uppercase: document.getElementById('case').value === 'upper',
+        engine: state.config.engine || 'cpu',
+        gpuRuntime: state.config.gpuRuntime || '',
+        tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
+    };
+}
+
+async function save() {
+    const note = document.getElementById('saved');
+    const r = await fetch('/api/captions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(collect())
+    });
+    const body = await r.json();
+    if (!r.ok) {
+        note.textContent = body.error || 'Could not save';
+        return;
+    }
+    state = body;
+    render();
+    note.textContent = 'Saved. New tunes pick this up right away.';
+    setTimeout(() => { note.textContent = ''; }, 4000);
+}
+
+async function download(key) {
+    await fetch('/api/captions/download/' + encodeURIComponent(key), {method: 'POST'});
+    poll();
+}
+
+function pickEngine(key) {
+    state.config.engine = key;
+    render();
+}
+
+async function getDriver(kind) {
+    const r = await fetch('/api/captions/driver/' + encodeURIComponent(kind), {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the driver download';
+        return;
+    }
+    pollDriver();
+}
+
+let drvPolling = false;
+async function pollDriver() {
+    if (drvPolling) return;
+    drvPolling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        next.config = Object.assign({}, next.config, collect(), {model: state.config.model, engine: state.config.engine});
+        state = next;
+        render();
+        if (state.driverInstall && state.driverInstall.active) setTimeout(tick, 1500);
+        else drvPolling = false;
+    };
+    tick();
+}
+
+async function getRuntime(key) {
+    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(key || state.config.engine || 'cpu'), {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the download';
+        return;
+    }
+    poll();
+}
+
+async function removeModel(key) {
+    if (!confirm('Delete this downloaded model?')) return;
+    const r = await fetch('/api/captions/model/' + encodeURIComponent(key), {method: 'DELETE'});
+    if (r.ok) { state = await r.json(); render(); }
+}
+
+let polling = false;
+async function poll() {
+    if (polling) return;
+    polling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        // Keep whatever the user is editing; only refresh download and model state.
+        const edited = collect();
+        next.config = Object.assign({}, next.config, edited, {model: state.config.model});
+        state = next;
+        render();
+        if (state.download && state.download.active) {
+            setTimeout(tick, 1000);
+        } else {
+            polling = false;
+        }
+    };
+    tick();
+}
+
+load().then(() => { if (state.download && state.download.active) poll(); });
+</script>
+</body>
+</html>

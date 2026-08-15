@@ -22,6 +22,7 @@
 17. Dead video feeds restart - video locking up but audio working
 18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
 19. NULL packet insertion - fills encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR sees a continuous bitstream during HDMI source gaps
+20. Closed captions - live CPU speech-to-text written into the stream as CEA-608, the way an HDHomeRun carries them, with no re-encode and nothing added to the image
 
 ah4c WebUI:
 
@@ -36,6 +37,144 @@ ah4c WebUI:
 ### M3U Editor
 
 <img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-01-57" src="https://github.com/user-attachments/assets/f2297fc1-a108-4790-a78a-26401211beee" />
+
+### Closed Captions
+
+Streaming apps hand the encoder a picture with the captions already stripped off, so
+everything downstream of ah4c has nothing to display. The **Closed Captions** page adds
+them back.
+
+> **One volume has to be added before you use this.** The speech model and everything else
+> is downloaded on demand, and without somewhere on the host to put it, all of it lives
+> inside the container and is thrown away the moment the container is recreated. Add this
+> to the `ah4c` service and recreate it:
+>
+> ```yaml
+>       - ${HOST_DIR}/ah4c/captions:/opt/captions
+> ```
+>
+> ah4c checks for this at startup, says so in the log, and puts a warning at the top of the
+> Closed Captions page if it is missing, so you will not lose a download without being told.
+> Nothing else about the image or the compose file changes, and the directory stays empty
+> unless captions are switched on.
+
+Audio is pulled out of the encoder's transport stream, transcribed on the CPU by an
+NVIDIA Parakeet model, and written back into the video as CEA-608 caption data carried
+in ATSC A/53 user data — the same carriage an HDHomeRun uses for over-the-air captions.
+Channels DVR, VLC and anything else see a real closed caption track and offer it under
+the usual subtitles button.
+
+- **Not burned in, and not re-encoded.** The compressed video is passed through
+  untouched; only a small caption message is inserted ahead of each picture, and the
+  picture data comes out byte-for-byte identical. Quality, bitrate and tune time are
+  unchanged, and streams that already carry captions are left alone.
+- **Nothing is added to the Docker image.** No new packages, no Python, no model.
+- **ah4c stays pure Go.** Recognition runs against
+  [parakeet.cpp](https://github.com/mudler/parakeet.cpp), a ggml build of the Parakeet
+  models, opened at run time with purego. There is no cgo and nothing linked into the
+  binary — `CGO_ENABLED=0` still builds.
+- **Nothing is gated on an environment variable.** Everything is controlled from the web
+  UI and stored in `captions/config.json`. Changes apply to the next tune.
+- **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
+  time on an ordinary CPU.
+- **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
+
+The page offers a small engine plus your choice of model. Nothing is bundled and
+nothing is fetched until you ask for it. Every download URL is shown on the page next to
+the button, so it is always clear what is being fetched and from where.
+
+**Speech engine** (required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp) built for
+your platform, from that project's GitHub releases. Four builds exist and the page offers
+whichever this container can actually load:
+
+| Build | Size | Needs |
+| --- | --- | --- |
+| CPU | ~1 MB | Nothing. Fast enough for several tuners at once |
+| GPU via Vulkan | 59 MB | A Vulkan driver in the container and `/dev/dri` passed through |
+| GPU via CUDA | 537 MB | The NVIDIA container runtime; the download carries its own CUDA runtime |
+| GPU via CUDA 12 | 722 MB | The same, for older drivers |
+
+None of them change the image, and the page tells you at a glance whether acceleration is
+actually working or which piece is missing.
+
+**Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
+downloads it the same way it downloads a model: the packages and everything they depend on
+are saved into `captions/drivers` inside the bind mount, and put back automatically
+at startup after a rebuild, without needing the network again.
+
+You also have to pass the graphics device through, which is off by default. Set this in your
+env file and recreate the container:
+
+```
+GPU_DEVICE=/dev/dri:/dev/dri
+```
+
+**CUDA** needs nothing installed: the download carries its own CUDA runtime, and the NVIDIA
+container toolkit supplies the driver. Set these instead:
+
+```
+DOCKER_RUNTIME=nvidia
+NVIDIA_VISIBLE_DEVICES=all
+NVIDIA_DRIVER_CAPABILITIES=compute,utility
+```
+
+Both are ordinary env settings rather than edits to the compose file, and both default to
+off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
+`NVIDIA_VISIBLE_DEVICES` exposes no GPU. Nobody without a card has to change anything.
+
+A GPU build is greyed out until the library it needs is loadable, which is settled by asking
+the dynamic loader rather than by guessing. If a GPU build is selected but cannot run, the
+engine falls back to the processor rather than failing, so captions keep working. Apple
+silicon gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA
+build upstream and is offered CPU and Vulkan.
+
+Quick Sync is not on that list and cannot be. It is fixed-function video encode and decode
+hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
+in the image are for video and are unrelated.
+
+**Models**, all from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
+on Hugging Face:
+
+| Model | Delay | Size | Languages | Runs well on |
+| --- | --- | --- | --- | --- |
+| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, with punctuation and sentence case | Under a second | 938 MB | 25 | A modern multi-core CPU |
+| **Parakeet Realtime 120M** — just as quick, no punctuation | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
+| **Parakeet TDT 0.6B v3** — waits for a phrase, most accurate multilingual | 3–4 seconds | 897 MB | 25 | A modern multi-core CPU |
+| **Parakeet TDT-CTC 110M** — phrase at a time, English | 3–4 seconds | 170 MB | English | Modest hardware; comfortable on a NAS |
+
+The two streaming models transcribe as the audio arrives rather than waiting for a
+phrase to finish, which is the difference between captions about a second behind and
+captions three or four seconds behind.
+
+Punctuation is the other axis, and the reason the Nemotron model is the default: it is the
+only one that is both continuous and punctuated. The 120M produces no punctuation at all —
+NVIDIA's model card is explicit that it outputs neither punctuation nor capitalisation, and
+no setting changes that — so it is there for hardware that cannot spare the cores. The
+phrase-at-a-time models punctuate but arrive several seconds later.
+
+Captions are rendered in capitals, which is the long-standing convention for broadcast
+captioning and is easier to read across a room; there is a setting for mixed case. Subtitle
+files keep the natural sentence case regardless, since a file is read close up.
+
+The right build for the machine is chosen automatically, so the arm64 image fetches the
+arm64 engine without being told.
+
+Both engine and model land in `/opt/captions`, which is why that volume has to exist. On
+the host they sit in `${HOST_DIR}/ah4c/captions`, beside the `scripts`, `m3u` and `adb`
+directories ah4c already keeps there. Remove either download from the page to reclaim the
+space.
+
+Captions appear a second or two after the words are spoken, because a phrase has to
+finish before it can be recognized — the same lag live broadcast captioning has. An
+optional extra delay is available if you want to push them back further.
+
+**Subtitle files for recordings.** A recording made from a captioned stream already
+carries the captions in the picture, but switching on *Save a subtitle file for each
+stream* also writes an `.srt` into `captions/srt`, named for the channel and the
+time the stream started. The cues use the real speech times rather than the times the
+text reached the screen, so the file lines up slightly better than the on-screen
+captions, which cannot appear until a phrase has been spoken. Files with nothing
+recognized are cleaned up on close.
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 
@@ -118,10 +257,16 @@ services:
       - PLAYBACK_DETECTION=${PLAYBACK_DETECTION} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Set to a whole number of seconds to skip the start of each tune, so a recording begins on the program rather than on the app's loading screen. Piped through the bundled ffmpeg with -ss and stream copy; no re-encoding, and the skip starts on the next keyframe so it can run slightly past the configured value. The value is the total tune time, scripts included. Supported range is 2 to 30, since the DVR allows a tune about 30 seconds; values outside the range are clamped and logged. Ignored when PLAYBACK_DETECTION is TRUE; network tuners only. 0 or unset leaves the feature off.
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Closed captions only. Set to compute,utility when using an NVIDIA GPU, so the driver the CUDA engine build needs is passed in
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
+      - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
+    devices:
+      - ${GPU_DEVICE} # Closed captions only. Set GPU_DEVICE=/dev/dri:/dev/dri to let the Vulkan engine build use an Intel or AMD GPU. Left at the default it passes /dev/null, which always exists and does nothing
+    runtime: ${DOCKER_RUNTIME} # Closed captions only. Set DOCKER_RUNTIME=nvidia for an NVIDIA GPU with the CUDA engine build. Requires the NVIDIA container toolkit
     restart: unless-stopped
 ```
 
