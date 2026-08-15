@@ -6,3 +6,7 @@
 
 # Local-only caption test suite
 /captions_test.go
+
+# Scratch tests written by review agents
+/zz_*_test.go
+/guard_test.go

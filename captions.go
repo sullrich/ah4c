@@ -1658,15 +1658,30 @@ func tsPayload(p []byte) []byte {
 	return nil
 }
 
+// psiSection skips the pointer_field at the head of a PSI payload.
+//
+// That field is a whole byte and can therefore claim up to 255, while the
+// payload it indexes into is at most 184. A packet saying so is malformed, but
+// malformed packets arrive: an encoder losing its HDMI signal emits rubbish,
+// and the resync path can hand over a run of bytes that merely begins with the
+// sync byte. Trusting it panicked, and a panic here takes the whole proxy down
+// with every tuner on it, not just the captions.
+func psiSection(pl []byte) []byte {
+	if len(pl) < 1 {
+		return nil
+	}
+	skip := 1 + int(pl[0])
+	if skip > len(pl) {
+		return nil
+	}
+	return pl[skip:]
+}
+
 func (ci *captionInjector) parsePAT(p []byte) {
 	if p[1]&0x40 == 0 || ci.pmtPID >= 0 {
 		return
 	}
-	pl := tsPayload(p)
-	if len(pl) < 1 {
-		return
-	}
-	pl = pl[1+int(pl[0]):] // pointer_field
+	pl := psiSection(tsPayload(p))
 	if len(pl) < 12 || pl[0] != 0x00 {
 		return
 	}
@@ -1689,11 +1704,7 @@ func (ci *captionInjector) parsePMT(p []byte) {
 	if p[1]&0x40 == 0 || ci.videoPID >= 0 {
 		return
 	}
-	pl := tsPayload(p)
-	if len(pl) < 1 {
-		return
-	}
-	pl = pl[1+int(pl[0]):]
+	pl := psiSection(tsPayload(p))
 	if len(pl) < 16 || pl[0] != 0x02 {
 		return
 	}
@@ -2890,6 +2901,29 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label, channel string)
 }
 
 func (cs *captionStream) run() {
+	// Captions are a convenience; the stream is not. If anything in the
+	// injector goes wrong, the picture has to keep flowing, so a panic here is
+	// caught and the rest of the stream is copied straight through untouched
+	// rather than being allowed to kill the process and every tuner with it.
+	raw := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				raw = true
+				logger("[CC] %s captions failed (%v); passing the stream through untouched from here", cs.engine.label, r)
+			}
+		}()
+		cs.inject()
+	}()
+	if raw {
+		cs.engine.Close()
+		_, err := io.Copy(cs.pw, cs.src)
+		cs.pw.CloseWithError(err)
+	}
+}
+
+// inject is the captioning path proper.
+func (cs *captionStream) inject() {
 	inj := newCaptionInjector(cs.pw, cs.engine.enc, cs.engine.label)
 	buf := make([]byte, 64*1024)
 	for {
