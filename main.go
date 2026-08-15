@@ -409,7 +409,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: maybeWrapCaptions(pipeReader, i, fmt.Sprintf("tuner%d", i), channel),
+					ReadCloser: maybeWrapCaptions(pipeReader, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -456,7 +456,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: maybeWrapCaptions(pipe, i, fmt.Sprintf("tuner%d", i), channel),
+					ReadCloser: maybeWrapCaptions(pipe, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -493,7 +493,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			}
 			// Captions wrap the outermost reader so they see the same bytes the
 			// DVR will, after any stall filling or playback gating.
-			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i), channel)
+			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
 			r := &reader{
