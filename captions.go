@@ -1519,6 +1519,12 @@ func hasCaptionSEI(es []byte, hevc bool) bool {
 		if hevc {
 			hdr = 2
 		}
+		// A start code can sit close enough to the end that the NAL header runs
+		// past it. That only happens on a stream truncated mid-packet, but it
+		// is a slice out of range when it does.
+		if off+hdr > len(es) {
+			continue
+		}
 		body := es[off+hdr:]
 		if len(body) > 12 && body[0] == 0x04 {
 			for i := 1; i < len(body)-8 && i < 12; i++ {
@@ -1536,6 +1542,10 @@ func hasCaptionSEI(es []byte, hevc bool) bool {
 type tsPacket struct {
 	buf   [tsPacketSize]byte
 	video bool
+	// payload is false for a packet that carries only an adaptation field.
+	// Those hold the clock rather than the picture, and must be passed through
+	// where they are rather than rebuilt or dropped.
+	payload bool
 }
 
 // captionInjector rewrites a transport stream in place, adding caption bytes to
@@ -1601,9 +1611,15 @@ func (ci *captionInjector) Write(b []byte) (int, error) {
 
 	for len(b) > 0 {
 		if b[0] != 0x47 {
-			// Resynchronize on the next sync byte rather than corrupting output.
+			// Resynchronize on the next sync byte rather than corrupting
+			// output. A lone 0x47 is not enough: the byte 188 further on has to
+			// be one too, or this locks onto a coincidence inside the picture
+			// data and feeds it to the reassembler as if it were a packet.
 			i := 1
-			for i < len(b) && b[i] != 0x47 {
+			for i < len(b) {
+				if b[i] == 0x47 && (i+tsPacketSize >= len(b) || b[i+tsPacketSize] == 0x47) {
+					break
+				}
 				i++
 			}
 			if _, err := ci.out.Write(b[:i]); err != nil {
@@ -1665,9 +1681,18 @@ func (ci *captionInjector) packet(p []byte) error {
 	}
 
 	// Video packets that arrived before the PMT identified the video PID went
-	// out untouched, carrying the source's own count. Pick that count up on the
-	// first packet we recognize so the handover leaves no gap.
+	// out untouched, carrying the source's own count. Pick that count up so the
+	// handover leaves no gap.
+	//
+	// Only a packet that carries payload may be used for it. The counter names
+	// the value the next payload packet should take, and a packet without
+	// payload repeats the previous one, so seeding from such a packet lands one
+	// short and stamps a value that has already been used.
 	if !ci.ccSeeded {
+		if afc := (p[3] >> 4) & 0x03; afc != 0x01 && afc != 0x03 {
+			_, err := ci.out.Write(p)
+			return err
+		}
 		ci.videoCC = p[3] & 0x0F
 		ci.ccSeeded = true
 	}
@@ -1690,6 +1715,9 @@ func (ci *captionInjector) packet(p []byte) error {
 	var t tsPacket
 	copy(t.buf[:], p)
 	t.video = true
+	if afc := (p[3] >> 4) & 0x03; afc == 0x01 || afc == 0x03 {
+		t.payload = true
+	}
 	ci.window = append(ci.window, t)
 	ci.pes = append(ci.pes, tsPayload(p)...)
 
@@ -1806,11 +1834,15 @@ func (ci *captionInjector) parsePMT(p []byte) {
 // demuxer, which throws away the picture around it. Every packet on the video
 // PID therefore gets its counter from us, whether we rebuilt it or not.
 func (ci *captionInjector) stampVideoCC(p []byte) {
-	p[3] = (p[3] &^ 0x0F) | (ci.videoCC & 0x0F)
-	if afc := (p[3] >> 4) & 0x03; afc == 0x01 || afc == 0x03 {
-		// Only a packet with payload advances the count.
-		ci.videoCC = (ci.videoCC + 1) & 0x0F
+	if afc := (p[3] >> 4) & 0x03; afc == 0x00 || afc == 0x02 {
+		// A packet with no payload does not advance the count; it repeats the
+		// one the last payload packet used. Giving it the next value instead
+		// reads as a lost packet either side of it.
+		p[3] = (p[3] &^ 0x0F) | ((ci.videoCC - 1) & 0x0F)
+		return
 	}
+	p[3] = (p[3] &^ 0x0F) | (ci.videoCC & 0x0F)
+	ci.videoCC = (ci.videoCC + 1) & 0x0F
 }
 
 // passthroughWindow writes the held packets out unmodified apart from the video
@@ -1917,23 +1949,33 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 	ci.lastPTS = pts
 }
 
-// packetize turns a PES packet back into transport packets on the video PID,
+// packetize turns a PES packet back into transport packets on the video PID.
+// Continuity counters are left blank and assigned by emit, which is the only
+// place that knows the order packets actually leave in: the clock-bearing
+// packets kept from the source are interleaved with these.
+//
 // carrying the original adaptation field of the first packet so the PCR and any
 // random access indicator survive.
 func (ci *captionInjector) packetize(pes []byte) [][tsPacketSize]byte {
-	var af []byte
-	if len(ci.window) > 0 {
-		for i := range ci.window {
-			if ci.window[i].video {
-				af = adaptationField(ci.window[i].buf[:])
-				break
-			}
+	// The clock can sit on any packet of the access unit, not only the first.
+	// Collect what each source packet carried, in order, and give the same to
+	// the rebuilt packet in that position; anything beyond gets none. The PCR
+	// shifts by at most a packet, which is a fraction of a millisecond, where
+	// dropping it costs the receiver its clock.
+	var afs [][]byte
+	for i := range ci.window {
+		if ci.window[i].video && ci.window[i].payload {
+			afs = append(afs, meaningfulAF(ci.window[i].buf[:]))
 		}
 	}
 
 	var out [][tsPacketSize]byte
 	first := true
 	for len(pes) > 0 {
+		var af []byte
+		if k := len(out); k < len(afs) {
+			af = afs[k]
+		}
 		var pkt [tsPacketSize]byte
 		pkt[0] = 0x47
 		pkt[1] = byte(ci.videoPID >> 8)
@@ -1943,15 +1985,15 @@ func (ci *captionInjector) packetize(pes []byte) [][tsPacketSize]byte {
 		}
 
 		body := 4
-		useAF := first && len(af) > 0
+		useAF := len(af) > 0
 		if useAF {
 			// adaptation_field_control = 11
-			pkt[3] = 0x30 | (ci.videoCC & 0x0F)
+			pkt[3] = 0x30
 			pkt[4] = byte(len(af))
 			copy(pkt[5:], af)
 			body = 5 + len(af)
 		} else {
-			pkt[3] = 0x10 | (ci.videoCC & 0x0F)
+			pkt[3] = 0x10
 		}
 		space := tsPacketSize - body
 		if len(pes) < space {
@@ -1966,7 +2008,7 @@ func (ci *captionInjector) packetize(pes []byte) [][tsPacketSize]byte {
 					pkt[i] = 0xFF
 				}
 			} else {
-				pkt[3] = 0x30 | (ci.videoCC & 0x0F)
+				pkt[3] = 0x30
 				pkt[4] = byte(stuff - 1)
 				if stuff >= 2 {
 					pkt[5] = 0x00
@@ -1977,16 +2019,31 @@ func (ci *captionInjector) packetize(pes []byte) [][tsPacketSize]byte {
 				copy(pkt[4+stuff:], pes)
 			}
 			out = append(out, pkt)
-			ci.videoCC = (ci.videoCC + 1) & 0x0F
 			break
 		}
 		copy(pkt[body:], pes[:space])
 		pes = pes[space:]
 		out = append(out, pkt)
-		ci.videoCC = (ci.videoCC + 1) & 0x0F
 		first = false
 	}
 	return out
+}
+
+// meaningfulAF returns a packet's adaptation field only when it carries
+// something the receiver needs: the programme clock, or a flag marking a
+// discontinuity, a random access point or a splice. An adaptation field that is
+// nothing but stuffing is dropped, since the repacketizer adds its own where it
+// needs to pad.
+func meaningfulAF(p []byte) []byte {
+	af := adaptationField(p)
+	if len(af) == 0 {
+		return nil
+	}
+	// discontinuity, random access, ES priority, PCR, OPCR, splicing point.
+	if af[0]&0xFC == 0 {
+		return nil
+	}
+	return af
 }
 
 // adaptationField returns the meaningful part of a packet's adaptation field so
@@ -2034,7 +2091,19 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 	n := 0
 	for i := range ci.window {
 		if ci.window[i].video {
+			// A video packet with no payload carries the programme clock, not
+			// the picture. Overwriting it with rebuilt payload, or skipping it
+			// once the rebuilt packets run out, deletes a PCR the receiver
+			// needs; on a constant rate mux that is most of them.
+			if !ci.window[i].payload {
+				ci.stampVideoCC(ci.window[i].buf[:])
+				if _, err := ci.out.Write(ci.window[i].buf[:]); err != nil {
+					return err
+				}
+				continue
+			}
 			if n < len(pkts) {
+				ci.stampVideoCC(pkts[n][:])
 				if _, err := ci.out.Write(pkts[n][:]); err != nil {
 					return err
 				}
@@ -2049,6 +2118,7 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 	// Captions make the access unit slightly larger, so anything left over goes
 	// out right after the window it belongs to.
 	for ; n < len(pkts); n++ {
+		ci.stampVideoCC(pkts[n][:])
 		if _, err := ci.out.Write(pkts[n][:]); err != nil {
 			return err
 		}
