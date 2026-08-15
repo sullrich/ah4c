@@ -168,13 +168,6 @@ Captions appear a second or two after the words are spoken, because a phrase has
 finish before it can be recognized — the same lag live broadcast captioning has. An
 optional extra delay is available if you want to push them back further.
 
-**Subtitle files for recordings.** A recording made from a captioned stream already
-carries the captions in the picture, but switching on *Save a subtitle file for each
-stream* also writes an `.srt` into `captions/srt`, named for the channel and the
-time the stream started. The cues use the real speech times rather than the times the
-text reached the screen, so the file lines up slightly better than the on-screen
-captions, which cannot appear until a phrase has been spoken. Files with nothing
-recognized are cleaned up on close.
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 

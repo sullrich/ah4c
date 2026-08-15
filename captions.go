@@ -49,7 +49,6 @@ const (
 	captionCfgFile = "captions/config.json"
 	captionModels  = "captions/models"
 	captionRuntime = "captions/engine"
-	captionSRTDir  = "captions/srt"
 	captionDrivers = "captions/drivers"
 )
 
@@ -329,9 +328,6 @@ type captionConfig struct {
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
-	// SaveSRT writes a subtitle file alongside every captioned stream, for
-	// keeping with a recording.
-	SaveSRT bool `json:"saveSRT"`
 	// Tuners restricts captioning to specific tuner indexes. Empty means all.
 	Tuners []int `json:"tuners"`
 }
@@ -1244,10 +1240,6 @@ func (c *cea608) begin() {
 // The channel moves two bytes per picture, so at 30 fps this is about five
 // seconds of text. Reaching it means recognition has outrun the display.
 const ccMaxBacklog = 150
-
-// srtMaxCue is the longest a subtitle cue runs before it is closed, for speech
-// that never pauses.
-const srtMaxCue = 6.0
 
 // push queues a complete phrase and closes the line after it.
 func (c *cea608) push(text string) { c.pushText(text, true) }
@@ -2355,14 +2347,6 @@ func (r *streamResult) words() string {
 	return strings.Join(parts, " ")
 }
 
-// span returns the time the words in this result cover.
-func (r *streamResult) span() (start, end float64, ok bool) {
-	if len(r.Words) == 0 {
-		return 0, 0, false
-	}
-	return r.Words[0].Start, r.Words[len(r.Words)-1].End, true
-}
-
 // feedStream hands the session more audio and returns whatever it just
 // finalized.
 func (p *parakeet) feedStream(s uintptr, pcm []float32) *streamResult {
@@ -2426,166 +2410,6 @@ func cStringFree(p unsafe.Pointer) string {
 }
 
 // ---------------------------------------------------------------------------
-// Subtitle files
-// ---------------------------------------------------------------------------
-
-// A recording made from a captioned stream already carries the captions in the
-// picture, but a subtitle file beside it is easier to search, edit and feed to
-// a player that does not read CEA-608.
-//
-// The cues use the real speech times rather than the times the text reached the
-// screen, so the file is actually better aligned than the embedded captions: on
-// screen a phrase cannot appear until it has been spoken and recognized, while
-// in a file it can be stamped with the moment it was said.
-
-type srtWriter struct {
-	mu      sync.Mutex
-	f       *os.File
-	path    string
-	index   int
-	cues    int
-	lastEnd float64
-}
-
-// newSRTWriter opens a subtitle file for one stream. The name carries the
-// channel and the time the stream started, so a file can be matched to a
-// recording after the fact.
-func newSRTWriter(channel string) (*srtWriter, error) {
-	if err := os.MkdirAll(captionSRTDir, 0o755); err != nil {
-		return nil, err
-	}
-	name := fmt.Sprintf("%s %s.srt", time.Now().Format("2006-01-02 15.04.05"), srtSafeName(channel))
-	path := filepath.Join(captionSRTDir, name)
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, err
-	}
-	return &srtWriter{f: f, path: path}, nil
-}
-
-// srtSafeName reduces a channel name to something a filesystem is happy with.
-// Channel strings arrive as "MS NOW~6ea83d29-...", so the identifier after the
-// tilde is dropped and what is left is trimmed.
-func srtSafeName(channel string) string {
-	if i := strings.IndexByte(channel, '~'); i > 0 {
-		channel = channel[:i]
-	}
-	channel = strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			return r
-		case r == ' ', r == '-', r == '_', r == '.':
-			return r
-		}
-		return '-'
-	}, channel)
-	channel = strings.TrimSpace(channel)
-	if len(channel) > 60 {
-		channel = channel[:60]
-	}
-	if channel == "" {
-		return "stream"
-	}
-	return channel
-}
-
-// srtStamp formats seconds as SRT's hours:minutes:seconds,milliseconds.
-func srtStamp(sec float64) string {
-	if sec < 0 {
-		sec = 0
-	}
-	ms := int64(sec*1000 + 0.5)
-	h := ms / 3600000
-	ms -= h * 3600000
-	m := ms / 60000
-	ms -= m * 60000
-	sd := ms / 1000
-	ms -= sd * 1000
-	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, sd, ms)
-}
-
-// add appends one cue, flushing as it goes so a file left behind by a crash or
-// a pulled plug still holds everything recognized up to that point.
-func (w *srtWriter) add(start, end float64, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	if end <= start {
-		end = start + 1
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.f == nil {
-		return
-	}
-	// A phrase carries a moment of the previous one forward so a cut does not
-	// clip a word, which would otherwise leave one cue starting before the last
-	// one ended. Players dislike that, so keep the cues in order.
-	if start < w.lastEnd {
-		start = w.lastEnd
-	}
-	if end <= start {
-		end = start + 1
-	}
-	w.lastEnd = end
-	w.index++
-	if _, err := fmt.Fprintf(w.f, "%d\n%s --> %s\n%s\n\n",
-		w.index, srtStamp(start), srtStamp(end), srtWrap(text)); err != nil {
-		return
-	}
-	w.f.Sync()
-	w.cues++
-}
-
-// srtWrap breaks a long cue over two lines at the word boundary nearest the
-// middle, which is how a subtitle is normally laid out and stops one phrase
-// spanning the whole picture.
-func srtWrap(text string) string {
-	const limit = 42
-	if len(text) <= limit {
-		return text
-	}
-	words := strings.Fields(text)
-	if len(words) < 2 {
-		return text
-	}
-	half := len(text) / 2
-	split, run, best := 1, 0, len(text)+1
-	for i := 0; i < len(words)-1; i++ {
-		if i > 0 {
-			run++ // the space before this word
-		}
-		run += len(words[i])
-		d := run - half
-		if d < 0 {
-			d = -d
-		}
-		if d < best {
-			best, split = d, i+1
-		}
-	}
-	return strings.Join(words[:split], " ") + "\n" + strings.Join(words[split:], " ")
-}
-
-// Close finishes the file, removing it if nothing was ever recognized so an
-// empty subtitle file is not left beside a recording.
-func (w *srtWriter) Close() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.f == nil {
-		return
-	}
-	w.f.Close()
-	w.f = nil
-	if w.cues == 0 {
-		os.Remove(w.path)
-		return
-	}
-	logger("[CC] Wrote %d subtitle cues to %s", w.cues, w.path)
-}
-
-// ---------------------------------------------------------------------------
 // Listening
 // ---------------------------------------------------------------------------
 
@@ -2611,16 +2435,13 @@ type captionEngine struct {
 	// stream is non-zero when the chosen model transcribes continuously; the
 	// phrase segmenter is not used in that case.
 	stream uintptr
-	srt    *srtWriter
-	srtBuf string  // words held for the current subtitle cue, streaming only
-	srtEnd float64 // end time of the last word in that cue
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
 	tail []string
 }
 
-func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) (*captionEngine, error) {
+func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	model, err := loadParakeet(modelPath(m), cfg.Language)
 	if err != nil {
 		return nil, err
@@ -2671,14 +2492,6 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) 
 			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", label, err)
 		} else {
 			e.stream = st
-		}
-	}
-
-	if cfg.SaveSRT {
-		if w, err := newSRTWriter(channel); err != nil {
-			logger("[CC] %s could not open a subtitle file: %v", label, err)
-		} else {
-			e.srt = w
 		}
 	}
 
@@ -2754,9 +2567,6 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	raw := make([]byte, chunk*2)
 	buf := make([]float32, chunk)
 
-	var consumed int64
-	cueStart, cueOpen := 0.0, false
-
 	take := func(r *streamResult) {
 		if r == nil {
 			return
@@ -2771,22 +2581,6 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			// else is the middle of a sentence still being spoken.
 			e.show(text, eou)
 		}
-		if e.srt != nil && text != "" {
-			if s, en, ok := r.span(); ok {
-				if !cueOpen {
-					cueStart, cueOpen = s, true
-				}
-				e.srtBuf = strings.TrimSpace(e.srtBuf + " " + text)
-				e.srtEnd = en
-			}
-		}
-		// A newsreader may never pause long enough for the model to call an
-		// utterance over, so a cue is also closed once it has run long enough
-		// to be one on its own.
-		if e.srt != nil && cueOpen && (eou || e.srtEnd-cueStart >= srtMaxCue) {
-			e.srtFlush(cueStart, e.srtEnd)
-			cueOpen = false
-		}
 	}
 
 	for {
@@ -2797,15 +2591,11 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
 			take(e.model.finishStream(e.stream))
-			if e.srt != nil && cueOpen {
-				e.srtFlush(cueStart, e.srtEnd)
-			}
 			return
 		}
 		for i := range buf {
 			buf[i] = float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
 		}
-		consumed += int64(chunk)
 		take(e.model.feedStream(e.stream, buf))
 	}
 }
@@ -2819,24 +2609,12 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 	e.enc.pushText(text, breakAfter)
 }
 
-// srtFlush writes whatever has accumulated as one cue.
-func (e *captionEngine) srtFlush(start, end float64) {
-	if e.srt == nil || e.srtBuf == "" {
-		return
-	}
-	e.srt.add(start, end, e.srtBuf)
-	e.srtBuf = ""
-}
-
 // listen reads decoded audio, splits it into phrases and captions each one.
 func (e *captionEngine) listen(pcm io.ReadCloser) {
 	defer close(e.done)
 	defer pcm.Close()
 
 	raw := make([]byte, vadFrame*2)
-	// Samples seen so far. The reader sits outside any playback gating, so this
-	// clock starts where the recording does and the cue times line up with it.
-	var consumed int64
 	var pending []float32
 	speaking := false
 	var silenceRun, speechLen float64
@@ -2852,7 +2630,6 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			return
 		}
 
-		consumed += int64(vadFrame)
 		frame := make([]float32, vadFrame)
 		var sum float64
 		for i := range frame {
@@ -2917,13 +2694,12 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			continue
 		}
 		speechLen = 0
-		end := float64(consumed) / asrSampleRate
-		e.caption(audio, end-float64(len(audio))/asrSampleRate, end)
+		e.caption(audio)
 	}
 }
 
 // caption recognizes one phrase and queues it for display.
-func (e *captionEngine) caption(audio []float32, start, end float64) {
+func (e *captionEngine) caption(audio []float32) {
 	text, err := e.model.transcribe(audio)
 	if err != nil {
 		logger("[CC] %s recognition failed: %v", e.label, err)
@@ -2932,9 +2708,6 @@ func (e *captionEngine) caption(audio []float32, start, end float64) {
 	text = e.trimOverlap(text)
 	if text == "" {
 		return
-	}
-	if e.srt != nil {
-		e.srt.add(start, end, text)
 	}
 	if d := e.cfg.OffsetSec; d > 0 {
 		// Hold the phrase back for hand-tuned sync. The video is never delayed,
@@ -3027,9 +2800,6 @@ func (e *captionEngine) Close() {
 				e.model.Close()
 			}
 		}
-		if e.srt != nil {
-			e.srt.Close()
-		}
 		logger("[CC] %s captions stopped", e.label)
 	})
 }
@@ -3051,7 +2821,7 @@ type captionStream struct {
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
 // the selected model is installed, so a tune costs nothing when captions are
 // off or half configured.
-func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label, channel string) io.ReadCloser {
+func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadCloser {
 	cfg := currentCaptionConfig()
 	if !cfg.Enabled {
 		return src
@@ -3081,7 +2851,7 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label, channel string)
 		logger("[CC] %s the speech runtime is not downloaded, captions disabled for this tune", label)
 		return src
 	}
-	engine, err := newCaptionEngine(cfg, m, label, channel)
+	engine, err := newCaptionEngine(cfg, m, label)
 	if err != nil {
 		logger("[CC] %s could not start captions: %v", label, err)
 		return src
