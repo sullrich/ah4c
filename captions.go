@@ -1105,20 +1105,24 @@ func odd608(b byte) byte {
 
 // cc608Char maps a rune onto the CEA-608 basic character set.
 //
-// That set is ASCII with a few substitutions and nothing else, which is a
-// problem for a feature that offers twenty five languages: an accented letter
-// has no code point here. Dropping it leaves a hole in the middle of a word,
-// so "café" arrived as "caf ", which reads as a typo rather than as a missing
-// glyph. Every such letter is folded to its unaccented form instead, and the
-// handful of symbols that carry meaning are spelled out, so the caption stays
-// a readable word.
+// That set is ASCII with a handful of positions given over to accented letters:
+// á é í ó ú ç ñ Ñ are carried natively and are emitted as themselves. The rest
+// of Europe's letters have no code point here, and dropping one leaves a hole
+// in the middle of a word — "café" arrived as "caf ", which reads as a typo
+// rather than as a missing glyph — so those are folded to the nearest letter a
+// viewer would recognise.
+//
+// The ASCII characters occupying the accented positions have to be blanked
+// rather than passed through, or an asterisk would be shown as an á.
 func cc608Char(r rune) byte {
+	if b, ok := cc608Native[r]; ok {
+		return b
+	}
 	switch {
 	case r >= 0x20 && r <= 0x7F:
 		switch r {
-		case '`':
-			return '\''
-		case '\\', '^', '_', '{', '}', '|', '~':
+		case '*', '\\', '^', '_', '`', '{', '|', '}', '~', 0x7F:
+			// These positions carry á é í ó ú ç ÷ Ñ ñ and a solid block.
 			return ' '
 		}
 		return byte(r)
@@ -1129,23 +1133,30 @@ func cc608Char(r rune) byte {
 	return ' '
 }
 
+// cc608Native are the letters the basic character set carries in place of
+// certain ASCII codes.
+var cc608Native = map[rune]byte{
+	'á': 0x2A, 'é': 0x5C, 'í': 0x5E, 'ó': 0x5F, 'ú': 0x60,
+	'ç': 0x7B, '÷': 0x7C, 'Ñ': 0x7D, 'ñ': 0x7E,
+}
+
 // cc608Fold folds the letters the European languages need onto the basic set.
 // It is not a transliteration scheme, just the nearest letter a viewer would
 // recognise, which is what a caption needs.
 var cc608Fold = map[rune]byte{
-	'á': 'a', 'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'ā': 'a', 'ă': 'a', 'ą': 'a',
+	'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'ā': 'a', 'ă': 'a', 'ą': 'a',
 	'Á': 'A', 'À': 'A', 'Â': 'A', 'Ä': 'A', 'Ã': 'A', 'Å': 'A', 'Ā': 'A', 'Ă': 'A', 'Ą': 'A',
-	'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e', 'ĕ': 'e', 'ė': 'e', 'ę': 'e', 'ě': 'e',
+	'è': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e', 'ĕ': 'e', 'ė': 'e', 'ę': 'e', 'ě': 'e',
 	'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E', 'Ē': 'E', 'Ė': 'E', 'Ę': 'E', 'Ě': 'E',
-	'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i', 'ī': 'i', 'į': 'i', 'ı': 'i',
+	'ì': 'i', 'î': 'i', 'ï': 'i', 'ī': 'i', 'į': 'i', 'ı': 'i',
 	'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I', 'Ī': 'I', 'Į': 'I', 'İ': 'I',
-	'ó': 'o', 'ò': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o', 'ø': 'o', 'ō': 'o', 'ő': 'o',
+	'ò': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o', 'ø': 'o', 'ō': 'o', 'ő': 'o',
 	'Ó': 'O', 'Ò': 'O', 'Ô': 'O', 'Ö': 'O', 'Õ': 'O', 'Ø': 'O', 'Ō': 'O', 'Ő': 'O',
-	'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u', 'ū': 'u', 'ů': 'u', 'ű': 'u', 'ų': 'u',
+	'ù': 'u', 'û': 'u', 'ü': 'u', 'ū': 'u', 'ů': 'u', 'ű': 'u', 'ų': 'u',
 	'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U', 'Ū': 'U', 'Ů': 'U', 'Ű': 'U', 'Ų': 'U',
 	'ý': 'y', 'ÿ': 'y', 'Ý': 'Y', 'Ŷ': 'Y', 'ŷ': 'y',
-	'ñ': 'n', 'ń': 'n', 'ň': 'n', 'ņ': 'n', 'Ñ': 'N', 'Ń': 'N', 'Ň': 'N', 'Ņ': 'N',
-	'ç': 'c', 'ć': 'c', 'č': 'c', 'ĉ': 'c', 'Ç': 'C', 'Ć': 'C', 'Č': 'C', 'Ĉ': 'C',
+	'ń': 'n', 'ň': 'n', 'ņ': 'n', 'Ń': 'N', 'Ň': 'N', 'Ņ': 'N',
+	'ć': 'c', 'č': 'c', 'ĉ': 'c', 'Ç': 'C', 'Ć': 'C', 'Č': 'C', 'Ĉ': 'C',
 	'š': 's', 'ś': 's', 'ş': 's', 'ŝ': 's', 'Š': 'S', 'Ś': 'S', 'Ş': 'S', 'Ŝ': 'S',
 	'ž': 'z', 'ź': 'z', 'ż': 'z', 'Ž': 'Z', 'Ź': 'Z', 'Ż': 'Z',
 	'ł': 'l', 'ľ': 'l', 'ĺ': 'l', 'ļ': 'l', 'Ł': 'L', 'Ľ': 'L', 'Ĺ': 'L', 'Ļ': 'L',
@@ -1168,7 +1179,7 @@ var cc608Expand = map[rune]string{
 	'€': "EUR", '£': "GBP", '¥': "YEN", '¢': "c", '¤': "",
 	'æ': "ae", 'Æ': "AE", 'œ': "oe", 'Œ': "OE", 'ß': "ss",
 	'½': "1/2", '¼': "1/4", '¾': "3/4", '°': " degrees",
-	'±': "+/-", '×': "x", '÷': "/", '™': "(TM)", '©': "(C)", '®': "(R)",
+	'±': "+/-", '×': "x", '™': "(TM)", '©': "(C)", '®': "(R)",
 	'µ': "u", '§': "S", '¶': "P", '†': "+", '‡': "++",
 }
 
@@ -2603,6 +2614,10 @@ type captionEngine struct {
 	srt    *srtWriter
 	srtBuf string  // words held for the current subtitle cue, streaming only
 	srtEnd float64 // end time of the last word in that cue
+	// tail is the end of the phrase last shown. A forced cut carries a moment
+	// of audio forward so it does not slice through a word, and that moment is
+	// then recognized twice, so the repeat is trimmed against this.
+	tail []string
 }
 
 func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) (*captionEngine, error) {
@@ -2914,6 +2929,7 @@ func (e *captionEngine) caption(audio []float32, start, end float64) {
 		logger("[CC] %s recognition failed: %v", e.label, err)
 		return
 	}
+	text = e.trimOverlap(text)
 	if text == "" {
 		return
 	}
@@ -2927,6 +2943,50 @@ func (e *captionEngine) caption(audio []float32, start, end float64) {
 		return
 	}
 	e.enc.push(text)
+}
+
+// trimOverlap drops the beginning of a phrase where it repeats the end of the
+// one before.
+//
+// A phrase cut at the ceiling rather than at a pause carries a fraction of a
+// second of audio into the next one, so that a word is not sliced in half. That
+// audio is recognized in both, which put "and" twice across the join and turned
+// "downtown" into "downtown" followed by "town". Up to four words of overlap
+// are matched and removed.
+func (e *captionEngine) trimOverlap(text string) string {
+	words := strings.Fields(text)
+	if len(words) == 0 || len(e.tail) == 0 {
+		e.rememberTail(words)
+		return strings.TrimSpace(text)
+	}
+	best := 0
+	for n := min(len(e.tail), min(len(words), 4)); n > 0; n-- {
+		match := true
+		for i := 0; i < n; i++ {
+			if !strings.EqualFold(strings.Trim(e.tail[len(e.tail)-n+i], ".,!?;:"),
+				strings.Trim(words[i], ".,!?;:")) {
+				match = false
+				break
+			}
+		}
+		if match {
+			best = n
+			break
+		}
+	}
+	words = words[best:]
+	e.rememberTail(words)
+	return strings.Join(words, " ")
+}
+
+func (e *captionEngine) rememberTail(words []string) {
+	if len(words) == 0 {
+		return
+	}
+	if len(words) > 4 {
+		words = words[len(words)-4:]
+	}
+	e.tail = append([]string(nil), words...)
 }
 
 // feed offers stream bytes to the recognizer without blocking.
