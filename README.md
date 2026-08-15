@@ -77,16 +77,27 @@ on Hugging Face:
 
 | Model | Delay | Size | Languages | Runs well on |
 | --- | --- | --- | --- | --- |
-| **Parakeet Realtime 120M** — transcribes continuously as audio arrives | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
-| **Nemotron 3.5 Streaming 0.6B** — the same, multilingual | Under a second | 938 MB | 25 | A modern multi-core CPU |
+| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, with punctuation and sentence case | Under a second | 938 MB | 25 | A modern multi-core CPU |
+| **Parakeet Realtime 120M** — just as quick, no punctuation | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
 | **Parakeet TDT 0.6B v3** — waits for a phrase, most accurate multilingual | 3–4 seconds | 897 MB | 25 | A modern multi-core CPU |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | 3–4 seconds | 170 MB | English | Modest hardware; comfortable on a NAS |
 
 The two streaming models transcribe as the audio arrives rather than waiting for a
 phrase to finish, which is the difference between captions about a second behind and
-captions three or four seconds behind. Being a small streaming model, the 120M writes
-plain lowercase without punctuation; the phrase-at-a-time models punctuate and
-capitalize. Pick on that trade, not on size.
+captions three or four seconds behind.
+
+Punctuation is the other axis, and the reason the Nemotron model is the default: it is the
+only one that is both continuous and punctuated. The 120M produces no punctuation at all —
+NVIDIA's model card is explicit that it outputs neither punctuation nor capitalisation, and
+no setting changes that — so it is there for hardware that cannot spare the cores. The
+phrase-at-a-time models punctuate but arrive several seconds later.
+
+Captions are rendered in capitals, which is the long-standing convention for broadcast
+captioning and is easier to read across a room; there is a setting for mixed case. Subtitle
+files keep the natural sentence case regardless, since a file is read close up.
+
+The right build for the machine is chosen automatically, so the arm64 image fetches the
+arm64 engine without being told.
 
 Both engine and model land in `scripts/captions`, inside the bind mount ah4c already
 uses for scripts, so they survive a container rebuild with no change to your compose
