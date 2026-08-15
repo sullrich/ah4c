@@ -61,6 +61,16 @@
         .accel.on .dot { background: var(--live); }
         .accel .h { font-weight: 600; font-size: 0.85rem; }
         .accel .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; margin-top: 0.2rem; }
+        .warn {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid rgba(224,108,94,0.45); background: var(--danger-soft);
+            margin-bottom: 0.9rem;
+        }
+        .warn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-top: 0.35rem; flex-shrink: 0; }
+        .warn .h { font-weight: 600; font-size: 0.85rem; color: var(--danger); }
+        .warn .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.2rem; }
+        .warn code { font-family: var(--mono); font-size: 0.72rem; }
         .drv-log { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); white-space: pre-wrap; margin-top: 0.5rem; max-height: 150px; overflow: auto; }
         @media (max-width: 640px) {
             .model-row { grid-template-columns: auto 1fr; }
@@ -90,6 +100,8 @@
 	</div>
 
     <div class="page">
+
+        <div id="persist"></div>
 
         <div class="card">
             <div class="card-title">Closed Captions <span class="hint" id="runtime"></span></div>
@@ -227,6 +239,19 @@ function render() {
     else if (state.runtime !== 'ready') need = 'Not ready';
     badge.textContent = need;
     badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
+
+    // Downloads are pointless if the directory does not outlive the container.
+    document.getElementById('persist').innerHTML = state.persistent === false ? `
+        <div class="warn">
+            <span class="dot"></span>
+            <div>
+                <div class="h">Downloads will not survive a restart</div>
+                <div class="d">The caption directory is inside the container rather than on your server, so
+                the model, the engine and any GPU driver are thrown away when the container is recreated.
+                Add this volume to your compose file and recreate it:<br>
+                <code>- \${HOST_DIR}/ah4c/captions:/opt/captions</code></div>
+            </div>
+        </div>` : '';
 
     // Is acceleration actually working, and if not, which piece is missing.
     const a = state.accel || {};

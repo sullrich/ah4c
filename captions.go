@@ -14,6 +14,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -351,6 +352,16 @@ var (
 	captionCfgLock sync.RWMutex
 	captionCfg     = defaultCaptionConfig()
 )
+
+// warnIfNotPersistent says once, at startup, when downloads will not survive a
+// restart. Finding that out after fetching a nine hundred megabyte model is a
+// poor way to learn it.
+func warnIfNotPersistent() {
+	if ok, dir := captionDirPersistent(); !ok {
+		logger("[CC] WARNING: %s is not a bind mount. The speech model, engine and any GPU driver downloaded here are lost when the container is recreated.", dir)
+		logger("[CC] WARNING: add this volume to your compose file and recreate the container:  ${HOST_DIR}/ah4c/captions:/opt/captions")
+	}
+}
 
 func loadCaptionConfig() {
 	b, err := os.ReadFile(captionCfgFile)
@@ -931,6 +942,35 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// captionDirPersistent reports whether the caption directory survives the
+// container being recreated.
+//
+// It is a plain directory inside the image unless the compose file binds it to
+// the host, and a container that is brought down and up again starts from the
+// image. Downloading several hundred megabytes into somewhere that evaporates
+// is a miserable way to find that out, so it is checked and said out loud.
+func captionDirPersistent() (bool, string) {
+	abs, err := filepath.Abs(captionDir)
+	if err != nil {
+		return true, ""
+	}
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		// Not a Linux container; nothing to warn about.
+		return true, ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		// The mount point is the fifth field.
+		fields := strings.Fields(sc.Text())
+		if len(fields) >= 5 && fields[4] == abs {
+			return true, ""
+		}
+	}
+	return false, abs
 }
 
 // renderNodes lists the graphics devices visible inside the container.
@@ -2898,6 +2938,8 @@ type captionStatus struct {
 	Drivers        []captionStatusDriver `json:"drivers"`
 	Accel          accelReport           `json:"accel"`
 	DriverInstall  gpuInstallState       `json:"driverInstall"`
+	Persistent     bool                  `json:"persistent"`
+	PersistWarning string                `json:"persistWarning"`
 	Tuners         int                   `json:"tuners"`
 }
 
@@ -2928,6 +2970,11 @@ func captionStatusPayload() captionStatus {
 		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m), URL: modelURL(m)})
 	}
 	engineURL, _, _ := engineAsset()
+	persistent, dir := captionDirPersistent()
+	persistWarning := ""
+	if !persistent {
+		persistWarning = fmt.Sprintf("%s is not a bind mount, so anything downloaded here is lost when the container is recreated. Add this to your compose file and recreate it:  - ${HOST_DIR}/ah4c/captions:/opt/captions", dir)
+	}
 	drivers := make([]captionStatusDriver, 0, len(gpuRuntimes))
 	for _, g := range gpuRuntimes {
 		drivers = append(drivers, captionStatusDriver{
@@ -2979,6 +3026,8 @@ func captionStatusPayload() captionStatus {
 		RuntimeSizeMB:  1,
 		RuntimeVersion: parakeetRelease,
 		RuntimeURL:     engineURL,
+		Persistent:     persistent,
+		PersistWarning: persistWarning,
 		Engines:        engines,
 		Drivers:        drivers,
 		Accel:          accelStatus(),
