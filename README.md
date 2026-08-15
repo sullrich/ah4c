@@ -60,7 +60,7 @@ the usual subtitles button.
   models, opened at run time with purego. There is no cgo and nothing linked into the
   binary — `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
-  UI and stored in `scripts/captions/config.json`. Changes apply to the next tune.
+  UI and stored in `captions/config.json`. Changes apply to the next tune.
 - **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
   time on an ordinary CPU.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
@@ -85,7 +85,7 @@ actually working or which piece is missing.
 
 **Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
 downloads it the same way it downloads a model: the packages and everything they depend on
-are saved into `scripts/captions/drivers` inside the bind mount, and put back automatically
+are saved into `captions/drivers` inside the bind mount, and put back automatically
 at startup after a rebuild, without needing the network again.
 
 You also have to pass the graphics device through, which the stock compose file does not do.
@@ -146,9 +146,10 @@ files keep the natural sentence case regardless, since a file is read close up.
 The right build for the machine is chosen automatically, so the arm64 image fetches the
 arm64 engine without being told.
 
-Both engine and model land in `scripts/captions`, inside the bind mount ah4c already
-uses for scripts, so they survive a container rebuild with no change to your compose
-file. Remove either from the page to reclaim the space.
+Both engine and model land in `/opt/captions`, which is bound to
+`${HOST_DIR}/ah4c/captions` on the host, so they survive a container rebuild. Add that
+volume to your compose file; it stays empty unless you turn captions on. Remove either
+download from the page to reclaim the space.
 
 Captions appear a second or two after the words are spoken, because a phrase has to
 finish before it can be recognized — the same lag live broadcast captioning has. An
@@ -156,7 +157,7 @@ optional extra delay is available if you want to push them back further.
 
 **Subtitle files for recordings.** A recording made from a captioned stream already
 carries the captions in the picture, but switching on *Save a subtitle file for each
-stream* also writes an `.srt` into `scripts/captions/srt`, named for the channel and the
+stream* also writes an `.srt` into `captions/srt`, named for the channel and the
 time the stream started. The cues use the real speech times rather than the times the
 text reached the screen, so the file lines up slightly better than the on-screen
 captions, which cannot appear until a phrase has been spoken. Files with nothing
@@ -247,6 +248,16 @@ services:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
+      - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
+#    devices:
+#      - /dev/dri:/dev/dri # Uncomment ONLY if this machine has a GPU you want closed captions to use, with the Vulkan engine build. Compose refuses to start if the device is not there, and captions run fine on the processor without it
+#    deploy: # Uncomment for an NVIDIA GPU instead, with the CUDA engine build. Requires the NVIDIA container runtime
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: all
+#              capabilities: [gpu]
     restart: unless-stopped
 ```
 

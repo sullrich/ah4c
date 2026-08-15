@@ -1,8 +1,8 @@
 # Compiled binary from `go build`
 /androidhdmi-for-channels
 
-# Caption runtime state: settings, downloaded speech models and ONNX Runtime
-/scripts/captions/
+# Caption runtime state: settings, downloaded speech models, engine and drivers
+/captions/
 
 # Local-only caption test suite
 /captions_test.go

@@ -39,17 +39,17 @@ import (
 // Layout
 // ---------------------------------------------------------------------------
 
-// Everything the feature needs at runtime lives under the scripts directory,
-// which is already a bind mount in every ah4c deployment. Nothing is added to
-// the image and no new mount is required: the speech engine and the model are
-// downloaded on demand from the Closed Captions page and persist there across
-// container rebuilds.
+// Everything the feature needs at run time lives in one directory, bound to the
+// host so it survives a container rebuild. Nothing is added to the image: the
+// speech engine, the model and any GPU driver are downloaded on demand from the
+// Closed Captions page and land here.
 const (
-	captionDir     = "scripts/captions"
-	captionCfgFile = "scripts/captions/config.json"
-	captionModels  = "scripts/captions/models"
-	captionRuntime = "scripts/captions/engine"
-	captionSRTDir  = "scripts/captions/srt"
+	captionDir     = "captions"
+	captionCfgFile = "captions/config.json"
+	captionModels  = "captions/models"
+	captionRuntime = "captions/engine"
+	captionSRTDir  = "captions/srt"
+	captionDrivers = "captions/drivers"
 )
 
 // parakeetRelease is the parakeet.cpp build fetched on demand. It is a ggml
@@ -685,8 +685,6 @@ func removeCaptionModel(m captionModel) error {
 // Vulkan driver pulls in a dozen libraries, and letting the package manager
 // work out which is the difference between something that runs on other
 // people's machines and something that runs on mine.
-
-const captionDrivers = "scripts/captions/drivers"
 
 type gpuRuntime struct {
 	Key      string   `json:"key"`

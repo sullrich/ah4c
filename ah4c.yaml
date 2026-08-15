@@ -55,4 +55,14 @@ services:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
+      - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
+#    devices:
+#      - /dev/dri:/dev/dri # Uncomment ONLY if this machine has a GPU you want closed captions to use, with the Vulkan engine build. Compose refuses to start if the device is not there, and captions run fine on the processor without it
+#    deploy: # Uncomment for an NVIDIA GPU instead, with the CUDA engine build. Requires the NVIDIA container runtime
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: all
+#              capabilities: [gpu]
     restart: unless-stopped
