@@ -99,32 +99,74 @@ func engineInstalled() bool {
 // captionModel describes a downloadable ASR model. Models are never bundled in
 // the image; the user pulls the one they want from the Closed Captions page.
 type captionModel struct {
-	Key       string   `json:"key"`
-	Name      string   `json:"name"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Desc says what the model does, Latency how soon captions appear, and
+	// Hardware what it is comfortable running on. All three are shown on the
+	// page, because the choice between these is not really about accuracy.
 	Desc      string   `json:"desc"`
+	Latency   string   `json:"latency"`
+	Hardware  string   `json:"hardware"`
 	File      string   `json:"file"`
 	SizeMB    int      `json:"sizeMB"`
+	Streaming bool     `json:"streaming"`
 	Languages []string `json:"languages"`
 }
 
 const captionModelRepo = "mudler/parakeet-cpp-gguf"
 
-// Quantized weights: on CPU they are what make this run several times faster
-// than real time, and they keep the download manageable.
+// The 25 languages the multilingual checkpoints cover. The streaming
+// multilingual model advertises more, but these are the ones both agree on, and
+// pinning a locale a model does not know is an error rather than a fallback.
+var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu",
+	"it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"}
+
+// Quantized weights: on CPU they are what make these run faster than real time,
+// and they keep the download manageable.
+//
+// The streaming models are listed first because they are what most people
+// want: they transcribe as the audio arrives instead of waiting for a phrase to
+// finish, which is the difference between captions a second behind and captions
+// three or four seconds behind.
 var captionModelCatalog = []captionModel{
 	{
-		Key:    "parakeet-v3",
-		Name:   "Parakeet TDT 0.6B v3 (multilingual)",
-		Desc:   "25 European languages, detected automatically or pinned.",
-		File:   "tdt-0.6b-v3-q8_0.gguf",
-		SizeMB: 897,
-		Languages: []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu",
-			"it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"},
+		Key:       "realtime-120m",
+		Name:      "Parakeet Realtime 120M",
+		Desc:      "Transcribes continuously as the audio arrives, so captions appear about as fast as broadcast captioning. Being a small streaming model it writes plain lowercase without punctuation.",
+		Latency:   "Under a second",
+		Hardware:  "Runs on almost anything. A low-power NAS, a mini PC or a Raspberry Pi class board is plenty.",
+		File:      "realtime_eou_120m-v1-q8_0.gguf",
+		SizeMB:    168,
+		Streaming: true,
+		Languages: []string{"en"},
+	},
+	{
+		Key:       "realtime-multilingual",
+		Name:      "Nemotron 3.5 Streaming 0.6B",
+		Desc:      "The same continuous transcription in any of its languages, pinned or detected. Choose this over the 120M only if you need something other than English.",
+		Latency:   "Under a second",
+		Hardware:  "A modern multi-core CPU. Roughly five times the work of the 120M.",
+		File:      "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
+		SizeMB:    938,
+		Streaming: true,
+		Languages: euroLanguages,
+	},
+	{
+		Key:       "parakeet-v3",
+		Name:      "Parakeet TDT 0.6B v3",
+		Desc:      "Waits for a whole phrase and then transcribes it. The most accurate of the multilingual options, at the cost of arriving later.",
+		Latency:   "Three to four seconds",
+		Hardware:  "A modern multi-core CPU.",
+		File:      "tdt-0.6b-v3-q8_0.gguf",
+		SizeMB:    897,
+		Languages: euroLanguages,
 	},
 	{
 		Key:       "parakeet-110m",
-		Name:      "Parakeet TDT-CTC 110M (English)",
-		Desc:      "English only. A fifth of the size and quicker still, for lighter hardware.",
+		Name:      "Parakeet TDT-CTC 110M",
+		Desc:      "Phrase at a time, English only. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
+		Latency:   "Three to four seconds",
+		Hardware:  "Modest hardware. Comfortable on a NAS.",
 		File:      "tdt_ctc-110m-q8_0.gguf",
 		SizeMB:    170,
 		Languages: []string{"en"},
@@ -176,8 +218,8 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:   false,
-		Model:     "parakeet-v3",
-		Language:  "auto",
+		Model:     "realtime-120m",
+		Language:  "en",
 		Style:     "rollup3",
 		OffsetSec: 0,
 	}
@@ -228,6 +270,13 @@ func currentCaptionConfig() captionConfig {
 	captionCfgLock.RLock()
 	defer captionCfgLock.RUnlock()
 	return captionCfg
+}
+
+// modelURL is where a model's weights are fetched from. It is shown on the page
+// as well as used here, so it is always obvious what is being downloaded and
+// from whom.
+func modelURL(m captionModel) string {
+	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", captionModelRepo, m.File)
 }
 
 // modelPath is where a model's weights live once downloaded.
@@ -303,11 +352,11 @@ func fetchModel(m captionModel) error {
 	// carries a 5 second response header timeout, which is right for an encoder
 	// and far too tight for a several hundred megabyte model off a CDN.
 	client := &http.Client{Timeout: 2 * time.Hour}
-	url := fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s?download=true", captionModelRepo, m.File)
+	url := modelURL(m) + "?download=true"
 	dlLock.Lock()
 	dlState.File, dlState.Index = m.File, 1
 	dlLock.Unlock()
-	logger("[CC] Downloading %s", m.File)
+	logger("[CC] Downloading %s from %s", m.File, url)
 	if err := streamToFile(client, url, modelPath(m)); err != nil {
 		return fmt.Errorf("%s: %w", m.File, err)
 	}
@@ -381,6 +430,7 @@ func startRuntimeDownload() error {
 	dlState = captionDownload{Model: "engine", Active: true, Count: 1, Index: 1, File: "parakeet.cpp " + parakeetRelease}
 	dlLock.Unlock()
 
+	logger("[CC] Downloading the speech engine from %s", url)
 	go func() {
 		err := fetchRuntime(url, local)
 		dlLock.Lock()
@@ -595,8 +645,20 @@ func (c *cea608) begin() {
 // seconds of text. Reaching it means recognition has outrun the display.
 const ccMaxBacklog = 150
 
-// push queues a phrase for display, wrapping it to the 32 column caption grid.
-func (c *cea608) push(text string) {
+// srtMaxCue is the longest a subtitle cue runs before it is closed, for speech
+// that never pauses.
+const srtMaxCue = 6.0
+
+// push queues a complete phrase and closes the line after it.
+func (c *cea608) push(text string) { c.pushText(text, true) }
+
+// pushText queues text, wrapping it to the 32 column caption grid, and ends the
+// line only if breakAfter is set.
+//
+// A streaming model finalizes a few words at a time, and each of those is a
+// continuation of the sentence being spoken rather than a line of its own, so
+// the line is closed on the end of an utterance instead of on every arrival.
+func (c *cea608) pushText(text string, breakAfter bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
@@ -632,9 +694,11 @@ func (c *cea608) push(text string) {
 			c.writeRune(r)
 		}
 	}
-	// Finish the phrase on its own line so the next one rolls up under it.
-	c.ctrl(ccCR)
-	c.col = 0
+	if breakAfter {
+		// Finish the phrase on its own line so the next one rolls up under it.
+		c.ctrl(ccCR)
+		c.col = 0
+	}
 }
 
 // writeRune appends a character, pairing it with the previous one where it can.
@@ -1418,6 +1482,19 @@ var (
 	pkTranscribe func(ctx uintptr, samples unsafe.Pointer, n int32, rate int32, decoder int32, lang string) unsafe.Pointer
 	pkFreeString func(s unsafe.Pointer)
 	pkLastError  func(ctx uintptr) string
+
+	// Cache-aware streaming: the session buffers audio and returns text as
+	// encoder chunks complete, instead of waiting for a whole phrase.
+	pkStreamBegin    func(ctx uintptr, lang string) uintptr
+	pkStreamFeed     func(s uintptr, pcm unsafe.Pointer, n int32) unsafe.Pointer
+	pkStreamFinalize func(s uintptr) unsafe.Pointer
+	pkStreamFree     func(s uintptr)
+)
+
+// Event bits reported by a streaming feed.
+const (
+	pkEventEOU = 1 // the speaker finished an utterance
+	pkEventEOB = 2 // a backchannel, a short "uh-huh" while someone else talks
 )
 
 // initParakeet opens the downloaded engine exactly once per process.
@@ -1455,6 +1532,10 @@ func initParakeet() error {
 		purego.RegisterLibFunc(&pkTranscribe, handle, "parakeet_capi_transcribe_pcm_lang")
 		purego.RegisterLibFunc(&pkFreeString, handle, "parakeet_capi_free_string")
 		purego.RegisterLibFunc(&pkLastError, handle, "parakeet_capi_last_error")
+		purego.RegisterLibFunc(&pkStreamBegin, handle, "parakeet_capi_stream_begin_lang")
+		purego.RegisterLibFunc(&pkStreamFeed, handle, "parakeet_capi_stream_feed_json")
+		purego.RegisterLibFunc(&pkStreamFinalize, handle, "parakeet_capi_stream_finalize_json")
+		purego.RegisterLibFunc(&pkStreamFree, handle, "parakeet_capi_stream_free")
 		logger("[CC] Speech engine loaded, ABI %d", pkABIVersion())
 	})
 	return pkErr
@@ -1464,7 +1545,11 @@ func initParakeet() error {
 type parakeet struct {
 	ctx  uintptr
 	lang string
-	mu   sync.Mutex // the context holds decoder state, so one utterance at a time
+	// eou is the out-parameter the streaming feed writes its event mask into.
+	// It lives on the heap for the life of the model: handing C a pointer into
+	// a goroutine stack is not safe, because the stack can move.
+	eou []int32
+	mu  sync.Mutex // the context holds decoder state, so one utterance at a time
 }
 
 // loadParakeet opens the weights the user downloaded.
@@ -1486,7 +1571,7 @@ func loadParakeet(gguf, language string) (*parakeet, error) {
 	if language == "" {
 		language = "auto"
 	}
-	return &parakeet{ctx: ctx, lang: language}, nil
+	return &parakeet{ctx: ctx, lang: language, eou: make([]int32, 1)}, nil
 }
 
 func (p *parakeet) Close() {
@@ -1520,6 +1605,106 @@ func (p *parakeet) transcribe(pcm []float32) (string, error) {
 		return "", fmt.Errorf("recognition failed")
 	}
 	return cStringFree(out), nil
+}
+
+// beginStream opens a cache-aware streaming session. Only a streaming
+// checkpoint supports one; anything else returns an error and the caller falls
+// back to recognizing a phrase at a time.
+func (p *parakeet) beginStream(language string) (uintptr, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ctx == 0 {
+		return 0, fmt.Errorf("model is closed")
+	}
+	s := pkStreamBegin(p.ctx, language)
+	if s == 0 && language != "auto" && language != "" {
+		// A prompt-conditioned model rejects a locale it does not know rather
+		// than falling back, so try again letting it detect.
+		if msg := pkLastError(p.ctx); msg != "" {
+			logger("[CC] streaming rejected language %q (%s), letting the model detect", language, msg)
+		}
+		s = pkStreamBegin(p.ctx, "auto")
+	}
+	if s == 0 {
+		if msg := pkLastError(p.ctx); msg != "" {
+			return 0, fmt.Errorf("%s", msg)
+		}
+		return 0, fmt.Errorf("this model does not support streaming")
+	}
+	return s, nil
+}
+
+// streamResult is what a streaming feed reports.
+//
+// The plain text entry point hands back whatever tokens finalized in that call,
+// which is sub-word: "broadcast" arrives as "broad" then "cast" with nothing to
+// say whether the two join or are separate words. The JSON entry point groups
+// them properly and timestamps each word, which is both what the display needs
+// and what makes a decent subtitle cue.
+type streamResult struct {
+	Text  string `json:"text"`
+	EOU   int    `json:"eou"`
+	Words []struct {
+		W     string  `json:"w"`
+		Start float64 `json:"start"`
+		End   float64 `json:"end"`
+	} `json:"words"`
+}
+
+// words joins the grouped words of this result.
+//
+// Only the grouped words are used. The text field carries the same speech as
+// the raw sub-word tokens it finalized, so taking both would print every word
+// twice: once in pieces and once whole.
+func (r *streamResult) words() string {
+	if len(r.Words) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(r.Words))
+	for _, w := range r.Words {
+		if t := strings.TrimSpace(w.W); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// span returns the time the words in this result cover.
+func (r *streamResult) span() (start, end float64, ok bool) {
+	if len(r.Words) == 0 {
+		return 0, 0, false
+	}
+	return r.Words[0].Start, r.Words[len(r.Words)-1].End, true
+}
+
+// feedStream hands the session more audio and returns whatever it just
+// finalized.
+func (p *parakeet) feedStream(s uintptr, pcm []float32) *streamResult {
+	if s == 0 || len(pcm) == 0 {
+		return nil
+	}
+	out := pkStreamFeed(s, unsafe.Pointer(&pcm[0]), int32(len(pcm)))
+	runtime.KeepAlive(pcm)
+	return parseStreamResult(cStringFree(out))
+}
+
+// finishStream flushes the tail when the stream ends.
+func (p *parakeet) finishStream(s uintptr) *streamResult {
+	if s == 0 {
+		return nil
+	}
+	return parseStreamResult(cStringFree(pkStreamFinalize(s)))
+}
+
+func parseStreamResult(doc string) *streamResult {
+	if doc == "" {
+		return nil
+	}
+	var r streamResult
+	if err := json.Unmarshal([]byte(doc), &r); err != nil {
+		return nil
+	}
+	return &r
 }
 
 // cStringFree copies a NUL-terminated string out of engine memory and releases
@@ -1717,7 +1902,17 @@ type captionEngine struct {
 	closed  chan struct{}
 	once    sync.Once
 
-	srt *srtWriter
+	// done is closed when the listening goroutine has returned. Nothing the
+	// engine owns may be freed before then: the recognizer is native code, and
+	// freeing a session out from under a call in flight is a crash, not an
+	// error.
+	done chan struct{}
+	// stream is non-zero when the chosen model transcribes continuously; the
+	// phrase segmenter is not used in that case.
+	stream uintptr
+	srt    *srtWriter
+	srtBuf string  // words held for the current subtitle cue, streaming only
+	srtEnd float64 // end time of the last word in that cue
 }
 
 func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) (*captionEngine, error) {
@@ -1732,6 +1927,7 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) 
 		model:   model,
 		audioCh: make(chan []byte, 64),
 		closed:  make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 
 	// ffmpeg is already in the image and is only asked for the audio, so the
@@ -1765,6 +1961,14 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) 
 		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
 
+	if m.Streaming {
+		if st, err := model.beginStream(cfg.Language); err != nil {
+			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", label, err)
+		} else {
+			e.stream = st
+		}
+	}
+
 	if cfg.SaveSRT {
 		if w, err := newSRTWriter(channel); err != nil {
 			logger("[CC] %s could not open a subtitle file: %v", label, err)
@@ -1774,8 +1978,16 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label, channel string) 
 	}
 
 	go e.pumpAudio()
-	go e.listen(pcm)
-	logger("[CC] %s captions started, model %s language %s", label, m.Key, cfg.Language)
+	if e.stream != 0 {
+		go e.listenStreaming(pcm)
+	} else {
+		go e.listen(pcm)
+	}
+	mode := "phrase at a time"
+	if e.stream != 0 {
+		mode = "continuous"
+	}
+	logger("[CC] %s captions started, model %s language %s, %s", label, m.Key, cfg.Language, mode)
 	return e, nil
 }
 
@@ -1821,8 +2033,99 @@ const (
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
 )
 
+// listenStreaming feeds audio to a cache-aware streaming session and shows text
+// the moment the model finalizes it.
+//
+// There is no phrase segmenter here and no waiting: the model returns words as
+// the audio arrives and marks where an utterance ends, which is what keeps this
+// about a second behind instead of a phrase behind.
+func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
+	defer close(e.done)
+	defer pcm.Close()
+
+	// 100 ms per feed: short enough that nothing waits on a buffer, long enough
+	// that the call overhead is irrelevant next to the work inside.
+	const chunk = asrSampleRate / 10
+	raw := make([]byte, chunk*2)
+	buf := make([]float32, chunk)
+
+	var consumed int64
+	cueStart, cueOpen := 0.0, false
+
+	take := func(r *streamResult) {
+		if r == nil {
+			return
+		}
+		text := r.words()
+		eou := r.EOU != 0
+		if text == "" && !eou {
+			return
+		}
+		if text != "" {
+			// A word break is only forced at the end of an utterance; anything
+			// else is the middle of a sentence still being spoken.
+			e.show(text, eou)
+		}
+		if e.srt != nil && text != "" {
+			if s, en, ok := r.span(); ok {
+				if !cueOpen {
+					cueStart, cueOpen = s, true
+				}
+				e.srtBuf = strings.TrimSpace(e.srtBuf + " " + text)
+				e.srtEnd = en
+			}
+		}
+		// A newsreader may never pause long enough for the model to call an
+		// utterance over, so a cue is also closed once it has run long enough
+		// to be one on its own.
+		if e.srt != nil && cueOpen && (eou || e.srtEnd-cueStart >= srtMaxCue) {
+			e.srtFlush(cueStart, e.srtEnd)
+			cueOpen = false
+		}
+	}
+
+	for {
+		select {
+		case <-e.closed:
+			return
+		default:
+		}
+		if _, err := io.ReadFull(pcm, raw); err != nil {
+			take(e.model.finishStream(e.stream))
+			if e.srt != nil && cueOpen {
+				e.srtFlush(cueStart, e.srtEnd)
+			}
+			return
+		}
+		for i := range buf {
+			buf[i] = float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
+		}
+		consumed += int64(chunk)
+		take(e.model.feedStream(e.stream, buf))
+	}
+}
+
+// show puts recognized text on screen, honouring the configured offset.
+func (e *captionEngine) show(text string, breakAfter bool) {
+	if d := e.cfg.OffsetSec; d > 0 {
+		time.AfterFunc(time.Duration(d)*time.Second, func() { e.enc.pushText(text, breakAfter) })
+		return
+	}
+	e.enc.pushText(text, breakAfter)
+}
+
+// srtFlush writes whatever has accumulated as one cue.
+func (e *captionEngine) srtFlush(start, end float64) {
+	if e.srt == nil || e.srtBuf == "" {
+		return
+	}
+	e.srt.add(start, end, e.srtBuf)
+	e.srtBuf = ""
+}
+
 // listen reads decoded audio, splits it into phrases and captions each one.
 func (e *captionEngine) listen(pcm io.ReadCloser) {
+	defer close(e.done)
 	defer pcm.Close()
 
 	raw := make([]byte, vadFrame*2)
@@ -1949,12 +2252,30 @@ func (e *captionEngine) feed(b []byte) {
 func (e *captionEngine) Close() {
 	e.once.Do(func() {
 		close(e.closed)
+		// Stopping ffmpeg closes the pipe the listener is blocked on, which is
+		// what lets it notice the shutdown and return.
 		if e.ffmpeg != nil && e.ffmpeg.Process != nil {
 			e.ffmpeg.Process.Kill()
 			e.ffmpeg.Wait()
 		}
-		if e.model != nil {
-			e.model.Close()
+		// Wait for the listener to finish before releasing anything it might be
+		// inside. If it somehow does not stop, leaking the session is far
+		// better than freeing it from under a call in flight.
+		stopped := true
+		select {
+		case <-e.done:
+		case <-time.After(10 * time.Second):
+			stopped = false
+			logger("[CC] %s recognizer did not stop in time; leaving its memory alone", e.label)
+		}
+		if stopped {
+			if e.stream != 0 {
+				pkStreamFree(e.stream)
+				e.stream = 0
+			}
+			if e.model != nil {
+				e.model.Close()
+			}
 		}
 		if e.srt != nil {
 			e.srt.Close()
@@ -2066,20 +2387,23 @@ type captionStatus struct {
 	RuntimeReady   bool                 `json:"runtimeReady"`
 	RuntimeSizeMB  int                  `json:"runtimeSizeMB"`
 	RuntimeVersion string               `json:"runtimeVersion"`
+	RuntimeURL     string               `json:"runtimeURL"`
 	Tuners         int                  `json:"tuners"`
 }
 
 type captionStatusModel struct {
 	captionModel
-	Installed bool `json:"installed"`
+	Installed bool   `json:"installed"`
+	URL       string `json:"url"`
 }
 
 func captionStatusPayload() captionStatus {
 	cfg := currentCaptionConfig()
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
-		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m)})
+		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m), URL: modelURL(m)})
 	}
+	engineURL, _, _ := engineAsset()
 	state := "ready"
 	switch {
 	case engineLibPath() == "":
@@ -2099,6 +2423,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeReady:   engineInstalled(),
 		RuntimeSizeMB:  1,
 		RuntimeVersion: parakeetRelease,
+		RuntimeURL:     engineURL,
 		Tuners:         len(tuners),
 	}
 }
