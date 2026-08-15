@@ -97,8 +97,16 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Downloads <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div class="card-title">Speech engine <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
             <div class="model-list" id="runtimeRow"></div>
+            <p class="footnote">
+                Where the model runs. The processor build needs nothing and handles several tuners
+                at once. A GPU build is only offered when this container can actually load it: CUDA
+                appears once the NVIDIA container runtime is passing the driver through, Vulkan once
+                a Vulkan driver and <code>/dev/dri</code> are present. Neither needs a change to the
+                image &mdash; only to your compose file.
+            </p>
+            <div class="card-title" style="margin-top:1rem;">Model</div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
             <div id="dl" class="hidden">
                 <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
@@ -205,21 +213,27 @@ function render() {
     badge.textContent = need;
     badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
 
-    // Speech runtime: the ONNX library that actually runs the model.
-    document.getElementById('runtimeRow').innerHTML = `
-        <div class="model-row">
-            <span class="menu-icon" style="width:15px;"></span>
+    // Engine builds: processor or GPU, offered only where loadable.
+    document.getElementById('runtimeRow').innerHTML = (state.engines || []).map(e => `
+        <div class="model-row ${e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
+            <input type="radio" name="engine" value="${esc(e.key)}" ${e.key === cfg.engine ? 'checked' : ''}
+                   ${e.usable ? '' : 'disabled'} onchange="pickEngine('${esc(e.key)}')">
             <div>
-                <div class="model-name">Speech engine</div>
-                <div class="model-meta">parakeet.cpp ${esc(state.runtimeVersion)} for this machine, about ${state.runtimeSizeMB} MB. Required before any model will run.</div>
-                <span class="model-src">Downloads from: <a href="${esc(state.runtimeURL)}" target="_blank" rel="noopener">${esc(state.runtimeURL)}</a></span>
+                <div class="model-name">${esc(e.name)}</div>
+                <div class="model-meta">${esc(e.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag">${e.sizeMB} MB</span>
+                    ${e.usable ? '<span class="tag tag-live">Available here</span>'
+                               : '<span class="tag">Not available in this container</span>'}
+                </div>
+                ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
+                <span class="model-src">Downloads from: <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
             </div>
             <div class="model-actions">
-                ${state.runtimeReady
-                    ? '<span class="badge badge-active">Downloaded</span>'
-                    : '<button class="btn btn-sm" onclick="getRuntime()">Download</button>'}
+                ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
+                              : (e.usable ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
             </div>
-        </div>`;
+        </div>`).join('');
 
     // Models
     document.getElementById('models').innerHTML = state.models.map(m => `
@@ -301,6 +315,7 @@ function collect() {
         offsetSec: parseInt(document.getElementById('offset').value, 10),
         saveSRT: document.getElementById('saveSRT').checked,
         uppercase: document.getElementById('case').value === 'upper',
+        engine: state.config.engine || 'cpu',
         tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
     };
 }
@@ -328,8 +343,13 @@ async function download(key) {
     poll();
 }
 
-async function getRuntime() {
-    const r = await fetch('/api/captions/runtime', {method: 'POST'});
+function pickEngine(key) {
+    state.config.engine = key;
+    render();
+}
+
+async function getRuntime(key) {
+    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(key || state.config.engine || 'cpu'), {method: 'POST'});
     if (!r.ok) {
         const b = await r.json().catch(() => ({}));
         document.getElementById('saved').textContent = b.error || 'Could not start the download';
