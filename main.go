@@ -1282,6 +1282,7 @@ func main() {
 	logger("[START] ah4c is starting")
 	loadenv()
 	loadCaptionConfig()
+	warnIfNotPersistent()
 	restoreGPURuntime()
 	// Start GIN
 	errrun := run()
