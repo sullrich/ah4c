@@ -93,8 +93,8 @@
                 <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
             </div>
             <video id="modalVideo" class="hidden" controls muted></video>
-            <div id="previewStart" class="preview-start">
-                <button class="btn btn-primary" onclick="startPreviewClicked()">Start preview</button>
+            <div id="previewStart" class="preview-start hidden">
+                <button class="btn btn-primary" onclick="startPreviewClicked()">Retry preview</button>
             </div>
             <p class="modal-hint" id="modalHint"></p>
             <div class="remote">
@@ -149,14 +149,12 @@
         }
 
         function openTunerModal(index) {
-            previewDeadline = 0;
             modalIndex = index;
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
             setModalHint();
-            $('#modalVideo').addClass('hidden');
-            $('#previewStart').removeClass('hidden');
             $('#tunerModal').addClass('open');
+            startPreviewClicked();
         }
 
         function startPreviewClicked() {
@@ -262,7 +260,7 @@
                 previewDeadline = 0;
                 $('#modalVideo').addClass('hidden');
                 $('#previewStart').removeClass('hidden');
-                $('#modalHint').text('No video from the encoder — if the device was asleep, give it a moment and start the preview again.');
+                $('#modalHint').text('No video from the encoder — if the device was asleep, give it a moment and retry.');
                 return;
             }
             $('#modalHint').text('Waiting for video from the encoder…');
