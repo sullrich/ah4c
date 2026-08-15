@@ -22,6 +22,7 @@
 17. Dead video feeds restart - video locking up but audio working
 18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
 19. NULL packet insertion - fills encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR sees a continuous bitstream during HDMI source gaps
+20. Closed captions - live CPU speech-to-text written into the stream as CEA-608, the way an HDHomeRun carries them, with no re-encode and nothing added to the image
 
 ah4c WebUI:
 
@@ -36,6 +37,49 @@ ah4c WebUI:
 ### M3U Editor
 
 <img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-01-57" src="https://github.com/user-attachments/assets/f2297fc1-a108-4790-a78a-26401211beee" />
+
+### Closed Captions
+
+Streaming apps hand the encoder a picture with the captions already stripped off, so
+everything downstream of ah4c has nothing to display. The **Closed Captions** page adds
+them back.
+
+Audio is pulled out of the encoder's transport stream, transcribed on the CPU by an
+NVIDIA Parakeet model, and written back into the video as CEA-608 caption data carried
+in ATSC A/53 user data — the same carriage an HDHomeRun uses for over-the-air captions.
+Channels DVR, VLC and anything else see a real closed caption track and offer it under
+the usual subtitles button.
+
+- **Not burned in, and not re-encoded.** The compressed video is passed through
+  untouched; only a small caption message is inserted ahead of each picture, and the
+  picture data comes out byte-for-byte identical. Quality, bitrate and tune time are
+  unchanged, and streams that already carry captions are left alone.
+- **Nothing is added to the Docker image.** No new packages, no Python, no model.
+- **ah4c stays pure Go.** Recognition runs against
+  [parakeet.cpp](https://github.com/mudler/parakeet.cpp), a ggml build of the Parakeet
+  models, opened at run time with purego. There is no cgo and nothing linked into the
+  binary — `CGO_ENABLED=0` still builds.
+- **Nothing is gated on an environment variable.** Everything is controlled from the web
+  UI and stored in `scripts/captions/config.json`. Changes apply to the next tune.
+- **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
+  time on an ordinary CPU.
+- **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
+
+Two downloads are offered on the page, both on demand and neither bundled:
+
+| Download | Size | What it is |
+| --- | --- | --- |
+| Speech engine | ~1 MB | parakeet.cpp for this machine, needed before any model will run |
+| Parakeet TDT 0.6B v3 | ~897 MB | 25 European languages, detected automatically or pinned |
+| Parakeet TDT-CTC 110M | ~170 MB | English only, a fifth of the size and quicker still |
+
+Both land in `scripts/captions`, inside the bind mount ah4c already uses for scripts, so
+they survive a container rebuild with no change to your compose file. Remove either from
+the page to reclaim the space.
+
+Captions appear a second or two after the words are spoken, because a phrase has to
+finish before it can be recognized — the same lag live broadcast captioning has. An
+optional extra delay is available if you want to push them back further.
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 

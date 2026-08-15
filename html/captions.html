@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Closed Captions — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
+    <script src="/static/js/theme.js"></script>
+    <style>
+        .cc-master { display: flex; align-items: center; gap: 0.8rem; }
+        .cc-master .cc-switch { flex-shrink: 0; }
+        .cc-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .cc-switch input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+        .model-list { display: grid; gap: 0.6rem; }
+        .model-row {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 0.75rem;
+            align-items: center;
+            padding: 0.7rem 0.8rem;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius-sm);
+        }
+        .model-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+        .model-row input[type="radio"] { width: 15px; height: 15px; accent-color: var(--accent); }
+        .model-name { font-weight: 600; font-size: 0.88rem; }
+        .model-meta { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; }
+        .model-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+        .bar { height: 5px; background: var(--border-soft); border-radius: 3px; overflow: hidden; margin-top: 0.5rem; }
+        .bar span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.25s ease; }
+        .tuner-picks { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+        @media (max-width: 640px) {
+            .model-row { grid-template-columns: auto 1fr; }
+            .model-actions { grid-column: 1 / -1; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+	<div class="pagebar">
+		<a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
+		<strong>AH4C</strong>
+		<span>Closed Captions</span>
+		<button class="btn btn-sm btn-icon nav-toggle" onclick="toggleNav()" title="Menu" aria-label="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+		<nav class="nav push-right">
+			<a href="/">Home</a>
+			<a href="/device">Device Control</a>
+			<a href="/status">Activity</a>
+			<a href="/logs">Logs</a>
+			<a href="/captions" class="active">Closed Captions</a>
+			<a href="/m3us">Channel M3Us</a>
+			<a href="/routes">API Routes</a>
+		</nav>
+		<button class="btn btn-sm btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+			<svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="7" y2="7"/><line x1="17" y1="17" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="7" y2="17"/><line x1="17" y1="7" x2="19.1" y2="4.9"/></svg>
+			<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+		</button>
+	</div>
+
+    <div class="page">
+
+        <div class="card">
+            <div class="card-title">Closed Captions <span class="hint" id="runtime"></span></div>
+            <div class="cc-master">
+                <label class="cc-switch">
+                    <input type="checkbox" id="enabled">
+                    <span>Add captions to every stream</span>
+                </label>
+                <span class="badge badge-idle" id="stateBadge">Off</span>
+            </div>
+            <p class="footnote">
+                Speech is transcribed on the CPU and written into the video as CEA-608 caption data,
+                the same carriage an HDHomeRun uses for over-the-air captions. Channels DVR and any
+                other player will show it as CC1 with no sidecar file. The video itself is never
+                re-encoded, so picture quality and tune time are unchanged.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Downloads <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div class="model-list" id="runtimeRow"></div>
+            <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
+            <div id="dl" class="hidden">
+                <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
+                <div class="bar"><span id="dlBar"></span></div>
+            </div>
+            <p class="footnote">
+                Both land in <code>scripts/captions</code>, which is already a bind mount, so they survive a
+                container rebuild. Remove them any time to get the space back.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Caption settings</div>
+            <div class="field-row">
+                <label for="language">Language</label>
+                <select id="language"></select>
+            </div>
+            <div class="field-row">
+                <label for="style">Presentation</label>
+                <select id="style">
+                    <option value="rollup2">Roll-up, 2 lines</option>
+                    <option value="rollup3">Roll-up, 3 lines</option>
+                    <option value="rollup4">Roll-up, 4 lines</option>
+                </select>
+            </div>
+            <div class="field-row">
+                <label for="offset">Extra delay</label>
+                <select id="offset"></select>
+            </div>
+            <p class="footnote">
+                Captions appear a couple of seconds after the words are spoken, the same as live
+                broadcast captioning, because the sentence has to finish before it can be recognized.
+                Extra delay only pushes the text further back if you want it to line up more loosely.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Tuners <span class="hint">leave all unchecked to caption every tuner</span></div>
+            <div class="tuner-picks" id="tuners"></div>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-primary" onclick="save()">Save</button>
+            <span class="small muted" id="saved"></span>
+        </div>
+    </div>
+
+<script>
+let state = null;
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function mb(n) {
+    if (!n || n < 0) return '';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+
+async function load() {
+    const r = await fetch('/api/captions');
+    state = await r.json();
+    render();
+}
+
+function render() {
+    const cfg = state.config;
+    document.getElementById('enabled').checked = cfg.enabled;
+    document.getElementById('runtime').textContent = state.runtime === 'ready' ? '' : state.runtime;
+
+    const badge = document.getElementById('stateBadge');
+    const model = state.models.find(m => m.key === cfg.model);
+    const ready = cfg.enabled && model && model.installed && state.runtimeReady && state.runtime === 'ready';
+    let need = 'On';
+    if (!cfg.enabled) need = 'Off';
+    else if (!state.runtimeReady) need = 'Needs the speech engine';
+    else if (!model || !model.installed) need = 'Needs a model';
+    else if (state.runtime !== 'ready') need = 'Not ready';
+    badge.textContent = need;
+    badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
+
+    // Speech runtime: the ONNX library that actually runs the model.
+    document.getElementById('runtimeRow').innerHTML = `
+        <div class="model-row">
+            <span class="menu-icon" style="width:15px;"></span>
+            <div>
+                <div class="model-name">Speech engine</div>
+                <div class="model-meta">parakeet.cpp ${esc(state.runtimeVersion)} for this machine, about ${state.runtimeSizeMB} MB. Required before any model will run.</div>
+            </div>
+            <div class="model-actions">
+                ${state.runtimeReady
+                    ? '<span class="badge badge-active">Downloaded</span>'
+                    : '<button class="btn btn-sm" onclick="getRuntime()">Download</button>'}
+            </div>
+        </div>`;
+
+    // Models
+    document.getElementById('models').innerHTML = state.models.map(m => `
+        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}">
+            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''} onchange="pickModel('${esc(m.key)}')">
+            <div>
+                <div class="model-name">${esc(m.name)}</div>
+                <div class="model-meta">${esc(m.desc)} About ${m.sizeMB} MB.</div>
+            </div>
+            <div class="model-actions">
+                ${m.installed
+                    ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeModel('${esc(m.key)}')">Remove</button>`
+                    : `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>`}
+            </div>
+        </div>`).join('');
+
+    // Download progress
+    const d = state.download;
+    const dl = document.getElementById('dl');
+    if (d && (d.active || d.err)) {
+        dl.classList.remove('hidden');
+        if (d.err) {
+            document.getElementById('dlText').textContent = 'Download failed: ' + d.err;
+            document.getElementById('dlBar').style.width = '0%';
+        } else {
+            const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
+            document.getElementById('dlText').textContent =
+                `Downloading ${d.file} (${d.index} of ${d.count}) — ${mb(d.done)}${d.total > 0 ? ' of ' + mb(d.total) : ''}`;
+            document.getElementById('dlBar').style.width = pct + '%';
+        }
+    } else {
+        dl.classList.add('hidden');
+    }
+
+    // Languages come from whichever model is selected.
+    const langs = model ? model.languages : ['auto'];
+    const sel = document.getElementById('language');
+    sel.innerHTML = langs.map(l =>
+        `<option value="${esc(l)}" ${l === cfg.language ? 'selected' : ''}>${esc(state.languageNames[l] || l)}</option>`).join('');
+    if (!langs.includes(cfg.language)) sel.value = langs[0];
+
+    document.getElementById('style').value = cfg.style || 'rollup3';
+
+    const off = document.getElementById('offset');
+    off.innerHTML = Array.from({length: 16}, (_, i) =>
+        `<option value="${i}" ${i === cfg.offsetSec ? 'selected' : ''}>${i === 0 ? 'None' : i + ' second' + (i > 1 ? 's' : '')}</option>`).join('');
+
+    // Tuners
+    const picked = cfg.tuners || [];
+    document.getElementById('tuners').innerHTML = state.tuners === 0
+        ? '<span class="small muted">No tuners are configured.</span>'
+        : Array.from({length: state.tuners}, (_, i) =>
+            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i + 1}</span></label>`).join('');
+}
+
+function pickModel(key) {
+    state.config.model = key;
+    const m = state.models.find(x => x.key === key);
+    if (m && !m.languages.includes(state.config.language)) state.config.language = m.languages[0];
+    render();
+}
+
+function collect() {
+    return {
+        enabled: document.getElementById('enabled').checked,
+        model: state.config.model,
+        language: document.getElementById('language').value,
+        style: document.getElementById('style').value,
+        offsetSec: parseInt(document.getElementById('offset').value, 10),
+        tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
+    };
+}
+
+async function save() {
+    const note = document.getElementById('saved');
+    const r = await fetch('/api/captions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(collect())
+    });
+    const body = await r.json();
+    if (!r.ok) {
+        note.textContent = body.error || 'Could not save';
+        return;
+    }
+    state = body;
+    render();
+    note.textContent = 'Saved. New tunes pick this up right away.';
+    setTimeout(() => { note.textContent = ''; }, 4000);
+}
+
+async function download(key) {
+    await fetch('/api/captions/download/' + encodeURIComponent(key), {method: 'POST'});
+    poll();
+}
+
+async function getRuntime() {
+    const r = await fetch('/api/captions/runtime', {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the download';
+        return;
+    }
+    poll();
+}
+
+async function removeModel(key) {
+    if (!confirm('Delete this downloaded model?')) return;
+    const r = await fetch('/api/captions/model/' + encodeURIComponent(key), {method: 'DELETE'});
+    if (r.ok) { state = await r.json(); render(); }
+}
+
+let polling = false;
+async function poll() {
+    if (polling) return;
+    polling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        // Keep whatever the user is editing; only refresh download and model state.
+        const edited = collect();
+        next.config = Object.assign({}, next.config, edited, {model: state.config.model});
+        state = next;
+        render();
+        if (state.download && state.download.active) {
+            setTimeout(tick, 1000);
+        } else {
+            polling = false;
+        }
+    };
+    tick();
+}
+
+load().then(() => { if (state.download && state.download.active) poll(); });
+</script>
+</body>
+</html>
