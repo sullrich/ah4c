@@ -15,6 +15,7 @@ package main
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -1228,11 +1229,32 @@ func (c *cea608) ctrl(code byte) {
 
 // begin puts the decoder into roll-up mode on the bottom row.
 func (c *cea608) begin() {
+	c.mode()
+	c.ctrl(ccCR)
+	c.started = true
+	c.col = 0
+}
+
+// mode states the roll-up style and the row to write on.
+func (c *cea608) mode() {
 	c.ctrl(c.rows)
 	// Preamble address code for row 15, column 0, white non-italic: 0x14 0x70.
 	c.queue = append(c.queue, [2]byte{odd608(ccCtrlCC1), odd608(0x70)}, [2]byte{odd608(ccCtrlCC1), odd608(0x70)})
+}
+
+// newRow ends the current row and restates the mode.
+//
+// A decoder holds the caption style and the row as state, and it only learns
+// them from these commands. Sending them once at the start of a stream is
+// enough for somebody watching from the start and no use to anybody else: seek
+// into a recording, or switch captions on an hour in, and the decoder has
+// nothing to go on until the next one arrives. Restating them on every row
+// gives a receiver joining at any point somewhere to latch on within a second,
+// which is what a broadcast encoder does and why its captions survive a
+// channel change.
+func (c *cea608) newRow() {
 	c.ctrl(ccCR)
-	c.started = true
+	c.mode()
 	c.col = 0
 }
 
@@ -1276,24 +1298,21 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	for _, w := range strings.Fields(text) {
 		runes := []rune(w)
 		if c.col > 0 && c.col+1+len(runes) > c.maxCol {
-			c.ctrl(ccCR)
-			c.col = 0
+			c.newRow()
 		}
 		if c.col > 0 {
 			c.writeRune(' ')
 		}
 		for _, r := range runes {
 			if c.col >= c.maxCol {
-				c.ctrl(ccCR)
-				c.col = 0
+				c.newRow()
 			}
 			c.writeRune(r)
 		}
 	}
 	if breakAfter {
 		// Finish the phrase on its own line so the next one rolls up under it.
-		c.ctrl(ccCR)
-		c.col = 0
+		c.newRow()
 	}
 }
 
@@ -1368,8 +1387,12 @@ func buildCCData(pair [2]byte, ccCount int) []byte {
 		switch i {
 		case 0: // field 1: the 608 bytes we actually care about
 			b = append(b, 0xFC, pair[0], pair[1])
-		case 1: // field 2: valid but empty
-			b = append(b, 0xFD, odd608(cc608Null), odd608(cc608Null))
+		case 1:
+			// Field 2 is marked not valid. Nothing is ever written to it, and
+			// claiming otherwise makes a player advertise a second caption
+			// service, and the 708 services derived from the pair, so a viewer
+			// is offered four tracks where only the first has anything in it.
+			b = append(b, 0xF9, 0x00, 0x00)
 		default: // 708 channel padding, marked invalid
 			b = append(b, 0xFA, 0x00, 0x00)
 		}
@@ -1568,6 +1591,10 @@ type captionInjector struct {
 	ccSeeded bool // whether videoCC has picked up the source's count
 
 	carry []byte // bytes of a packet split across two Write calls
+	// pmtPatch is the programme table rewritten to announce the caption
+	// service; pmtDone records that the attempt has been made.
+	pmtPatch []byte
+	pmtDone  bool
 
 	ccCount  int
 	lastPTS  int64
@@ -1670,6 +1697,27 @@ func (ci *captionInjector) packet(p []byte) error {
 		ci.parsePMT(p)
 	}
 
+	// Announce the caption service in the programme table, so a player that
+	// does not decode the video to look for caption messages still knows they
+	// are there.
+	if pid == ci.pmtPID && ci.videoPID >= 0 && !ci.pmtDone {
+		if q := addCaptionDescriptor(p, ci.videoPID); q != nil {
+			ci.pmtPatch = q
+			logger("[CC] %s announced the caption service in the programme table", ci.log)
+		}
+		ci.pmtDone = true
+	}
+	if pid == ci.pmtPID && ci.pmtPatch != nil {
+		if ci.inPES {
+			var t tsPacket
+			copy(t.buf[:], ci.pmtPatch)
+			ci.window = append(ci.window, t)
+			return nil
+		}
+		_, err := ci.out.Write(ci.pmtPatch)
+		return err
+	}
+
 	if ci.videoPID < 0 || pid != ci.videoPID {
 		// Not video: hold it in the window so ordering survives, or write it
 		// straight out when no access unit is in flight.
@@ -1750,6 +1798,109 @@ func tsPayload(p []byte) []byte {
 		return p[5+l:]
 	}
 	return nil
+}
+
+// mpegCRC is the CRC-32 the PSI tables carry, MSB first with no final inversion.
+func mpegCRC(b []byte) uint32 {
+	crc := uint32(0xFFFFFFFF)
+	for _, x := range b {
+		crc ^= uint32(x) << 24
+		for i := 0; i < 8; i++ {
+			if crc&0x80000000 != 0 {
+				crc = crc<<1 ^ 0x04C11DB7
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// captionDescriptor is the ATSC caption service descriptor, announcing one
+// line 21 field 1 service in English. A player that does not decode the video
+// looking for caption messages finds out captions exist from this and nothing
+// else, which is why some show none without it.
+var captionDescriptor = []byte{
+	0x86, 0x07, // tag, length
+	0xE1,          // reserved, one service
+	'e', 'n', 'g', // language
+	0x7F, // analogue service on field 1
+	0x7F, // not easy reader, wide aspect
+	0xFF, // reserved
+}
+
+// addCaptionDescriptor rewrites a PMT so the video stream announces a caption
+// service. It returns nil when the table cannot be rewritten safely, in which
+// case the original is passed through untouched.
+func addCaptionDescriptor(p []byte, videoPID int) []byte {
+	if p[1]&0x40 == 0 {
+		return nil // not the start of a section
+	}
+	pl := tsPayload(p)
+	off := len(p) - len(pl) // where the payload begins in the packet
+	sec := psiSection(pl)
+	if len(sec) < 16 || sec[0] != 0x02 {
+		return nil
+	}
+	slen := int(sec[1]&0x0F)<<8 | int(sec[2])
+	end := 3 + slen
+	if end > len(sec) || slen < 13 {
+		return nil
+	}
+	body := sec[:end-4] // section without its CRC
+
+	il := int(body[10]&0x0F)<<8 | int(body[11])
+	i := 12 + il
+	out := append([]byte(nil), body[:i]...)
+	found := false
+	for i+4 < len(body) {
+		st := int(body[i])
+		pid := int(body[i+1]&0x1F)<<8 | int(body[i+2])
+		esil := int(body[i+3]&0x0F)<<8 | int(body[i+4])
+		if i+5+esil > len(body) {
+			return nil
+		}
+		entry := append([]byte(nil), body[i:i+5+esil]...)
+		if pid == videoPID && (st == streamTypeH264 || st == streamTypeHEVC) {
+			if bytes.Contains(entry[5:], []byte{0x86}) {
+				return nil // the source already announces captions
+			}
+			entry = append(entry, captionDescriptor...)
+			n := esil + len(captionDescriptor)
+			entry[3] = byte(n>>8) | 0xF0
+			entry[4] = byte(n)
+			found = true
+		}
+		out = append(out, entry...)
+		i += 5 + esil
+	}
+	if !found {
+		return nil
+	}
+	// Restate the section length, then the CRC over everything before it.
+	n := len(out) + 4 - 3
+	if n > 0x3FD {
+		return nil
+	}
+	out[1] = byte(n>>8) | 0xB0
+	out[2] = byte(n)
+	crc := mpegCRC(out)
+	out = append(out, byte(crc>>24), byte(crc>>16), byte(crc>>8), byte(crc))
+
+	// Rebuild the packet: pointer field, section, then stuffing.
+	if off+1+len(out) > tsPacketSize {
+		return nil
+	}
+	var q [tsPacketSize]byte
+	copy(q[:], p[:off])
+	q[off] = 0x00 // pointer_field
+	copy(q[off+1:], out)
+	for j := off + 1 + len(out); j < tsPacketSize; j++ {
+		q[j] = 0xFF
+	}
+	r := make([]byte, tsPacketSize)
+	copy(r, q[:])
+	return r
 }
 
 // psiSection skips the pointer_field at the head of a PSI payload.
