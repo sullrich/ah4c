@@ -128,8 +128,8 @@
                 <div class="bar"><span id="dlBar"></span></div>
             </div>
             <p class="footnote">
-                Both land in <code>scripts/captions</code>, which is already a bind mount, so they survive a
-                container rebuild. Remove them any time to get the space back.
+                Both land in <code>/opt/captions</code>, a bind mount, so they survive a container rebuild.
+                Remove them any time to get the space back.
             </p>
         </div>
 
@@ -176,7 +176,7 @@
             </p>
             <p class="footnote">
                 A recording already carries the captions in the picture. The subtitle file is a
-                separate <code>.srt</code> in <code>scripts/captions/srt</code>, named for the channel
+                separate <code>.srt</code> in <code>captions/srt</code>, named for the channel
                 and the time the stream started, and it is stamped with the real speech times &mdash; so
                 it lines up slightly better than the on-screen captions, which cannot appear until a
                 phrase has been spoken. Files with nothing recognized are cleaned up.
@@ -248,7 +248,7 @@ function render() {
                 <div class="model-meta">${esc(d.desc)}</div>
                 <div class="model-tags">
                     <span class="tag ${d.active ? 'tag-live' : ''}">${d.active ? 'Loaded' : 'Not loaded'}</span>
-                    <span class="tag">${d.downloaded ? 'Saved in scripts/captions/drivers' : 'Not downloaded'}</span>
+                    <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
                 <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from this image's own Debian archives, kept in the bind mount so a rebuild does not have to fetch them again.</span>
