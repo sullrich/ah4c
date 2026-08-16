@@ -583,7 +583,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "About a second, with a GPU",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said.",
+		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said. Budget about 2.4 GB of memory for every stream captioned at once.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q8_0.gguf",
@@ -1457,9 +1457,9 @@ func accelStatus() accelReport {
 // convenience and must never cost a tune, so the expensive part happens once,
 // here, before anybody asks for anything.
 //
-// The reference taken here is never released, which is the point: it keeps the
-// weights resident for the life of the process rather than letting them be
-// freed when the last stream stops and reloaded when the next one starts.
+// What is loaded here goes straight into the pool, so the first tune finds it
+// already resident. Copies stay in the pool when a stream ends, which is what
+// keeps a stop-and-start from paying the load cost twice.
 func warmCaptionModel() {
 	cfg := currentCaptionConfig()
 	if !cfg.Enabled {
@@ -1477,7 +1477,11 @@ func warmCaptionModel() {
 	}
 	go func() {
 		start := time.Now()
-		if err := initTranscribe(runtimeDirFor(rtTranscribe, currentEngineVariant())); err != nil {
+		// The variant is settled first and used for everything after, so the
+		// library, its backends and the backend the weights are loaded on are
+		// all the same build. Working it out twice is how they diverge.
+		variant := captionVariantFor(m)
+		if err := initTranscribe(variant); err != nil {
 			logger("[CC] Could not preload %s: %v", m.Name, err)
 			return
 		}
@@ -1485,16 +1489,14 @@ func warmCaptionModel() {
 		if err != nil {
 			return
 		}
-		variant := currentEngineVariant()
-		if m.NeedsGPU && variant == "cpu" {
-			if g := gpuVariant(); g != "" {
-				variant = g
-			}
-		}
-		if _, _, err := acquireTxModel(weights, txBackend(variant)); err != nil {
+		warm, key, err := acquireTxModel(weights, txBackend(variant))
+		if err != nil {
 			logger("[CC] Could not preload %s: %v", m.Name, err)
 			return
 		}
+		// Straight into the pool: nothing is using it yet, and the first tune
+		// should find it there.
+		releaseTxModel(key, warm)
 		logger("[CC] %s is loaded and resident after %s; tunes will not wait for it",
 			m.Name, time.Since(start).Round(time.Second))
 	}()
@@ -3242,15 +3244,24 @@ var (
 // which is also how a machine with no GPU ends up on the processor without
 // anything failing to open: the Vulkan backend is simply one of the libraries
 // that does not load, and the engine carries on with the ones that did.
-func initTranscribe(dir string) error {
+func initTranscribe(variant string) error {
 	txOnce.Do(func() {
-		lib := runtimeLibPath(rtTranscribe, currentEngineVariant())
+		lib := runtimeLibPath(rtTranscribe, variant)
 		if lib == "" {
 			txErr = fmt.Errorf("no transcribe.cpp build is published for %s/%s", runtime.GOOS, runtime.GOARCH)
 			return
 		}
-		if !runtimeInstalled(rtTranscribe, currentEngineVariant()) {
+		if !runtimeInstalled(rtTranscribe, variant) {
 			txErr = fmt.Errorf("transcribe.cpp has not been downloaded yet")
+			return
+		}
+		// The backends live beside the library, so both come from the same
+		// build. Reading one from the configured variant and the other from the
+		// variant actually in use is how a GPU upgrade ends up pointing at a
+		// directory that holds a different build.
+		dir, err := filepath.Abs(runtimeDirFor(rtTranscribe, variant))
+		if err != nil {
+			txErr = err
 			return
 		}
 		abs, err := filepath.Abs(lib)
@@ -3332,15 +3343,43 @@ func txCheckABI() error {
 
 // txBackend maps the processor choice on the page onto the backend the engine
 // is asked for.
+// captionVariantFor is the build a model will actually run on, and the single
+// place that decides it.
+//
+// A model that cannot work on a processor must not be given the processor
+// because that is what the engine picker happens to say. The picker defaults to
+// CPU and most people never touch it, so a GPU-only model otherwise passed the
+// gate — which only asks whether a GPU exists — and then loaded strictly on the
+// processor, where it falls behind live audio and drops most of what is said.
+// That is the exact failure the gate is there to prevent, reached another way.
+func captionVariantFor(m captionModel) string {
+	variant := currentEngineVariant()
+	if m.NeedsGPU && variant == "cpu" {
+		if g := gpuVariant(rtTranscribe); g != "" {
+			logger("[CC] %s needs a GPU, so it runs on the %s build rather than the processor", m.Name, g)
+			return g
+		}
+	}
+	return variant
+}
+
 // gpuVariant is the best GPU build this container can actually load, or "" if
 // there is none.
-func gpuVariant() string {
+func gpuVariant(rt string) string {
 	nodes := renderNodes()
 	for _, v := range engineVariants {
 		if v.Key == "cpu" || !engineUsable(v) {
 			continue
 		}
 		if v.Key == "vulkan" && len(nodes) == 0 {
+			continue
+		}
+		// Only a build that is actually on disk. Upgrading to one that was
+		// never downloaded points the engine at a directory holding a different
+		// build's backends, and the failure that produces is cached for the
+		// life of the process: the backend scan cannot be retried, so captions
+		// would then fail on every tune until a restart.
+		if rt != "" && !runtimeInstalled(rt, v.Key) {
 			continue
 		}
 		return v.Key
@@ -3399,70 +3438,91 @@ func txAbortCallback() uintptr {
 	return txAbortPtr
 }
 
-// Loaded weights are shared between tuners; sessions are not.
+// Loaded weights are pooled, not shared.
 //
-// The engine separates the two deliberately — a model is read-only once loaded,
-// and a session is the decoder state one caller needs — so captioning a second
-// stream needs a second session but not a second copy of the weights. Loading
-// per tuner instead meant Cohere Transcribe cost 2.4 GB every time another
-// stream started, so three tuners wanted seven gigabytes of a machine that
-// needed 2.4. The saving is the whole model: what a session adds is its own
-// decoder cache, which is megabytes.
+// The engine permits one decode in flight per model across every session built
+// on it, not one per session. Sharing a single copy between tuners would
+// therefore mean they take turns, and two streams that each need to keep pace
+// with live audio cannot afford to wait for each other — one would fall behind
+// and start dropping speech. Overlapping them instead is documented to corrupt
+// decodes outright. Neither is acceptable, so each concurrent stream gets its
+// own copy of the weights and memory is what pays for it.
 //
-// Reference counted, because the last tuner to stop has to be the one that
-// frees it, and which tuner that will be is not known in advance.
+// They are pooled rather than freed on release, so a stream that stops and
+// starts again finds its weights already resident instead of spending thirty
+// seconds reloading them. That is also what the startup preload puts in: the
+// first tune takes the warm copy and begins instantly.
 type sharedTxModel struct {
 	handle uintptr
-	refs   int
+	// compute guards this copy. Nothing shares one today, so it is never
+	// contended; it is here so that the engine's one-decode-at-a-time rule
+	// cannot be broken by accident if anything ever does.
+	compute sync.Mutex
 }
 
 var (
 	txModelLock sync.Mutex
-	txModels    = map[string]*sharedTxModel{}
+	// txIdle holds loaded-but-unused copies, keyed by weights and backend.
+	txIdle = map[string][]*sharedTxModel{}
+	txLive = map[string]int{}
 )
 
-// acquireTxModel returns the weights, loading them only if nobody else has.
-// The backend is part of the key: the same file loaded for the processor and
-// for a GPU are different objects to the engine.
-func acquireTxModel(path string, backend int32) (uintptr, string, error) {
+// acquireTxModel takes a resident copy if one is free, and loads another if not.
+func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
 	txModelLock.Lock()
-	defer txModelLock.Unlock()
-	if m, ok := txModels[key]; ok {
-		m.refs++
-		logger("[CC] Reusing %s already in memory (%d streams now sharing it)", filepath.Base(path), m.refs)
-		return m.handle, key, nil
+	if pool := txIdle[key]; len(pool) > 0 {
+		m := pool[len(pool)-1]
+		txIdle[key] = pool[:len(pool)-1]
+		txLive[key]++
+		txModelLock.Unlock()
+		logger("[CC] Using a copy of %s already in memory", filepath.Base(path))
+		return m, key, nil
+	}
+	live := txLive[key]
+	txModelLock.Unlock()
+
+	// Loaded outside the lock: this takes tens of seconds for a large model and
+	// holding the lock across it would stall an unrelated stream trying to stop.
+	if live > 0 {
+		logger("[CC] Loading another copy of %s for a second stream; this costs memory rather than making the streams wait for each other", filepath.Base(path))
 	}
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
 	var h uintptr
 	if st := txModelLoadFile(path, unsafe.Pointer(&load), unsafe.Pointer(&h)); st != txOK || h == 0 {
-		return 0, "", fmt.Errorf("loading %s: %s", filepath.Base(path), txStatusString(st))
+		return nil, "", fmt.Errorf("loading %s: %s", filepath.Base(path), txStatusString(st))
 	}
-	txModels[key] = &sharedTxModel{handle: h, refs: 1}
-	return h, key, nil
+	m := &sharedTxModel{handle: h}
+	txModelLock.Lock()
+	txLive[key]++
+	total := txLive[key] + len(txIdle[key])
+	txModelLock.Unlock()
+	logger("[CC] %s is loaded (%d copies resident)", filepath.Base(path), total)
+	return m, key, nil
 }
 
-// releaseTxModel drops one user's claim, freeing the weights with the last.
-func releaseTxModel(key string) {
+// releaseTxModel returns a copy to the pool, still loaded and ready.
+func releaseTxModel(key string, m *sharedTxModel) {
+	if m == nil {
+		return
+	}
 	txModelLock.Lock()
 	defer txModelLock.Unlock()
-	m, ok := txModels[key]
-	if !ok {
-		return
+	if txLive[key] > 0 {
+		txLive[key]--
 	}
-	if m.refs--; m.refs > 0 {
-		return
-	}
-	delete(txModels, key)
-	txModelFree(m.handle)
+	txIdle[key] = append(txIdle[key], m)
 }
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
 	model uintptr
-	// modelKey identifies the shared weights this session borrows.
+	// shared is the weights this session borrows, and the lock that keeps one
+	// tuner's decode from overlapping another's on the same model.
+	shared *sharedTxModel
+	// modelKey identifies those weights for release.
 	modelKey string
 	session  uintptr
 	// lang is the NUL-terminated language code handed to the engine. It lives
@@ -3483,26 +3543,9 @@ type transcribeModel struct {
 
 // loadTranscribe opens the weights the user downloaded.
 func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
-	variant := currentEngineVariant()
-	// A model that cannot work on a processor must not be given the processor
-	// because that is what the engine picker happens to say. The picker
-	// defaults to CPU and most people never touch it, so a GPU-only model
-	// otherwise passed the gate — which only asks whether a GPU exists — and
-	// then loaded strictly on the processor, where it falls behind live audio
-	// and drops most of what is said. That is the exact failure the gate is
-	// there to prevent, arrived at by a different route.
-	if m, ok := findCaptionModel(cfg.Model); ok && m.NeedsGPU && variant == "cpu" {
-		if g := gpuVariant(); g != "" {
-			logger("[CC] %s needs a GPU, so it is being loaded on the %s build rather than the processor", m.Name, g)
-			variant = g
-		}
-	}
-	dir := runtimeDirFor(rtTranscribe, variant)
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-	if err := initTranscribe(abs); err != nil {
+	m, _ := findCaptionModel(cfg.Model)
+	variant := captionVariantFor(m)
+	if err := initTranscribe(variant); err != nil {
 		return nil, err
 	}
 	weights, err := filepath.Abs(gguf)
@@ -3513,7 +3556,7 @@ func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 		return nil, err
 	}
 
-	model, key, err := acquireTxModel(weights, txBackend(variant))
+	shared, key, err := acquireTxModel(weights, txBackend(variant))
 	if err != nil {
 		return nil, err
 	}
@@ -3521,12 +3564,12 @@ func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
 	var session uintptr
-	if st := txSessionInit(model, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
-		releaseTxModel(key)
+	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
+		releaseTxModel(key, shared)
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 
-	t := &transcribeModel{model: model, modelKey: key, session: session, abort: &txAbortHandle{}}
+	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session, abort: &txAbortHandle{}}
 	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
@@ -3544,10 +3587,11 @@ func (t *transcribeModel) Close() {
 		t.session = 0
 	}
 	if t.model != 0 {
-		// The weights may be in use by another tuner, so this drops a claim
-		// rather than freeing outright.
-		releaseTxModel(t.modelKey)
+		// Returned to the pool rather than freed, so the next stream on this
+		// model starts instantly instead of reloading gigabytes.
+		releaseTxModel(t.modelKey, t.shared)
 		t.model = 0
+		t.shared = nil
 	}
 }
 
@@ -3572,12 +3616,18 @@ func (t *transcribeModel) runParams() txRunParams {
 // uses them, not just the offline one: a streaming feed that never returns
 // stops captions just as completely.
 func (t *transcribeModel) arm() {
+	if t.shared != nil {
+		t.shared.compute.Lock()
+	}
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
 }
 
 func (t *transcribeModel) disarm() {
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, 0)
 	runtime.KeepAlive(t.abort)
+	if t.shared != nil {
+		t.shared.compute.Unlock()
+	}
 }
 
 // transcribe runs one utterance of 16 kHz mono audio through the model. This is
@@ -3633,7 +3683,9 @@ func (t *transcribeModel) beginStreamLocked() error {
 	// prompt-conditioned model is told which locale to expect rather than
 	// having to work it out from the first few seconds of audio.
 	rp := t.runParams()
+	t.arm()
 	st := txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
+	t.disarm()
 	runtime.KeepAlive(t.lang)
 	if st != txOK {
 		return fmt.Errorf("%s", txStatusString(st))
@@ -3649,7 +3701,7 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.session == 0 || !t.streaming {
+	if t.session == 0 {
 		return nil
 	}
 	if !t.streaming {
@@ -3657,6 +3709,11 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 		// rather than decoding audio into nothing for the rest of the tune: a
 		// stream that cannot be reopened once may well open on the next try,
 		// and the alternative is captions that never come back.
+		//
+		// This used to sit behind a guard that returned on exactly this
+		// condition, so it never ran once in its life, and the watchdog then
+		// turned a single slow feed into permanent silence — the failure it
+		// exists to prevent.
 		if err := t.beginStreamLocked(); err != nil {
 			return nil
 		}
@@ -3725,7 +3782,10 @@ func (t *transcribeModel) finishStream() *streamResult {
 	}
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
-	if st := txStreamFinalize(t.session, unsafe.Pointer(&u)); st != txOK {
+	t.arm()
+	st := txStreamFinalize(t.session, unsafe.Pointer(&u))
+	t.disarm()
+	if st != txOK {
 		return nil
 	}
 	r := t.takeCommitted()

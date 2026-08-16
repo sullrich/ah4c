@@ -168,6 +168,16 @@ engine that runs it, and the page downloads that engine when you pick the model:
 | **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
+**Memory.** A model occupies roughly its download size in RAM while a stream is being
+captioned, and every stream captioning at the same time loads its own copy. Two streams on
+Cohere Transcribe is about 5 GB, three about 7 GB; two on the default Nemotron is about
+1.9 GB. Copies are not shared between streams because the engine decodes one thing at a
+time per copy, so sharing would make the streams take turns and fall behind live audio —
+memory is the cheaper thing to spend. A copy stays resident after its stream ends so the
+next tune starts instantly rather than reloading gigabytes, and the selected model is
+loaded once at startup for the same reason. If memory is tight, caption fewer tuners
+(there is a per-tuner setting on the page) or choose a smaller model.
+
 Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
 publish. Read it as a ranking rather than a promise: it is clean read speech, and live
 television is harder than that for every model in the list. The two entries without a

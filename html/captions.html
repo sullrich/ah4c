@@ -174,6 +174,15 @@
                 Remove them any time to get the space back.
             </p>
             <p class="footnote">
+                <strong>Memory.</strong> A model uses roughly its download size in RAM while a stream is
+                being captioned, and <strong>every stream captioning at once loads its own copy</strong>.
+                Two streams on Cohere Transcribe is about 5&nbsp;GB, three is about 7&nbsp;GB. They are
+                not shared because the engine can only decode one thing at a time per copy, so sharing
+                would make the streams wait for each other and fall behind the picture. A copy stays in
+                memory after its stream ends so the next tune starts instantly. If RAM is tight, caption
+                fewer tuners on the Tuners card below, or pick a smaller model.
+            </p>
+            <p class="footnote">
                 <strong>Reading the labels.</strong> The percentage is how many words come out wrong on
                 a standard test, so lower is better and 3% means roughly three words in every hundred.
                 <em>Types as it hears</em> means captions appear while the person is still talking;
