@@ -2176,6 +2176,75 @@ type cea608 struct {
 	col      int
 	maxCol   int
 	upper    bool
+	// drains counts calls to next since drainFrom, which is how fast this
+	// channel actually clears its queue: one entry leaves per call, whatever
+	// the picture rate or the caption packet layout upstream turns out to be.
+	// Measuring it rather than assuming it is what lets the backlog be talked
+	// about in seconds — the only unit a model, a frame rate or a format can
+	// all be compared in.
+	drains    int
+	drainFrom time.Time
+	drainRate float64
+	// toldRate is the picture rate the injector read out of the stream, used
+	// until this channel has clocked itself.
+	toldRate float64
+}
+
+// pairRate is how many byte pairs a second this channel is clearing, measured.
+//
+// It settles within a second or two of the stream starting and is re-measured
+// on a rolling window, so a stream that changes rate mid-flight is followed
+// rather than remembered. Before there is enough to go on it answers with the
+// format's base rate, which is right for the common case and never far wrong.
+func (c *cea608) pairRate() float64 {
+	if c.drainRate > 0 {
+		return c.drainRate
+	}
+	if c.toldRate > 0 {
+		return c.toldRate
+	}
+	return cc608NominalRate
+}
+
+// setPictureRate takes the rate the injector derived from the stream's own
+// timestamps, for the stretch before this channel has clocked itself. The
+// measured rate wins once there is one: what is wanted is the rate pairs are
+// actually leaving at, and the picture rate is the best available guess at it
+// rather than a substitute for it.
+func (c *cea608) setPictureRate(fps float64) {
+	if fps <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.toldRate = fps
+	c.mu.Unlock()
+}
+
+// countDrain records one call and re-measures the rate once a window's worth
+// has gone by. Called with the lock held.
+func (c *cea608) countDrain() {
+	now := time.Now()
+	if c.drainFrom.IsZero() {
+		c.drainFrom, c.drains = now, 0
+		return
+	}
+	c.drains++
+	// The first window is short, because until it closes the only thing to go
+	// on is an assumption about the format, and an assumption about the format
+	// is what gets this wrong on a sixty-picture stream. One second of real
+	// counting replaces it. After that the window widens: the rate is known,
+	// and what is wanted is a steady figure that still follows a stream which
+	// changes underneath it.
+	window := 4 * time.Second
+	if c.drainRate == 0 {
+		window = time.Second
+	}
+	if elapsed := now.Sub(c.drainFrom); elapsed >= window {
+		if r := float64(c.drains) / elapsed.Seconds(); r > 1 {
+			c.drainRate = r
+		}
+		c.drainFrom, c.drains = now, 0
+	}
 }
 
 func newCEA608(style string, upper bool) *cea608 {
@@ -2226,10 +2295,16 @@ func (c *cea608) newRow() {
 	c.col = 0
 }
 
-// ccMaxBacklog is the most unshown caption data we will hold, in byte pairs.
-// The channel moves two bytes per picture, so at 30 fps this is about five
-// seconds of text. Reaching it means recognition has outrun the display.
-const ccMaxBacklog = 150
+// ccMaxBacklogSec is the most unshown caption data we will hold, measured as
+// the time it would take to air. Reaching it means recognition has outrun the
+// display, and what is held past this point can only ever be shown late.
+//
+// In seconds rather than byte pairs for the same reason as the roll pressure:
+// the pair count that used to stand here was a hundred and fifty, annotated as
+// five seconds at thirty pictures a second, which made it two and a half on a
+// sixty-picture stream. The ceiling moved with the format instead of staying
+// where it was meant to be.
+const ccMaxBacklogSec = 5.0
 
 // push queues a complete phrase and closes the line after it.
 func (c *cea608) push(text string) { c.pushText(text, true) }
@@ -2255,7 +2330,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	// has queued more than the channel can carry, showing all of it would put
 	// the text permanently behind the picture, so drop what has not aired and
 	// start the roll-up again on the current phrase.
-	if len(c.queue) > ccMaxBacklog {
+	if float64(len(c.queue)) > ccMaxBacklogSec*c.pairRate() {
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
@@ -2317,17 +2392,40 @@ const ccStaleAfter = 20 * time.Second
 // like.
 const ccMinRollGap = 1200 * time.Millisecond
 
-// ccRollPressure is the backlog, in byte pairs, past which the pacing yields.
-// Holding a roll holds everything queued behind it, so under sustained fast
-// speech the polite pace would push captions steadily further behind the
-// picture; at about two seconds of queued channel time, currency wins over
-// composure and the display rolls at channel speed.
-const ccRollPressure = 60
+// ccRollPressureSec is the backlog, in seconds of channel time, past which the
+// pacing yields. Holding a roll holds everything queued behind it, so once more
+// than this much text is waiting, currency wins over composure and the display
+// rolls at channel speed.
+//
+// It is a duration and not a number of byte pairs on purpose, because a count
+// of pairs is a number about one model on one stream. The old figure was sixty
+// pairs, which was written as "about two seconds" — true at thirty pictures a
+// second, wrong at sixty, and unreachable for the model that was actually
+// running. A phrase model hands over one phrase at a time, three or four
+// seconds of speech, which is under thirty pairs once the row controls are
+// counted; the backlog sat at half the threshold for ever, the valve never
+// opened, and every carriage return took the full dwell with the rest of the
+// sentence waiting behind it. Two rolls to a phrase, a second and a bit each,
+// on every phrase.
+//
+// Half a second of unaired text is a statement about the viewer rather than
+// about any model: there are words recognized and not yet on screen, and
+// holding them back is costing more than the dwell is buying. A model that
+// speaks in longer phrases, or shorter ones, or a word at a time, is measured
+// by the same sentence — which is the point, since the next one will not
+// resemble either of these.
+const ccRollPressureSec = 0.5
+
+// cc608NominalRate is the pair rate assumed until the channel has been running
+// long enough to measure its own. Field 1 of CEA-608 carries one pair per
+// picture at the base rate of the format.
+const cc608NominalRate = 29.97
 
 // next returns the pair of bytes to attach to the next video frame.
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.countDrain()
 	if len(c.queue) == 0 {
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
@@ -2349,7 +2447,7 @@ func (c *cea608) next() [2]byte {
 		switch {
 		case c.crCopies > 0:
 			c.crCopies--
-		case time.Since(c.lastCR) < ccMinRollGap && len(c.queue) < ccRollPressure:
+		case time.Since(c.lastCR) < ccMinRollGap && float64(len(c.queue)) < ccRollPressureSec*c.pairRate():
 			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 		default:
 			c.lastCR = time.Now()
@@ -2365,6 +2463,23 @@ func (c *cea608) backlog() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.queue)
+}
+
+// backlogTime is the queue in byte pairs and in the seconds those pairs will
+// take to air, at the rate this channel is measured to be clearing them.
+func (c *cea608) backlogTime() (int, float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.queue), float64(len(c.queue)) / c.pairRate()
+}
+
+// pairsPerSecond is the rate this channel is clearing its queue at, for the
+// log, so a delay reported in seconds can be read against the rate it was
+// worked out from.
+func (c *cea608) pairsPerSecond() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pairRate()
 }
 
 // ---------------------------------------------------------------------------
@@ -3106,6 +3221,12 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 			if n >= 2 && n <= 31 {
 				ci.ccCount = n
 				ci.haveRate = true
+				// One field-1 pair leaves per access unit, so the picture rate
+				// is the rate the caption channel clears its queue at — sixty
+				// a second here, thirty there, and nothing in the encoder
+				// should be guessing which. It is measured independently as
+				// well; this is so the first second is right too.
+				ci.enc.setPictureRate(fps)
 				logger("[CC] %s picture rate is %.2f fps, cc_count %d", ci.log, fps, n)
 			}
 		}
@@ -4312,11 +4433,19 @@ func (svc *txBatchService) run(w *txWorker) {
 		// freshness ceiling snaps them back to live afterward; a recording
 		// is never the thing that pays.
 		audioCap := maxBatchAudioSec
+		// Polled finely, not every two seconds. Yielding to the tune is the
+		// point and that does not change; what changed is how long the
+		// recognizer sits idle after the tune has already finished. On a
+		// ten-tuner box the DVR is starting something often, and each hold
+		// used to end up to two seconds after there was anything to hold for
+		// — added to every phrase queued behind it. The check is a lock and a
+		// slice walk, so asking eight times as often costs nothing worth
+		// measuring against the second and a half it gives back.
 		for tunesPending() {
 			select {
 			case <-svc.closed:
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(250 * time.Millisecond):
 			}
 		}
 		batch := []txBatchRequest{first}
@@ -5268,6 +5397,16 @@ type captionEngine struct {
 	// slow counts phrases that took longer to recognize than they were to say.
 	// Only the recognizer goroutine touches it.
 	slow int
+	// aired counts phrases handed to the display, and the two sums beside it
+	// are what they cost: how old each was when the text was ready, and how
+	// much channel time was already queued ahead of it. Averaged and printed
+	// together they separate the two halves of the delay a viewer feels —
+	// waiting for the model, and waiting for the screen. Recognizer goroutine
+	// only, like slow.
+	aired     int
+	ageSum    time.Duration
+	queueSum  int
+	queueSecs float64
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
@@ -6248,6 +6387,22 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	text = e.trimOverlap(text)
 	if text == "" {
 		return
+	}
+	// Say where the delay actually goes, in the two pieces it comes in, so the
+	// answer is a measurement rather than an argument. Age is everything up to
+	// the text existing: the wait in the send window and the recognition
+	// itself. Queued is what is already ahead of it on the channel, which the
+	// display can only clear at one pair a picture — so it converts straight
+	// into how long after that the words reach the screen.
+	e.aired++
+	e.ageSum += time.Since(item.cut)
+	pairs, secs := e.enc.backlogTime()
+	e.queueSum += pairs
+	e.queueSecs += secs
+	if e.aired%25 == 0 {
+		logger("[CC] %s caption delay: %.1fs waiting on the model, %.1fs of text queued ahead of it (%.0f pairs at %.0f a second), over the last 25 phrases",
+			e.label, (e.ageSum / 25).Seconds(), e.queueSecs/25, float64(e.queueSum)/25, e.enc.pairsPerSecond())
+		e.ageSum, e.queueSum, e.queueSecs = 0, 0, 0
 	}
 	if d := e.cfg.OffsetSec; d > 0 {
 		// Hold the phrase back for hand-tuned sync. The video is never delayed,
