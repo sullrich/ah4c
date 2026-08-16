@@ -3904,6 +3904,9 @@ type captionEngine struct {
 	// written by the reader and read by the recognizer, so it is atomic.
 	phrases chan []float32
 	dropped int64
+	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
+	// Watched by a goroutine that kills a decoder which has gone quiet.
+	lastAudio int64
 	// slow counts phrases that took longer to recognize than they were to say.
 	// Only the recognizer goroutine touches it.
 	slow int
@@ -3978,6 +3981,8 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 		}
 	}
 
+	atomic.StoreInt64(&e.lastAudio, time.Now().UnixNano())
+	go e.watchDecoder()
 	go e.pumpAudio()
 	if e.streaming {
 		// A streaming model is fed a tenth of a second at a time and returns in
@@ -4078,6 +4083,9 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 	}
 	e.mu.Lock()
 	old, oldIn := e.ffmpeg, e.audioIn
+	// Cleared while held, so Close cannot pick up the same command and Wait on
+	// it concurrently: exec.Cmd.Wait is not safe to call twice.
+	e.ffmpeg, e.audioIn = nil, nil
 	e.mu.Unlock()
 	if oldIn != nil {
 		oldIn.Close()
@@ -4101,6 +4109,53 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 	}
 	logger("[CC] %s the audio decoder stopped and was restarted (attempt %d); captions resume shortly", e.label, attempt)
 	return pcm, true
+}
+
+// watchDecoder kills an audio decoder that has stopped producing.
+//
+// A decoder that dies is noticed by the read failing. A decoder that stays
+// alive and stops emitting is not noticed at all, and that is the worse
+// failure: ffmpeg keeps swallowing its input and never exits, the read blocks
+// for ever, and everything that would have reported the problem is downstream
+// of that read. No phrase is cut, so nothing is dropped and nothing is counted;
+// the minute-with-no-speech report never runs; the recognizer is idle rather
+// than stuck so its deadline never fires. Captions stop dead, the picture
+// carries on perfectly, and the log says nothing at all. It is the one way this
+// can fail in total silence, which makes it worth a goroutine of its own.
+//
+// Decoded silence is still bytes — a quiet channel produces zeroes at 32 kB a
+// second — so no bytes at all is unambiguous. Killing the process makes the
+// blocked read fail, which is the path that already knows how to recover.
+func (e *captionEngine) watchDecoder() {
+	const (
+		check = 5 * time.Second
+		// Long enough that a slow encoder handover is not mistaken for death.
+		silence = 15 * time.Second
+	)
+	t := time.NewTicker(check)
+	defer t.Stop()
+	for {
+		select {
+		case <-e.closed:
+			return
+		case <-t.C:
+		}
+		last := atomic.LoadInt64(&e.lastAudio)
+		if last == 0 || time.Since(time.Unix(0, last)) < silence {
+			continue
+		}
+		e.mu.Lock()
+		cmd := e.ffmpeg
+		e.mu.Unlock()
+		if cmd == nil || cmd.Process == nil {
+			continue
+		}
+		logger("[CC] %s no audio decoded for %s; restarting the decoder", e.label, silence)
+		// Reset first, so the restart is given its own full window rather than
+		// being killed again on the next tick.
+		atomic.StoreInt64(&e.lastAudio, time.Now().UnixNano())
+		cmd.Process.Kill()
+	}
 }
 
 // pumpAudio hands buffered transport stream bytes to ffmpeg. Writes here must
@@ -4183,8 +4238,15 @@ const (
 	// which is untidy and was the behaviour before any of this; the alternative
 	// is captions that stop, which is the bug.
 	vadFloorMax = 0.01
-	vadBarMin   = 0.012
 	vadBarMax   = 0.018
+	// vadBarMin was an absolute minimum, and an absolute minimum is a second
+	// way to be deaf: a channel mastered quietly — low encoder gain, a ducked
+	// source — never reaches it, and no amount of adapting helps because it is
+	// a constant. Simulated, dialogue at 0.011 produced nothing in ten minutes
+	// while 0.013 produced 222 phrases. The floor now follows the channel like
+	// the rest of the detector, and only refuses to go below the level of
+	// genuine digital near-silence, which is what it was really for.
+	vadBarSilence = 0.002
 	// vadPeakShare is how far below the recent peak the bar is held.
 	vadPeakShare = 0.5
 	// vadPeakDecay lets the peak fall by about half over thirty seconds, so a
@@ -4204,7 +4266,7 @@ func vadBar(floor, peak float64) float64 {
 	if p := peak * vadPeakShare; p < bar {
 		bar = p
 	}
-	return math.Max(bar, vadBarMin)
+	return math.Max(bar, vadBarSilence)
 }
 
 // vadPeak follows the loudest recent audio, falling slowly when it goes away.
@@ -4285,6 +4347,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		// See the phrase path: the budget counts consecutive failures.
 		decoderTries = 0
+		atomic.StoreInt64(&e.lastAudio, time.Now().UnixNano())
 		var sum float64
 		for i := range buf {
 			v := float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
@@ -4373,6 +4436,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		// failures rather than for the whole recording. A three hour capture
 		// that hiccups twice an hour should recover every time.
 		decoderTries = 0
+		atomic.StoreInt64(&e.lastAudio, time.Now().UnixNano())
 
 		// Say when audio is arriving but no speech is being cut out of it. It
 		// is the one line that separates "the decoder died" from "the model
@@ -4881,21 +4945,13 @@ func memoryWarning(cfg captionConfig) string {
 		m.Name, each, which, total)
 }
 
-// memoryNote describes what a model costs to run and whether the cost is paid
-// again next time.
+// memoryNote describes what a model costs to run.
 //
-// No model can share one copy between two streams that are both transcribing.
-// The engines decode one thing at a time per loaded copy, so sharing would make
+// No model shares one copy between two streams that are both transcribing. The
+// engines decode one thing at a time per loaded copy, so sharing would make
 // concurrent streams take turns, and a stream that waits its turn falls behind
-// live audio and drops speech. Concurrency is bought with memory, always.
-//
-// What does differ is what happens between streams. transcribe.cpp separates
-// the weights from the decoder state, so a finished stream's copy is kept and
-// handed to the next one — which is why those models load once and start
-// instantly afterwards. parakeet.cpp's handle is both at once and cannot be
-// reused, so those models are loaded per stream and freed with it. They are
-// also a fraction of the size, which is why that costs about a second rather
-// than half a minute.
+// live audio and drops speech. Every simultaneous stream therefore loads its
+// own copy, and every copy is freed the moment its stream ends.
 func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 	per := streamMemoryMB(m)
 	memory = "About " + humanMB(per) + " per stream"
