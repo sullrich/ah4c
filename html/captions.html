@@ -429,7 +429,8 @@ function render() {
                     <span class="tag">Delay: ${esc(m.latency)}</span>
                     <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
-                    <span class="tag">${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
+                    <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
+                    <span class="tag ${m.sizeMB >= 2000 ? 'tag-warn' : ''}">RAM: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'} per stream</span>
                     ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
                     <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
