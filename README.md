@@ -166,8 +166,10 @@ never a tune; a start that fails says why in the log and retries while the strea
 
 **The delay setting** governs how closely captions follow the picture. For a
 phrase-at-a-time model it decides how long a phrase may run — shorter follows closer,
-longer is a little more accurate; the default cuts phrases within two seconds and lands
-about two to three seconds behind, a touch quicker than live broadcast captioning runs. For a streaming model it picks how far ahead the
+longer is a little more accurate; the default lands two to four seconds behind, which is
+what live broadcast captioning runs. Cutting much shorter was measured and rejected: the
+model needs a few seconds of context, and below that accuracy falls apart while per-phrase
+overhead makes it slower besides. For a streaming model it picks how far ahead the
 model listens before committing a word. The recognizer reports its own throughput in the
 log, so whether your hardware is keeping up is a measurement, not a guess. The display
 itself is paced too: a finished caption line stays on screen a beat before the next one
