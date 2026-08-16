@@ -3551,7 +3551,14 @@ type txBatchService struct {
 	onGPU    bool
 	requests chan txBatchRequest
 	refs     int
-	closed   chan struct{}
+	// Telemetry, touched only by the run goroutine: how big the batches really
+	// are and what they really cost, so tuning is done on measurements rather
+	// than on another benchmark from someone else's machine.
+	tDispatches int64
+	tPhrases    int64
+	tCompute    time.Duration
+	tAudio      time.Duration
+	closed      chan struct{}
 	// ready is closed once the service is usable (or failed, with err set).
 	// Streams that arrive while the weights are still loading wait on it
 	// rather than loading their own copy, which is the entire point.
@@ -3614,7 +3621,13 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 	}
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	sp.nThreads = int32(captionThreads(cfg))
+	// The shared session does every stream's recognition, so it gets the whole
+	// thread allowance. Dividing by the tuner count is for per-stream copies
+	// running side by side; applied here it starved the one session carrying
+	// the aggregate — a twenty-thread machine was running everyone's phrases
+	// on three, which is why adding tuners fell behind long before the
+	// hardware did.
+	sp.nThreads = int32(availableCPUs())
 	sp.nCtx = captionDecoderCtx
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
@@ -3666,6 +3679,30 @@ func (svc *txBatchService) run() {
 		case first = <-svc.requests:
 		}
 		batch := []txBatchRequest{first}
+		// Streams cut phrases on their own clocks, so at any instant usually
+		// one request is waiting — and a batch of one pays the per-call cost
+		// per phrase, which is the exact economics batching exists to fix. A
+		// short gather holds the door for the other active streams: with four
+		// tuners it turns four dispatches into one, and when only one stream
+		// exists there is nobody to wait for and no wait happens.
+		txServiceLock.Lock()
+		active := svc.refs
+		txServiceLock.Unlock()
+		if active > 1 {
+			gather := time.NewTimer(150 * time.Millisecond)
+		gathering:
+			for len(batch) < active && len(batch) < 16 {
+				select {
+				case r := <-svc.requests:
+					batch = append(batch, r)
+				case <-gather.C:
+					break gathering
+				case <-svc.closed:
+					break gathering
+				}
+			}
+			gather.Stop()
+		}
 		for len(batch) < 16 {
 			select {
 			case r := <-svc.requests:
@@ -3702,7 +3739,9 @@ func (svc *txBatchService) dispatch(batch []txBatchRequest) {
 		held = true
 	}
 	atomic.StoreInt64(&svc.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
+	began := time.Now()
 	st := txRunBatch(svc.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
+	compute := time.Since(began)
 	atomic.StoreInt64(&svc.abort.deadlineUnixNano, 0)
 	if held {
 		<-gpuGate
@@ -3715,6 +3754,21 @@ func (svc *txBatchService) dispatch(batch []txBatchRequest) {
 	}
 	runtime.KeepAlive(svc.lang)
 	runtime.KeepAlive(svc.abort)
+
+	var audio time.Duration
+	for _, l := range lens {
+		audio += time.Duration(float64(l) / asrSampleRate * float64(time.Second))
+	}
+	svc.tDispatches++
+	svc.tPhrases += int64(len(batch))
+	svc.tCompute += compute
+	svc.tAudio += audio
+	if svc.tDispatches%25 == 0 {
+		speed := float64(svc.tAudio) / float64(svc.tCompute)
+		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, %.1fx real time, over the last 25 dispatches",
+			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed)
+		svc.tPhrases, svc.tCompute, svc.tAudio = 0, 0, 0
+	}
 
 	if st != txOK {
 		err := fmt.Errorf("%s", txStatusString(st))
