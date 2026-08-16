@@ -78,8 +78,8 @@ leaving the box.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
 - **No GPU, no /dev/dri, no hardware encoder.** Nothing here requires a graphics card:
-  three of the four models run faster than real time on an ordinary CPU, and the fourth is
-  the high-end choice that wants one. The backend is chosen automatically — the best build
+  everything but the high-end choice runs faster than real time on an ordinary CPU, and
+  that one is labelled for what it wants. The backend is chosen automatically — the best build
   this container can actually load — and the log says which one each model really runs on.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
@@ -154,14 +154,13 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — four, one per job. Each card on the page names the slot it fills, the engine
+**Models** — three, one per job. Each card on the page names the slot it fills, the engine
 that runs it, and what it costs; picking a model fetches the right engine automatically.
 
 | Model | Role | Accuracy | Delay | Download | Languages | Engine |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Nemotron 3.5 Streaming 0.6B** *(default, recommended)* — continuous, punctuated, sentence case | All-round | Good — 3.0% | Under a second | 938 MB | 25 | parakeet.cpp |
 | **Cohere Transcribe 03-2026** — the most accurate open model there is | High-end | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 | transcribe.cpp |
-| **Parakeet TDT 0.6B v3** — waits for a phrase, strongest outside English | Multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet Realtime 120M** — quick and tiny, no punctuation | Low-end | Basic | Under a second | 168 MB | English | parakeet.cpp |
 
 Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
@@ -185,7 +184,6 @@ model the cheapest one in memory.
 | --- | --- | --- |
 | Nemotron 3.5 Streaming 0.6B | ~1.2 GB | ~6.0 GB |
 | **Cohere Transcribe 03-2026** | shared | **~2.2 GB total** |
-| Parakeet TDT 0.6B v3 | ~1.1 GB | ~5.7 GB |
 | Parakeet Realtime 120M | ~300 MB | ~1.5 GB |
 
 These are estimates: the model repositories publish file sizes, not runtime memory, and a
@@ -212,8 +210,9 @@ it keeps pace with live speech on a processor or a GPU alike, writes punctuation
 sentence case, and handles every supported language. The others are for when you know what
 you want instead: **Cohere Transcribe** for the best captioning available on a machine with
 the muscle for it — a GPU is strongly recommended, and its shared memory means many tuners
-cost no more than one; **TDT v3** when accuracy outside English matters more than latency;
-the **120M** for a NAS or a Pi, accepting that it writes no punctuation.
+cost no more than one; the **120M** for a NAS or a Pi, accepting that it writes no
+punctuation. There is no separate multilingual pick, because the all-round one is it: the
+Nemotron covers every supported language.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That

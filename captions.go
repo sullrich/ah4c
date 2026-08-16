@@ -582,20 +582,6 @@ var captionModelCatalog = []captionModel{
 		Punctuation: true,
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 	},
-	{
-		Key:         "parakeet-v3",
-		Name:        "Parakeet TDT 0.6B v3",
-		Role:        "The multilingual choice",
-		Desc:        "Waits for a whole phrase and then transcribes it, with punctuation. A solid multilingual option, at the cost of arriving later.",
-		Latency:     "Three to four seconds",
-		Accuracy:    "Very good",
-		Hardware:    "A modern multi-core CPU.",
-		Runtime:     rtParakeet,
-		File:        "tdt-0.6b-v3-q8_0.gguf",
-		SizeMB:      897,
-		Punctuation: true,
-		Languages:   euroLanguages,
-	},
 }
 
 // captionLanguageNames turns the catalog's ISO codes into something readable in
@@ -3766,8 +3752,15 @@ func (b *batchClient) transcribe(pcm []float32) (string, error) {
 	default:
 		return "", fmt.Errorf("the shared recognizer is full; this phrase is dropped")
 	}
-	r := <-reply
-	return r.text, r.err
+	select {
+	case r := <-reply:
+		return r.text, r.err
+	case <-time.After(txRunDeadline + 8*time.Second):
+		// The service dispatch is itself bounded by the run deadline, so this
+		// only fires if the service has died with the request in hand. Waiting
+		// forever here would freeze this stream's recognizer for the tune.
+		return "", fmt.Errorf("the shared recognizer did not answer")
+	}
 }
 
 func (b *batchClient) beginStream(string) error           { return fmt.Errorf("phrase at a time only") }
@@ -4007,35 +4000,41 @@ type captionLatency struct {
 	chunkMS, rightMS int32
 	cacheRight       int32
 	// phraseSec is the same trade for a model that reads a phrase at a time,
-	// and for those it is the setting that matters most.
+	// and it is a latency ceiling more than a throughput knob.
 	//
-	// Every call to an offline model pays a fixed cost — the encoder is set up,
-	// a key/value cache is allocated, a graph is built — before any audio is
-	// looked at. Handing it two seconds of speech pays that cost for two
-	// seconds of work; handing it ten pays it once for ten. The published
-	// figures for these models are measured on long clips for exactly that
-	// reason: Cohere Transcribe does eleven seconds of audio in 1.43 s on a
-	// laptop APU, eight times faster than real time, and the same model fed
-	// two-second phrases runs slower than real time. The difference is not the
-	// model, it is how much of it is spent starting up.
+	// A phrase's first word waits the whole phrase before it can appear: cut at
+	// eight seconds, the opening words of a sentence reach the screen nine
+	// seconds after they were said, which reads as the captions ignoring the
+	// programme. The number here is therefore roughly the worst-case caption
+	// lag, and it is kept near what live broadcast captioning runs.
+	//
+	// The throughput argument for long phrases died when batching arrived. Each
+	// call once paid its own start-up cost, so short phrases meant paying it
+	// many times a minute; now every tuner's phrases go through one shared
+	// dispatch, the cost is paid per batch, and when load rises the queue
+	// deepens and the batches grow on their own — efficiency now scales with
+	// demand instead of with phrase length. What longer phrases still buy is a
+	// little acoustic context and fewer phrase boundaries, which is where the
+	// mistakes cluster; that is why the accurate setting keeps a longer window,
+	// not speed.
 	phraseSec float64
 }
 
 var captionLatencies = []captionLatency{
 	{
 		Key: "fast", Name: "Lowest delay",
-		Desc:    "Captions follow speech as closely as possible. On a model that reads a phrase at a time this is the expensive setting, not the cheap one: short phrases pay the same start-up cost as long ones, so it does several times the work per minute of television.",
-		chunkMS: 80, rightMS: 80, cacheRight: 1, phraseSec: 3.5,
+		Desc:    "Captions follow speech as closely as they can: phrases are cut within two and a half seconds, so even the first word of a sentence lands about three seconds behind at worst. Slightly less accurate — short phrases give the model less to work with, and mistakes cluster at the cuts.",
+		chunkMS: 80, rightMS: 80, cacheRight: 1, phraseSec: 2.5,
 	},
 	{
 		Key: "balanced", Name: "Balanced (recommended)",
-		Desc:    "A few seconds behind, and far less work: a phrase-at-a-time model pays its start-up cost once per eight seconds instead of once per two, which is most of the difference between keeping up and not. The right answer for most setups, and the one to use when several tuners are captioned.",
-		chunkMS: 480, rightMS: 480, cacheRight: 6, phraseSec: 8,
+		Desc:    "Phrases are cut within four seconds, which puts captions two to four seconds behind the picture — about what live broadcast captioning runs. The right answer for most setups.",
+		chunkMS: 480, rightMS: 480, cacheRight: 6, phraseSec: 4,
 	},
 	{
 		Key: "accurate", Name: "Most accurate",
-		Desc:    "The most accurate and the most efficient, at the cost of arriving latest. Streaming models use their own published settings; a phrase-at-a-time model gets long phrases, which is how these models are measured and where they are quickest per minute of audio.",
-		chunkMS: -1, rightMS: -1, cacheRight: -1, phraseSec: 14,
+		Desc:    "The most accurate, at the cost of arriving latest. Streaming models use their own published settings; a phrase-at-a-time model gets up to six seconds per phrase — more context and fewer cuts, which is where mistakes cluster — so the start of a sentence can trail six or seven seconds.",
+		chunkMS: -1, rightMS: -1, cacheRight: -1, phraseSec: 6,
 	},
 }
 
@@ -4538,8 +4537,12 @@ type captionEngine struct {
 	// behind to fill this is not going to catch up by being given more room.
 	// phrases carries cut phrases from the reader to the recognizer. dropped is
 	// written by the reader and read by the recognizer, so it is atomic.
-	phrases chan []float32
+	phrases chan phraseItem
 	dropped int64
+	// skippedStale counts phrases thrown away for being old. Live captions
+	// describe now or say nothing: a pipeline that has fallen behind must thin
+	// out and catch up, never serve the past in order. Only recognize touches it.
+	skippedStale int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -4571,7 +4574,7 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
-		phrases: make(chan []float32, 3),
+		phrases: make(chan phraseItem, 3),
 		closed:  make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -5299,10 +5302,24 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	}
 }
 
+// phraseItem is a cut phrase and the moment it was cut. The stamp is what
+// keeps the pipeline honest: any stage may compare it against now and refuse
+// to spend work on the past.
+type phraseItem struct {
+	pcm []float32
+	cut time.Time
+}
+
+// phraseStaleAfter is how old a phrase may be before it is abandoned. Normal
+// passage through the pipeline is a second or two; anything past this is a
+// backlog, and transcribing a backlog in order is how captions end up narrating
+// television from minutes ago.
+const phraseStaleAfter = 10 * time.Second
+
 // queue hands a phrase to the recognizer, and never waits for it.
 func (e *captionEngine) queue(audio []float32) {
 	select {
-	case e.phrases <- audio:
+	case e.phrases <- phraseItem{pcm: audio, cut: time.Now()}:
 	default:
 		// The recognizer is still working through what it has. Losing this
 		// phrase costs a sentence; waiting here would cost the audio stream,
@@ -5321,22 +5338,39 @@ func (e *captionEngine) queue(audio []float32) {
 // ever calls into it on this path.
 func (e *captionEngine) recognize() {
 	defer e.finish()
-	for audio := range e.phrases {
+	for item := range e.phrases {
 		select {
 		case <-e.closed:
 			return
 		default:
 		}
-		e.caption(audio)
+		// Skip anything that went stale in the queue. Dropping the oldest is
+		// what lets the newest stay current: the alternative is every phrase
+		// arriving late by however far behind the recognizer once fell.
+		if age := time.Since(item.cut); age > phraseStaleAfter {
+			n := atomic.AddInt64(&e.skippedStale, 1)
+			if n == 1 || n%10 == 0 {
+				logger("[CC] %s skipped a phrase %.0fs old to stay current (%d so far)", e.label, age.Seconds(), n)
+			}
+			continue
+		}
+		e.caption(item)
 	}
 }
 
 // caption recognizes one phrase and queues it for display.
-func (e *captionEngine) caption(audio []float32) {
+func (e *captionEngine) caption(item phraseItem) {
+	audio := item.pcm
 	secs := float64(len(audio)) / asrSampleRate
 	start := time.Now()
 	text, err := e.model.transcribe(audio)
 	took := time.Since(start)
+	if age := time.Since(item.cut); age > phraseStaleAfter+txRunDeadline {
+		// It was fresh going in and ancient coming out: the recognizer stalled
+		// underneath it. Showing it now would caption the past.
+		logger("[CC] %s discarded a caption that took %.0fs to come back", e.label, age.Seconds())
+		return
+	}
 	if err != nil {
 		logger("[CC] %s recognition failed after %s: %v", e.label, took.Round(time.Millisecond), err)
 		return
