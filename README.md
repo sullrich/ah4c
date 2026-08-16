@@ -58,11 +58,12 @@ them back.
 > Nothing else about the image or the compose file changes, and the directory stays empty
 > unless captions are switched on.
 
-Audio is pulled out of the encoder's transport stream, transcribed on the CPU by an
-NVIDIA Parakeet model, and written back into the video as CEA-608 caption data carried
+Audio is pulled out of the encoder's transport stream, transcribed by a speech model
+running on this machine, and written back into the video as CEA-608 caption data carried
 in ATSC A/53 user data — the same carriage an HDHomeRun uses for over-the-air captions.
 Channels DVR, VLC and anything else see a real closed caption track and offer it under
-the usual subtitles button.
+the usual subtitles button. Nothing is sent anywhere: no account, no API key, no audio
+leaving the box.
 
 - **Not burned in, and not re-encoded.** The compressed video is passed through
   untouched; only a small caption message is inserted ahead of each picture, and the
@@ -70,37 +71,44 @@ the usual subtitles button.
   unchanged, and streams that already carry captions are left alone.
 - **Nothing is added to the Docker image.** No new packages, no Python, no model.
 - **ah4c stays pure Go.** Recognition runs against
-  [parakeet.cpp](https://github.com/mudler/parakeet.cpp), a ggml build of the Parakeet
-  models, opened at run time with purego. There is no cgo and nothing linked into the
-  binary — `CGO_ENABLED=0` still builds.
+  [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a ggml engine opened
+  at run time with purego. There is no cgo and nothing linked into the binary —
+  `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
-- **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
-  time on an ordinary CPU.
+- **No GPU, no /dev/dri, no hardware encoder.** Nothing here requires a graphics card:
+  everything but the high-end choice runs faster than real time on an ordinary CPU, and
+  that one is labelled for what it wants. The backend is chosen automatically — the best build
+  this container can actually load — and the log says which one each model really runs on.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
-The page offers a small engine plus your choice of model. Nothing is bundled and
-nothing is fetched until you ask for it. Every download URL is shown on the page next to
-the button, so it is always clear what is being fetched and from where.
+The page offers an engine plus your choice of model. Nothing is bundled and nothing is
+fetched until you ask for it. Every download URL is shown on the page next to the button,
+so it is always clear what is being fetched and from where.
 
-**Speech engine** (required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp) built for
-your platform, from that project's GitHub releases. Four builds exist and the page offers
-whichever this container can actually load:
+**Speech engine** (required) — one program, [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp),
+runs every model. It is downloaded once from that project's GitHub releases — about 28 MB
+for the build that covers both the processor and Vulkan, 216 MB for CUDA — and every model
+uses the same copy. The backend is picked automatically (the best one this container can
+load), a picker exists if you want to pin it, and the log states which backend each model
+actually runs on.
 
-| Build | Size | Needs |
-| --- | --- | --- |
-| CPU | ~1 MB | Nothing. Fast enough for several tuners at once |
-| GPU via Vulkan | 59 MB | A Vulkan driver in the container and `/dev/dri` passed through |
-| GPU via CUDA | 537 MB | The NVIDIA container runtime; the download carries its own CUDA runtime |
-| GPU via CUDA 12 | 722 MB | The same, for older drivers |
-
-None of them change the image, and the page tells you at a glance whether acceleration is
-actually working or which piece is missing.
+| Build | Needs |
+| --- | --- |
+| CPU + Vulkan (one download) | Nothing for the processor; a Vulkan driver and `/dev/dri` for the GPU |
+| CUDA | The NVIDIA container runtime; the download carries its own CUDA runtime |
 
 **Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
 downloads it the same way it downloads a model: the packages and everything they depend on
 are saved into `captions/drivers` inside the bind mount, and put back automatically
 at startup after a rebuild, without needing the network again.
+
+The driver package also ships llvmpipe, a Vulkan device that is really the processor in
+disguise, and the loader quietly offers it whenever the real driver cannot reach the card —
+which looks like a working GPU and runs three times slower than the processor used
+honestly. ah4c refuses it: only hardware Vulkan drivers are considered, the log prints the
+name of the device actually doing the work, and if no real card is reachable the engine
+runs on the processor and says so.
 
 You also have to pass the graphics device through, which is off by default. Set this in your
 env file and recreate the container:
@@ -126,35 +134,49 @@ A GPU build is greyed out until the library it needs is loadable, which is settl
 the dynamic loader rather than by guessing. If a GPU build is selected but cannot run, the
 engine falls back to the processor rather than failing, so captions keep working. Apple
 silicon gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA
-build upstream and is offered CPU and Vulkan.
+build from either project and is offered CPU and Vulkan.
 
 Quick Sync is not on that list and cannot be. It is fixed-function video encode and decode
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models**, all from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
-on Hugging Face:
+**Models** — three. Cohere Transcribe is the one to pick; the other two are for
+processor-only machines that need more. Every recommendation is guidance, never a gate,
+and all three run anywhere.
 
-| Model | Delay | Size | Languages | Runs well on |
-| --- | --- | --- | --- | --- |
-| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, with punctuation and sentence case | Under a second | 938 MB | 25 | A modern multi-core CPU |
-| **Parakeet Realtime 120M** — just as quick, no punctuation | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
-| **Parakeet TDT 0.6B v3** — waits for a phrase, most accurate multilingual | 3–4 seconds | 897 MB | 25 | A modern multi-core CPU |
-| **Parakeet TDT-CTC 110M** — phrase at a time, English | 3–4 seconds | 170 MB | English | Modest hardware; comfortable on a NAS |
+| Model | For | Accuracy | Delay | Download | Languages |
+| --- | --- | --- | --- | --- | --- |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. On a processor it keeps up with one or two streams; a GPU keeps it fast with many | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 |
+| **Nemotron 3.5 Streaming 0.6B** — transcribes live as the audio arrives, punctuated | Processor-only machines running several streams at once | Very good — 3.1% | Under a second | 716 MB | 32 |
+| **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
-The two streaming models transcribe as the audio arrives rather than waiting for a
-phrase to finish, which is the difference between captions about a second behind and
-captions three or four seconds behind.
+Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
+television is harder than clean read speech for every model.
 
-Punctuation is the other axis, and the reason the Nemotron model is the default: it is the
-only one that is both continuous and punctuated. The 120M produces no punctuation at all —
-NVIDIA's model card is explicit that it outputs neither punctuation nor capitalisation, and
-no setting changes that — so it is there for hardware that cannot spare the cores. The
-phrase-at-a-time models punctuate but arrive several seconds later.
+**Memory.** Cohere Transcribe reads a phrase at a time, so one copy — about 2.2 GB
+resident — is shared by every tuner captioning at once and freed when the last of them
+ends. If the shared copy provably cannot keep pace with the streams feeding it, a second
+copy is loaded to run them in parallel, the log says so, and that doubles the figure while
+the pressure lasts. The streaming models hold their session open for the whole tune, so
+each tuner runs its own copy: about 960 MB per stream for Nemotron, about 160 MB for
+Moonshine. The page works the numbers out for your own setup.
+
+Nothing is loaded until a tune is already playing, so captions can delay themselves but
+never a tune; a start that fails says why in the log and retries while the stream plays.
+
+**The delay setting** governs how closely captions follow the picture. For a
+phrase-at-a-time model it decides how long a phrase may run — shorter follows closer,
+longer is a little more accurate; the default lands two to four seconds behind, which is
+what live broadcast captioning runs. For a streaming model it picks how far ahead the
+model listens before committing a word. The recognizer reports its own throughput in the
+log, so whether your hardware is keeping up is a measurement, not a guess. The display
+itself is paced too: a finished caption line stays on screen a beat before the next one
+rolls it up, the way broadcast roll-up reads, instead of scrolling as fast as recognition
+can produce text.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
-captioning and is easier to read across a room; there is a setting for mixed case. Subtitle
-files keep the natural sentence case regardless, since a file is read close up.
+captioning and is easier to read across a room; there is a setting for mixed case. That
+also evens out the streaming models, which write in lower case.
 
 The right build for the machine is chosen automatically, so the arm64 image fetches the
 arm64 engine without being told.
@@ -164,9 +186,11 @@ the host they sit in `${HOST_DIR}/ah4c/captions`, beside the `scripts`, `m3u` an
 directories ah4c already keeps there. Remove either download from the page to reclaim the
 space.
 
-Captions appear a second or two after the words are spoken, because a phrase has to
-finish before it can be recognized — the same lag live broadcast captioning has. An
-optional extra delay is available if you want to push them back further.
+How far behind the captions run depends on the model. A streaming one transcribes as the
+audio arrives and lands about a second back; a phrase-at-a-time one has to wait for the
+sentence to finish and lands three or four seconds back. Either way it is the same kind of
+lag live broadcast captioning has. An optional extra delay is available if you want to push
+them back further.
 
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
@@ -299,7 +323,26 @@ PLAYBACK_DETECTION=FALSE
 PLAYBACK_DELAY=0
 HEARTBEAT_INTERVAL=0
 HOST_DIR=/data
+GPU_DEVICE=/dev/null:/dev/null
+DOCKER_RUNTIME=runc
+NVIDIA_VISIBLE_DEVICES=
+NVIDIA_DRIVER_CAPABILITIES=
 ```
+
+The last four are only used by closed captions, and the values above are the defaults that
+do nothing: leave them exactly as they are unless you want a GPU build of the speech engine.
+`GPU_DEVICE` passes `/dev/null` rather than being empty because a device mapping has to
+point at something that exists. To use a GPU:
+
+| Variable | Default | For an Intel or AMD GPU (Vulkan) | For an NVIDIA GPU (CUDA) |
+| --- | --- | --- | --- |
+| `GPU_DEVICE` | `/dev/null:/dev/null` | `/dev/dri:/dev/dri` | leave at the default |
+| `DOCKER_RUNTIME` | `runc` | leave at the default | `nvidia` |
+| `NVIDIA_VISIBLE_DEVICES` | empty | leave empty | `all` |
+| `NVIDIA_DRIVER_CAPABILITIES` | empty | leave empty | `compute,utility` |
+
+The NVIDIA options need the NVIDIA container toolkit installed on the host. Nothing changes
+in the image either way, and captions run on the processor if none of this is set.
 
 #### Developer Instructions
 First see https://github.com/sullrich/ah4c/blob/main/getting_started.txt

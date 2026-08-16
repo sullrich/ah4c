@@ -824,6 +824,13 @@ func run() error {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown engine"})
 			return
 		}
+		if cfg.Latency == "" {
+			cfg.Latency = defaultCaptionConfig().Latency
+		}
+		if findCaptionLatency(cfg.Latency).Key != cfg.Latency {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown delay setting"})
+			return
+		}
 		if cfg.OffsetSec < 0 || cfg.OffsetSec > 15 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be between 0 and 15 seconds"})
 			return
@@ -843,7 +850,9 @@ func run() error {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
-		if err := startRuntimeDownload(c.Param("variant")); err != nil {
+		// The model is optional: without it the engine for the saved model is
+		// fetched, with it the engine that model would need.
+		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}

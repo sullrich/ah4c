@@ -50,6 +50,20 @@
             color: var(--text-muted);
         }
         .tag-live { border-color: rgba(82,210,115,0.4); color: var(--live); }
+        /* Accuracy is the thing most people are choosing on, so it is the one
+           tag that carries colour of its own rather than sitting in the row. */
+        .tag-acc { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .tag-warn { border-color: rgba(230,160,60,0.5); color: #e0a03c; }
+        /* Each engine gets its own box. They are two separate programs by two
+           separate projects, and only one of them is being downloaded. */
+        .engine-group {
+            border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+            padding: 0.7rem 0.8rem; margin-bottom: 0.7rem; background: var(--bg);
+        }
+        .engine-group.in-use { border-color: var(--accent); background: var(--accent-soft); }
+        .engine-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .engine-title { font-weight: 700; font-size: 0.92rem; }
+        .engine-note { font-size: 0.76rem; color: var(--text-muted); margin: 0.3rem 0 0.6rem; line-height: 1.45; }
         .accel {
             display: flex; gap: 0.6rem; align-items: flex-start;
             padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
@@ -113,16 +127,25 @@
                 <span class="badge badge-idle" id="stateBadge">Off</span>
             </div>
             <p class="footnote">
-                Speech is transcribed on the CPU and written into the video as CEA-608 caption data,
-                the same carriage an HDHomeRun uses for over-the-air captions. Channels DVR and any
-                other player will show it as CC1 with no sidecar file. The video itself is never
-                re-encoded, so picture quality and tune time are unchanged.
+                Speech is transcribed here, on this machine, and written into the video as CEA-608
+                caption data, the same carriage an HDHomeRun uses for over-the-air captions. Channels
+                DVR and any other player will show it as CC1 with no sidecar file. The video itself
+                is never re-encoded, so picture quality and tune time are unchanged.
             </p>
         </div>
 
         <div class="card">
-            <div class="card-title">Speech engine <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled in the image; fetch only what you want</span></div>
+            <p class="footnote" style="margin-top:0;">
+                Captions need two downloads and this page does both: a small <strong>helper
+                program</strong> here, and the <strong>voice</strong> itself further down, which is the
+                big one. Start by picking a voice at the bottom of this card &mdash; that is the only
+                real decision &mdash; then come back up here and choose whether it should run on the
+                processor or a graphics card. Nothing is included in ah4c, nothing downloads until you
+                press a button, and every button names the exact file it will fetch.
+            </p>
             <div id="accel"></div>
+            <div id="engineFor"></div>
             <div class="model-list" id="runtimeRow"></div>
             <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
             <div id="drvState"></div>
@@ -131,9 +154,17 @@
                 at once. A GPU build is only offered when this container can actually load it: CUDA
                 appears once the NVIDIA container runtime is passing the driver through, Vulkan once
                 a Vulkan driver and <code>/dev/dri</code> are present. Neither needs a change to the
-                image &mdash; only to your compose file.
+                image &mdash; only to your compose file. Software Vulkan renderers are refused: if the
+                driver cannot reach a real graphics card, captions run on the processor directly, which
+                is faster than pretending, and the log names the device actually in use.
+            </p>
+            <p class="footnote">
+                One helper program, <strong>transcribe.cpp</strong>, runs every model. Pick where it
+                should run &mdash; the processor or a graphics card &mdash; and download it once; every
+                model uses the same copy of it.
             </p>
             <div class="card-title" style="margin-top:1rem;">Model</div>
+            <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
             <div id="dl" class="hidden">
                 <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
@@ -142,6 +173,31 @@
             <p class="footnote">
                 Both land in <code>/opt/captions</code>, a bind mount, so they survive a container rebuild.
                 Remove them any time to get the space back.
+            </p>
+            <p class="footnote">
+                <strong>Memory.</strong> A model uses roughly its download size in RAM while a stream is
+                being captioned, and <strong>every stream captioning at once loads its own copy</strong>.
+                Two streams of a 0.6B model is roughly 2.5&nbsp;GB, three about 3.7&nbsp;GB. They are
+                not shared because the engine can only decode one thing at a time per copy, so sharing
+                would make the streams wait for each other and fall behind the picture. A copy stays in
+                memory after its stream ends so the next tune starts instantly. If RAM is tight, caption
+                fewer tuners on the Tuners card below, or pick a smaller model.
+            </p>
+            <p class="footnote">
+                <strong>Reading the labels.</strong> The percentage is how many words come out wrong on
+                a standard test, so lower is better and 3% means roughly three words in every hundred.
+                <em>Types as it hears</em> means captions appear while the person is still talking;
+                <em>waits for each sentence</em> means it listens to the whole phrase first, which is
+                more accurate but arrives later. Bigger models are generally more accurate and ask more
+                of the machine.
+            </p>
+            <p class="footnote">
+                Those percentages come from LibriSpeech test-clean, the one test all of these publish,
+                so they can be compared with each other. Read them as a ranking rather than a promise:
+                it is clean, clearly-read speech, and live television &mdash; music beds, crowd noise,
+                people talking over each other &mdash; is harder than that for every model here. Models
+                without a figure have no published number on that test, so they carry a rating and no
+                measurement rather than a guess.
             </p>
         </div>
 
@@ -166,6 +222,11 @@
                     <option value="mixed">As recognized</option>
                 </select>
             </div>
+            <div class="field-row">
+                <label for="latency">Delay vs accuracy</label>
+                <select id="latency"></select>
+            </div>
+            <p class="footnote" id="latencyNote" style="margin-top:0;"></p>
             <div class="field-row">
                 <label for="offset">Extra delay</label>
                 <select id="offset"></select>
@@ -220,7 +281,7 @@ function render() {
     const ready = cfg.enabled && model && model.installed && state.runtimeReady && state.runtime === 'ready';
     let need = 'On';
     if (!cfg.enabled) need = 'Off';
-    else if (!state.runtimeReady) need = 'Needs the speech engine';
+    else if (!state.runtimeReady) need = 'Needs ' + (state.runtimeName || 'the speech engine');
     else if (!model || !model.installed) need = 'Needs a model';
     else if (state.runtime !== 'ready') need = 'Not ready';
     badge.textContent = need;
@@ -276,47 +337,115 @@ function render() {
               (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
             : '';
 
-    // Engine builds: processor or GPU, offered only where loadable.
-    document.getElementById('runtimeRow').innerHTML = (state.engines || []).map(e => `
-        <div class="model-row ${e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
-            <input type="radio" name="engine" value="${esc(e.key)}" ${e.key === cfg.engine ? 'checked' : ''}
-                   ${e.usable ? '' : 'disabled'} onchange="pickEngine('${esc(e.key)}')">
+    const engineKey = model ? model.engine : 'transcribe';
+    const engineName = model ? model.engineName : '';
+    const engineReady = !!(model && model.engineReady);
+    document.getElementById('engineHint').textContent = engineName
+        ? 'your model uses ' + engineName
+        : 'nothing is bundled in the image; fetch only what you want';
+    document.getElementById('engineFor').innerHTML = `
+        <div class="accel ${engineReady ? 'on' : ''}" style="margin-bottom:0.6rem;">
+            <span class="dot"></span>
             <div>
-                <div class="model-name">${esc(e.name)}</div>
-                <div class="model-meta">${esc(e.desc)}</div>
-                <div class="model-tags">
-                    <span class="tag">${e.sizeMB} MB</span>
-                    ${e.usable ? '' : '<span class="tag">Not available in this container</span>'}
-                </div>
-                ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
-                <span class="model-src">Downloads from: <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
+                <div class="h">${esc(model ? model.name : 'This model')} uses ${esc(engineName)}</div>
+                <div class="d">${engineReady
+                    ? 'It is already downloaded, so there is nothing to do here.'
+                    : 'That is the one to download below. The other engine listed is for other models and you can ignore it.'}</div>
             </div>
-            <div class="model-actions">
-                ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
-                              : (e.usable ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
-            </div>
-        </div>`).join('');
+        </div>`;
 
-    // Models
-    document.getElementById('models').innerHTML = state.models.map(m => `
-        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}">
-            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''} onchange="pickModel('${esc(m.key)}')">
+    // Engine builds, grouped by engine, offered only where loadable.
+    document.getElementById('runtimeRow').innerHTML = (state.runtimeList || []).map(rt => {
+        const builds = (state.engines || {})[rt.key] || [];
+        if (!builds.length) return '';
+        const inUse = rt.key === engineKey;
+        const anyHere = builds.some(b => b.installed);
+        return `
+        <div class="engine-group ${inUse ? 'in-use' : ''}">
+            <div class="engine-head">
+                <span class="engine-title">${esc(rt.name)} ${esc(rt.version)}</span>
+                ${inUse ? '<span class="badge badge-active">Used by your model</span>'
+                        : '<span class="badge badge-idle">Not needed for your model</span>'}
+                ${anyHere ? '<span class="tag tag-live">Downloaded</span>' : ''}
+            </div>
+            <div class="engine-note">${inUse
+                ? 'This is the program that will do the listening. Pick where it should run and download it once.'
+                : 'Another model uses this one. Nothing to do unless you switch to a model that needs it.'}</div>
+            <div class="model-list">${builds.map(e => `
+                <div class="model-row ${inUse && e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
+                    <input type="radio" name="engine" value="${esc(e.key)}" ${inUse && e.key === cfg.engine ? 'checked' : ''}
+                           ${e.usable && inUse ? '' : 'disabled'} onchange="pickEngine('${esc(e.key)}')">
+                    <div>
+                        <div class="model-name">${esc(e.name)}</div>
+                        <div class="model-meta">${esc(e.desc)}</div>
+                        <div class="model-tags">
+                            <span class="tag ${inUse ? 'tag-acc' : ''}">Download: ${e.sizeMB >= 1024 ? (e.sizeMB / 1024).toFixed(1) + ' GB' : e.sizeMB + ' MB'}</span>
+                            ${e.installed ? '<span class="tag tag-live">Already downloaded</span>' : ''}
+                            ${e.usable ? '' : '<span class="tag tag-warn">Not available in this container</span>'}
+                        </div>
+                        ${e.shared ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.shared)}</div>` : ''}
+                        ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
+                        <span class="model-src">Fetches <strong>${esc(e.file)}</strong> from
+                            <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
+                    </div>
+                    <div class="model-actions">
+                        ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
+                                      : (e.usable && inUse ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
+                    </div>
+                </div>`).join('')}</div>
+        </div>`;
+    }).join('');
+
+    // Memory is the one setting here that can take the whole machine down, so
+    // when the numbers get large it is said loudly rather than in a footnote.
+    document.getElementById('memWarn').innerHTML = state.memoryWarning ? `
+        <div class="warn" style="margin:0.6rem 0;">
+            <span class="dot"></span>
             <div>
-                <div class="model-name">${esc(m.name)}</div>
+                <div class="h">This will use a lot of memory</div>
+                <div class="d">${esc(state.memoryWarning)}</div>
+            </div>
+        </div>` : '';
+
+    // Models. One that cannot run here is shown but not selectable, with the
+    // reason spelled out: hiding it entirely just raises the same question
+    // later, and the reason is something the reader can act on.
+    document.getElementById('models').innerHTML = state.models.map(m => `
+        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}" ${m.runnable ? '' : 'style="opacity:0.6;"'}>
+            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''}
+                   ${m.runnable ? '' : 'disabled'} onchange="pickModel('${esc(m.key)}')">
+            <div>
+                <div class="model-name">${esc(m.name)}${m.recommended ? ' <span class="badge badge-active">Recommended</span>' : ''}
+                    ${m.role ? `<span class="tag" style="margin-left:0.4rem;">${esc(m.role)}</span>` : ''}</div>
+                ${m.why ? `<div class="model-meta" style="margin-top:0.2rem;">${esc(m.why)}</div>` : ''}
                 <div class="model-meta">${esc(m.desc)}</div>
+                ${m.runnable ? '' : `<div class="warn" style="margin:0.5rem 0 0;">
+                    <span class="dot"></span>
+                    <div>
+                        <div class="h">Not available on this machine</div>
+                        <div class="d">${esc(m.blocked)}</div>
+                    </div>
+                </div>`}
                 <div class="model-tags">
-                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Continuous' : 'Phrase at a time'}</span>
+                    <span class="tag tag-acc">Accuracy: ${esc(m.accuracy || 'Unrated')}${m.benchmark ? ' &mdash; ' + esc(m.benchmark) : ''}</span>
+                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Types as it hears' : 'Waits for each sentence'}</span>
                     <span class="tag">Delay: ${esc(m.latency)}</span>
-                    <span class="tag">${m.sizeMB} MB</span>
-                    <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.length - 1 + ' languages'}</span>
+                    <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
+                    <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
+                    <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
+                    <span class="tag ${m.memoryTotalMB >= 4000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
+                    ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
+
+                    <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
+                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)} — ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
                 ${m.installed
                     ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeModel('${esc(m.key)}')">Remove</button>`
-                    : `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>`}
+                    : (m.runnable ? `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>` : '')}
             </div>
         </div>`).join('');
 
@@ -348,6 +477,17 @@ function render() {
     document.getElementById('style').value = cfg.style || 'rollup3';
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
+    // How far ahead a streaming model looks before committing a word. It costs
+    // work as well as time, so it matters most with several tuners captioned.
+    const lats = state.latencies || [];
+    const latSel = document.getElementById('latency');
+    latSel.innerHTML = lats.map(l =>
+        `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'balanced') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+    const chosen = lats.find(l => l.key === (cfg.latency || 'balanced'));
+    document.getElementById('latencyNote').textContent = chosen
+        ? chosen.desc + (model && !model.streaming ? ' This model reads a whole phrase at a time, so this setting does not affect it.' : '')
+        : '';
+
     const off = document.getElementById('offset');
     off.innerHTML = Array.from({length: 16}, (_, i) =>
         `<option value="${i}" ${i === cfg.offsetSec ? 'selected' : ''}>${i === 0 ? 'None' : i + ' second' + (i > 1 ? 's' : '')}</option>`).join('');
@@ -374,6 +514,7 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         offsetSec: parseInt(document.getElementById('offset').value, 10),
+        latency: document.getElementById('latency').value,
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',
         gpuRuntime: state.config.gpuRuntime || '',
@@ -436,7 +577,10 @@ async function pollDriver() {
 }
 
 async function getRuntime(key) {
-    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(key || state.config.engine || 'cpu'), {method: 'POST'});
+    // The model is sent along so the engine fetched is the one the model under
+    // the radio button needs, whether or not that choice has been saved yet.
+    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(key || state.config.engine || 'cpu') +
+        '?model=' + encodeURIComponent(state.config.model || ''), {method: 'POST'});
     if (!r.ok) {
         const b = await r.json().catch(() => ({}));
         document.getElementById('saved').textContent = b.error || 'Could not start the download';
