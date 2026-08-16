@@ -559,6 +559,28 @@ var captionModelCatalog = []captionModel{
 		Languages: []string{"en"},
 	},
 	{
+		Key:  "cohere-transcribe",
+		Name: "Cohere Transcribe 03-2026 (high-end systems)",
+		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a whole phrase and writes it out rather than transcribing as the audio arrives, and what it writes does not read like machine transcription — it reads like the closed captions on a broadcast channel. It asks for more of a machine than anything else here, and repays it.",
+		// It is quick when it is given room. On a laptop APU over Vulkan it
+		// does eleven seconds of audio in about one and a half, eight times
+		// faster than real time — but that figure is for one long call, and
+		// almost all of its cost is paid at the start of a call rather than per
+		// second of audio. Fed two-second phrases it runs slower than real
+		// time. The delay setting is what governs that, and on anything but
+		// the lowest it is given phrases long enough to be worth its while.
+		Latency:     "A few seconds, set by the delay setting below",
+		Accuracy:    "Best available",
+		Benchmark:   "1.3% of words come out wrong",
+		Hardware:    "A high-end system. A GPU is strongly recommended — an integrated one is enough — along with the memory for a copy per captioned tuner. It is the heaviest model here by some way, and on a NAS or a low-power box it will not keep up.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
+		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
+		SizeMB:      1760,
+		Punctuation: true,
+		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
+	},
+	{
 		Key:         "parakeet-v3",
 		Name:        "Parakeet TDT 0.6B v3",
 		Desc:        "Waits for a whole phrase and then transcribes it, with punctuation. A solid multilingual option, at the cost of arriving later.",
@@ -3648,23 +3670,36 @@ type captionLatency struct {
 	// cache-aware family's lookahead. -1 means the model's default.
 	chunkMS, rightMS int32
 	cacheRight       int32
+	// phraseSec is the same trade for a model that reads a phrase at a time,
+	// and for those it is the setting that matters most.
+	//
+	// Every call to an offline model pays a fixed cost — the encoder is set up,
+	// a key/value cache is allocated, a graph is built — before any audio is
+	// looked at. Handing it two seconds of speech pays that cost for two
+	// seconds of work; handing it ten pays it once for ten. The published
+	// figures for these models are measured on long clips for exactly that
+	// reason: Cohere Transcribe does eleven seconds of audio in 1.43 s on a
+	// laptop APU, eight times faster than real time, and the same model fed
+	// two-second phrases runs slower than real time. The difference is not the
+	// model, it is how much of it is spent starting up.
+	phraseSec float64
 }
 
 var captionLatencies = []captionLatency{
 	{
 		Key: "fast", Name: "Lowest delay",
-		Desc:    "Captions follow speech as closely as the model can manage. Slightly less accurate, and much less work per stream, which is what matters when several tuners are captioned at once.",
-		chunkMS: 80, rightMS: 80, cacheRight: 1,
+		Desc:    "Captions follow speech as closely as possible. On a model that reads a phrase at a time this is the expensive setting, not the cheap one: short phrases pay the same start-up cost as long ones, so it does several times the work per minute of television.",
+		chunkMS: 80, rightMS: 80, cacheRight: 1, phraseSec: 3.5,
 	},
 	{
 		Key: "balanced", Name: "Balanced (recommended)",
-		Desc:    "A little further behind for a little more accuracy. The right answer for most setups.",
-		chunkMS: 480, rightMS: 480, cacheRight: 6,
+		Desc:    "A few seconds behind, and far less work: a phrase-at-a-time model pays its start-up cost once per eight seconds instead of once per two, which is most of the difference between keeping up and not. The right answer for most setups, and the one to use when several tuners are captioned.",
+		chunkMS: 480, rightMS: 480, cacheRight: 6, phraseSec: 8,
 	},
 	{
 		Key: "accurate", Name: "Most accurate",
-		Desc:    "The model's own default: the published accuracy figures are measured here. About two seconds behind the picture, and several times the work of the lowest setting.",
-		chunkMS: -1, rightMS: -1, cacheRight: -1,
+		Desc:    "The most accurate and the most efficient, at the cost of arriving latest. Streaming models use their own published settings; a phrase-at-a-time model gets long phrases, which is how these models are measured and where they are quickest per minute of audio.",
+		chunkMS: -1, rightMS: -1, cacheRight: -1, phraseSec: 14,
 	},
 }
 
@@ -3736,6 +3771,12 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
 	sp.nThreads = int32(captionThreads(cfg))
+	// The decoder window is sized for long-form transcription by default — the
+	// log shows a thousand-token cache allocated for every run — and a caption
+	// phrase is a sentence or two. Capping it bounds that allocation without
+	// coming near what a phrase actually generates. It only narrows: a model
+	// whose own maximum is lower keeps its own.
+	sp.nCtx = captionDecoderCtx
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(key, shared)
@@ -4621,6 +4662,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	peak := 0.0
 	decoderTries := 0
 	var frames, cutThisMinute int
+	maxPhrase := findCaptionLatency(e.cfg.Latency).phraseSec
+	if maxPhrase <= 0 {
+		maxPhrase = vadMaxPhrase
+	}
 
 	for {
 		select {
@@ -4703,8 +4748,11 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 
 		phrase := float64(len(pending)) / asrSampleRate
 		ended := silenceRun >= vadSilence
-		gapped := phrase >= vadMinPhrase && silenceRun >= vadWordGap
-		forced := phrase >= vadMaxPhrase
+		// Long phrases are cheaper per second of television, so how long to let
+		// one run is the same trade as a streaming model's lookahead and is
+		// made with the same setting.
+		gapped := phrase >= maxPhrase*0.55 && silenceRun >= vadWordGap
+		forced := phrase >= maxPhrase
 		if !ended && !gapped && !forced {
 			continue
 		}
@@ -5209,6 +5257,10 @@ func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 // not generous in the other direction: it is better to over-warn about memory
 // than to have somebody discover the truth when the box stops responding.
 const (
+	// captionDecoderCtx bounds the decoder's key/value cache. Generous next to
+	// a spoken phrase — a couple of hundred words — and a fraction of the
+	// default sized for hours of audio.
+	captionDecoderCtx = 512
 	// streamOverhead covers buffers that grow with the model.
 	streamOverhead = 1.2
 	// streamWorkingMB covers the decoder cache and the fixed per-session cost.

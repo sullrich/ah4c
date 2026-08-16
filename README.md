@@ -164,6 +164,7 @@ engine that runs it, and the page downloads that engine when you pick the model:
 | **Parakeet Unified 0.6B** — continuous and punctuated, twice as accurate on English | Excellent — 1.4% | About two seconds | 731 MB | English | transcribe.cpp |
 | **Multitalker Parakeet Streaming 0.6B** — trained on people talking over each other | Very good — 2.2% | About a second | 734 MB | English | transcribe.cpp |
 | **Parakeet Realtime 120M** — just as quick, no punctuation | Basic | Under a second | 168 MB | English | parakeet.cpp |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is, high-end systems | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 | transcribe.cpp |
 | **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
@@ -185,6 +186,7 @@ running.
 | Parakeet Unified 0.6B | ~0.9 GB | ~1.9 GB | ~2.8 GB |
 | Multitalker Parakeet Streaming 0.6B | ~1.0 GB | ~1.9 GB | ~2.9 GB |
 | Parakeet Realtime 120M | ~300 MB | ~600 MB | ~900 MB |
+| **Cohere Transcribe 03-2026** | **~2.2 GB** | **~4.4 GB** | **~6.6 GB** |
 | Parakeet TDT 0.6B v3 | ~1.1 GB | ~2.2 GB | ~3.4 GB |
 | Parakeet TDT-CTC 110M | ~300 MB | ~600 MB | ~900 MB |
 
@@ -213,6 +215,15 @@ continuous, punctuated, multilingual and quick, which no other single entry mana
 neither punctuation nor capitalisation, and no setting changes that — so it is there for
 hardware that cannot spare the cores.
 
+**Delay against work.** Streaming models are trained on a menu of context windows and
+phrase-at-a-time models pay a fixed cost per call, and the same setting on the page governs
+both. It is not only a delay control: a phrase-at-a-time model handed two seconds of speech
+pays its start-up cost for two seconds of work, and handed eight pays it once for eight.
+Cohere Transcribe transcribes eleven seconds of audio in about 1.4 seconds on a laptop APU,
+eight times faster than real time, and the same model fed two-second phrases runs slower
+than real time. If captions fall behind with several tuners captioned, this setting is the
+first thing to move.
+
 **Which one to pick.** The page marks a recommendation based on what your machine can
 actually do, so it is worth reading there rather than here. In short: with a usable GPU,
 **Parakeet Unified** is the pick — roughly twice as accurate as anything else that still
@@ -220,6 +231,11 @@ captions as people speak, at the cost of about a second more delay, English only
 one, or for any language other than English, the **Nemotron** is the better answer and is
 the default. **Multitalker** is worth trying on panel shows and news desks, where models
 trained on one voice at a time tend to run two speakers into a single sentence.
+
+**Cohere Transcribe** is back on the list and marked for high-end systems, which is what it
+means: the heaviest model here, best with a GPU and enough memory for a copy per captioned
+tuner, and not something to point at a NAS. Given those and a sensible delay setting it is
+the best captioning available, and it does not read like machine transcription.
 
 Captioning several tuners at once is the thing that costs, and it costs in both memory and
 speed: each stream loads its own copy of the model and needs its own share of the processor
