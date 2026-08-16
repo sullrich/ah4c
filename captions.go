@@ -3432,14 +3432,30 @@ var (
 	txLive      = map[string]int{}
 )
 
-// acquireTxModel loads a copy of the weights for one stream.
-func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) {
+// txLoadGate allows one set of weights to be loaded at a time.
+//
+// Seven tuners starting together used to mean seven multi-gigabyte loads at
+// once, each fighting the others for memory bandwidth and all of them slower
+// for it — and on a machine that cannot hold seven copies, the first symptom is
+// the whole box slowing down rather than captions failing. Loading them one
+// after another is barely slower in total and leaves the machine usable
+// throughout. Nothing waits on this except captions.
+var txLoadGate sync.Mutex
+
+// acquireTxModel loads a copy of the weights for one stream. alive is checked
+// once the gate is held, so a stream that ended while queued never loads at all.
+func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxModel, string, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
+	txLoadGate.Lock()
+	defer txLoadGate.Unlock()
+	if alive != nil && !alive() {
+		return nil, "", fmt.Errorf("the stream ended before its model finished loading")
+	}
 	txModelLock.Lock()
 	live := txLive[key]
 	txModelLock.Unlock()
 	if live > 0 {
-		logger("[CC] Loading a second copy of %s for another stream", filepath.Base(path))
+		logger("[CC] Loading a copy of %s for another stream (%d already in memory)", filepath.Base(path), live)
 	}
 
 	// Loaded outside the lock: this takes tens of seconds for a large model and
@@ -3551,7 +3567,7 @@ type transcribeModel struct {
 }
 
 // loadTranscribe opens the weights the user downloaded.
-func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
+func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcribeModel, error) {
 	m, _ := findCaptionModel(cfg.Model)
 	variant, err := captionVariantFor(m)
 	if err != nil {
@@ -3568,13 +3584,14 @@ func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 		return nil, err
 	}
 
-	shared, key, err := acquireTxModel(weights, txBackend(variant))
+	shared, key, err := acquireTxModel(weights, txBackend(variant), alive)
 	if err != nil {
 		return nil, err
 	}
 
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
+	sp.nThreads = int32(captionThreads(cfg))
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(key, shared)
@@ -3946,7 +3963,18 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 // start does the slow part off the tune path.
 func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	began := time.Now()
-	model, err := loadRecognizer(m, cfg)
+	// The stream may end while this is queued behind another load, and a model
+	// loaded for a stream that has gone is pure waste — gigabytes and half a
+	// minute of it.
+	alive := func() bool {
+		select {
+		case <-e.closed:
+			return false
+		default:
+			return true
+		}
+	}
+	model, err := loadRecognizer(m, cfg, alive)
 	if err != nil {
 		logger("[CC] %s could not load %s: %v; this tune has no captions", e.label, m.Name, err)
 		close(e.done)
@@ -4002,9 +4030,9 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
-func loadRecognizer(m captionModel, cfg captionConfig) (recognizer, error) {
+func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
 	if runtimeOf(m) == rtTranscribe {
-		return loadTranscribe(modelPath(m), cfg)
+		return loadTranscribe(modelPath(m), cfg, alive)
 	}
 	return loadParakeet(modelPath(m), cfg.Language)
 }
@@ -4936,13 +4964,15 @@ func memoryWarning(cfg captionConfig) string {
 	if len(cfg.Tuners) > 0 {
 		which = fmt.Sprintf("the %d tuners you have selected", n)
 	}
-	return fmt.Sprintf("%s uses about %s of memory per stream, and every stream captioned at "+
+	warn := fmt.Sprintf("%s uses about %s of memory per stream, and every stream captioned at "+
 		"the same time loads its own copy. With captions on for %s that is up to %s of RAM at "+
 		"once, on top of everything else this machine is doing. Copies are not shared, because "+
 		"sharing one would make the streams wait for each other and fall behind the picture. "+
-		"Memory is released as soon as a stream ends. If this is more than you have, caption "+
-		"fewer tuners below or pick a smaller model.",
+		"Memory is released as soon as a stream ends.",
 		m.Name, each, which, total)
+
+	warn += " If this is more than you have, caption fewer tuners below or pick a smaller model."
+	return warn
 }
 
 // memoryNote describes what a model costs to run.
@@ -4996,6 +5026,39 @@ func humanMB(mb int) string {
 		return fmt.Sprintf("%.1f GB", float64(mb)/1024)
 	}
 	return fmt.Sprintf("%d MB", mb)
+}
+
+// captionThreads divides the machine between the streams that may caption at
+// once, rather than promising all of it to each of them.
+//
+// Left unset, the engine takes a sensible default for one session, which is
+// most of the cores. That is right for one session and badly wrong for seven:
+// seven sessions each starting twenty threads on a twenty thread machine is a
+// hundred and forty threads competing for it, and the throughput lost to
+// context switching swamps the work. Captions then fall behind on hardware that
+// was never short of capacity — the machine was busy fighting itself.
+//
+// A share each, floored at one. The sum stays roughly the size of the machine
+// however many tuners are captioned.
+func captionThreads(cfg captionConfig) int {
+	cpus := runtime.NumCPU()
+	streams := captionedStreams(cfg)
+	// Rounded up, so the shares cover the machine rather than leaving cores
+	// idle, and floored at two so a stream is never reduced to a single thread
+	// on a machine with cores to spare. Seven tuners on a twenty thread
+	// processor get three threads each: twenty-one in total, which is the size
+	// of the machine, instead of the hundred and forty they were getting.
+	per := (cpus + streams - 1) / streams
+	if floor := 2; per < floor && cpus >= floor {
+		per = floor
+	}
+	if per < 1 {
+		per = 1
+	}
+	if per > cpus {
+		per = cpus
+	}
+	return per
 }
 
 // captionedStreams is how many tuners could be captioning at the same time.
