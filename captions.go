@@ -433,6 +433,10 @@ type captionModel struct {
 	// a wall of unpunctuated capitals is worth knowing about in advance.
 	Streaming   bool `json:"streaming"`
 	Punctuation bool `json:"punctuation"`
+	// NoLanguage marks a model whose engine takes no language parameter at
+	// all: single-language, and passing even the right code is rejected
+	// rather than ignored.
+	NoLanguage bool `json:"-"`
 	// NeedsGPU marks a model that is not usable without graphics acceleration.
 	// It is not a preference: these are offered only where a GPU build can
 	// actually run, because the alternative is a model that loads, falls
@@ -448,7 +452,7 @@ var captionModelCatalog = []captionModel{
 	{
 		Key:  "cohere-transcribe",
 		Name: "Cohere Transcribe 03-2026",
-		Role: "The one to pick",
+		Role: "Best for one to three streams on CPU, or any number on a GPU",
 		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a phrase at a time and what it writes reads like the closed captions on a broadcast channel. One copy is shared by every tuner, and the delay setting below decides how closely it follows the picture.",
 		// It reads a whole phrase and then writes it, so the delay setting
 		// governs how far behind it runs; the batch service amortises its
@@ -456,7 +460,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "On a processor it keeps up with one or two streams; a GPU keeps it fast with many, and integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
+		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
@@ -471,31 +475,10 @@ var captionModelCatalog = []captionModel{
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 	},
 	{
-		Key:  "nemotron-realtime",
-		Name: "Nemotron 3.5 Streaming 0.6B",
-		Role: "For processors running several streams",
-		Desc: "Transcribes continuously as the audio arrives, with proper punctuation and sentence case, in 32 languages. Lighter per phrase than the big model, so a processor-only machine that falls behind on Cohere with several tuners going holds the pace here. Each tuner runs its own copy.",
-		Latency:     "Under a second",
-		Accuracy:    "Very good",
-		Benchmark:   "3.1% of words come out wrong",
-		Hardware:    "A modern multi-core processor keeps several streams live. Guidance, not a gate.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
-		File:        "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
-		SizeMB:      716,
-		Streaming:   true,
-		Punctuation: true,
-		// This family wants a full locale and refuses bare codes: en, not
-		// accepted; en-US, transcribed. The list is the documented examples of
-		// its 32 locales.
-		Languages: []string{"en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "it-IT",
-			"pt-BR", "nl-NL", "ru-RU", "zh-CN", "ja-JP", "ko-KR", "hi-IN", "ar-AR"},
-	},
-	{
 		Key:         "moonshine-tiny",
 		Name:        "Moonshine Streaming Tiny",
-		Role:        "For very small machines",
-		Desc:        "A forty-eight megabyte model that streams live and runs comfortably on a Celeron, a low-power NAS or a Raspberry Pi class board. English only. The least accurate of the three, and the only one that fits hardware this small.",
+		Role:        "Best for small systems",
+		Desc:        "A forty-eight megabyte model that streams live and runs comfortably on a Celeron, a low-power NAS or a Raspberry Pi class board. English only. Less accurate than the big model, and the only one that fits hardware this small.",
 		Latency:     "Under a second",
 		Accuracy:    "Decent",
 		Benchmark:   "4.5% of words come out wrong",
@@ -506,7 +489,10 @@ var captionModelCatalog = []captionModel{
 		SizeMB:      48,
 		Streaming:   true,
 		Punctuation: true,
-		Languages:   []string{"en"},
+		// The engine takes no language parameter for this family and rejects
+		// one rather than ignoring it; the list is for the page only.
+		NoLanguage: true,
+		Languages:  []string{"en"},
 	},
 }
 
@@ -519,12 +505,6 @@ var captionLanguageNames = map[string]string{
 	"lt": "Lithuanian", "lv": "Latvian", "mt": "Maltese", "nl": "Dutch", "pl": "Polish",
 	"pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak", "sl": "Slovenian",
 	"sv": "Swedish", "uk": "Ukrainian",
-	// The locale spellings the streaming multilingual model asks for.
-	"en-US": "English (US)", "en-GB": "English (UK)", "es-ES": "Spanish",
-	"fr-FR": "French", "de-DE": "German", "it-IT": "Italian",
-	"pt-BR": "Portuguese (Brazil)", "nl-NL": "Dutch", "ru-RU": "Russian",
-	"zh-CN": "Chinese (Mandarin)", "ja-JP": "Japanese", "ko-KR": "Korean",
-	"hi-IN": "Hindi", "ar-AR": "Arabic",
 }
 
 // modelLanguage maps the configured language onto one this model accepts. The
@@ -4568,8 +4548,10 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
 	// "auto" is this page's word for detection, not the engine's: it wants a
-	// null language for that, and would reject "auto" as a locale.
-	if l := cfg.Language; l != "" && l != "auto" {
+	// null language for that, and would reject "auto" as a locale. A family
+	// that takes no language parameter at all gets none — it rejects even
+	// the right answer.
+	if l := cfg.Language; l != "" && l != "auto" && !m.NoLanguage {
 		t.lang = append([]byte(l), 0)
 	}
 	return t, nil
@@ -6432,17 +6414,10 @@ func memoryWarning(cfg captionConfig) string {
 }
 
 // recommendedModel is the one to use on this machine.
-//
-// With a graphics card to run it on, the Unified is the pick: it is roughly
-// twice as accurate as anything else that still transcribes as the audio
-// arrives, and the extra second it spends looking ahead is the only thing it
-// costs. Without one, that accuracy is not reachable at a sensible speed and
-// the Nemotron is the better answer — it is quicker off the mark and it is the
-// only recommendation that works in a language other than English.
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return "cohere-transcribe", "The place to start on any machine: the most accurate captioning available, one copy shared by every tuner. A processor keeps up with one or two streams; with more tuners going on a processor-only box, the streaming model below holds the pace better."
+	return "cohere-transcribe", "The place to start on any machine: the most accurate captioning available, one copy shared by every tuner. One to three streams on the processor is fine; anything more, use a GPU. The tiny model below is for hardware that cannot run this one."
 }
 
 // memoryNote describes what a model costs to run.

@@ -90,7 +90,7 @@ func TestWrapWithMissingPiecesIsInstant(t *testing.T) {
 	// instantly — never probe, never download, never wait.
 	cfg := currentCaptionConfig()
 	cfg.Enabled = true
-	cfg.Model = "nemotron-realtime"
+	cfg.Model = "moonshine-tiny"
 	captionCfgLock.Lock()
 	old := captionCfg
 	captionCfg = cfg
