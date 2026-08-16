@@ -3052,7 +3052,7 @@ func initTranscribe(variant string) error {
 		}
 		logger("[CC] transcribe.cpp backends available here: %s", strings.Join(have, ", "))
 		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
-		logComputeDevices(variant)
+		logComputeDevices()
 	})
 	return txErr
 }
@@ -3062,8 +3062,7 @@ func initTranscribe(variant string) error {
 // A whole afternoon went to a backend that reported itself as Vulkan and ran at
 // a third of the processor's speed, because the device behind it was llvmpipe
 // and nothing anywhere printed a device name.
-func logComputeDevices(variant string) {
-	var gpuDescs []string
+func logComputeDevices() {
 	n := txDeviceCount()
 	for i := int32(0); i < n; i++ {
 		var d txBackendDevice
@@ -3072,41 +3071,10 @@ func logComputeDevices(variant string) {
 			continue
 		}
 		desc := txGoString(d.description)
-		kind := txGoString(d.kind)
 		logger("[CC] compute device %d: %s (%s, %d MB free of %d)",
-			i, desc, kind, d.memoryFree>>20, d.memoryTotal>>20)
+			i, desc, txGoString(d.kind), d.memoryFree>>20, d.memoryTotal>>20)
 		if softwareRenderer(desc) {
 			logger("[CC] WARNING: %q is a software renderer, not a graphics card. Transcription on it is slower than the plain processor backend. Check that the compose file passes /dev/dri through and that the Vulkan driver install finished cleanly.", desc)
-		}
-		if kind != "cpu" {
-			gpuDescs = append(gpuDescs, desc)
-		}
-	}
-	if strings.Contains(variant, "vulkan") {
-		tuneFlashFor(gpuDescs)
-	}
-}
-
-// tuneFlashFor turns the engine's flash attention off on graphics chips where
-// it is a de-optimisation.
-//
-// Flash attention is on by default and earns its name on hardware with matrix
-// cores. Intel's integrated GPUs before Arc have none, so the same code runs
-// as a scalar shader and loses badly to the plain path it replaced — the
-// difference between an iGPU that keeps up and one that crawls at a fraction
-// of the processor's speed while looking perfectly healthy. Nobody should
-// have to know any of this: the device says what it is, and the setting
-// follows. A hand-set TRANSCRIBE_NO_FLASH or TRANSCRIBE_FORCE_FLASH wins.
-func tuneFlashFor(gpuDescs []string) {
-	if os.Getenv("TRANSCRIBE_NO_FLASH") != "" || os.Getenv("TRANSCRIBE_FORCE_FLASH") != "" {
-		return
-	}
-	for _, d := range gpuDescs {
-		l := strings.ToLower(d)
-		if strings.Contains(l, "intel") && !strings.Contains(l, "arc") {
-			os.Setenv("TRANSCRIBE_NO_FLASH", "1")
-			logger("[CC] Flash attention off: %s has no matrix cores, and the plain path is faster there.", d)
-			return
 		}
 	}
 }
@@ -3369,10 +3337,16 @@ var (
 // is the right tool for a device that really does run things in parallel.
 var gpuGate = make(chan struct{}, 2)
 
-// Diagnostic toggle, read once. CC_NO_WATCHDOG=1 skips installing the abort
-// callback, which isolates its per-decode polling cost on a machine where the
-// recognizer measures slower than it should.
-var noWatchdog = os.Getenv("CC_NO_WATCHDOG") == "1"
+// The abort watchdog is off unless asked for. Installing the callback has the
+// engine poll it between decode steps, and every poll re-enters Go from the
+// engine's compute thread — a tax paid per token, on every backend, for the
+// whole life of the process. The morning this recognizer was measured fast,
+// no callback was installed; the afternoon it measured a third of that, one
+// was. A wedged decode without the watchdog costs one worker until restart —
+// the reply deadline keeps every stream alive and pressure brings up a second
+// copy — which is a fair price for full speed the rest of the time.
+// CC_WATCHDOG=1 turns the polling back on.
+var withWatchdog = os.Getenv("CC_WATCHDOG") == "1"
 
 // maxBatchAudioSec bounds how much audio one dispatch may carry. Compute time
 // follows audio length, and the run deadline is fixed: a batch allowed to grow
@@ -3507,16 +3481,10 @@ func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, 
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 	w := &txWorker{shared: shared, session: session, abort: &txAbortHandle{}}
-	// Diagnostic isolation: CC_NO_WATCHDOG=1 leaves the abort callback
-	// uninstalled, so a run cannot be interrupted but also pays no C-to-Go
-	// crossing during decode. If speed returns with this set, the watchdog
-	// polling is the tax.
-	if !noWatchdog {
-		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
-	}
 	flags := ""
-	if noWatchdog {
-		flags += ", watchdog off"
+	if withWatchdog {
+		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
+		flags = ", watchdog on"
 	}
 	logger("[CC] recognizer worker up: %s, %s backend, %d threads, decoder window at the model's own default%s",
 		filepath.Base(svc.path), txBackendName(svc.backend), threads, flags)
@@ -3905,6 +3873,14 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 
 	// Loaded outside the lock: this takes tens of seconds for a large model and
 	// holding the lock across it would stall an unrelated stream trying to stop.
+	//
+	// The file is warmed into the page cache first, in a loop that yields to
+	// tunes. The engine's own load is one native call that cannot be paused,
+	// and cold from disk it is half a minute of I/O that can land on top of a
+	// fresh tune and starve it; warmed, the same call finishes in about a
+	// second. The warm-up itself pauses whenever a tune is young, so the disk
+	// belongs to the tune whenever there is one.
+	prewarmModelFile(path)
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
@@ -4194,7 +4170,9 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
 		abort: &txAbortHandle{}, onGPU: variant != "cpu", latency: cfg.Latency}
-	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
+	if withWatchdog {
+		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
+	}
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
 	if l := cfg.Language; l != "" && l != "auto" {
@@ -4698,6 +4676,25 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	// reason is said plainly, and then it is tried again for as long as the
 	// stream is alive, backing off so a genuinely broken setup logs a line
 	// every couple of minutes rather than a scroll.
+	// Wait for every tune on the machine to be old news before anything
+	// heavy. This stream's own settle has passed (feed gated on it), but a
+	// different tuner may have started since, and a load competing with a
+	// young tune is how tunes die. A fresh tune during the wait pushes the
+	// deadline back; a fresh tune during the load itself is handled by the
+	// prewarm, which pauses for it.
+	for {
+		quiet, wait := tuneQuiet()
+		if quiet {
+			break
+		}
+		select {
+		case <-e.closed:
+			e.finish()
+			return
+		case <-time.After(wait):
+		}
+	}
+
 	var model recognizer
 	backoff := 15 * time.Second
 	for attempt := 1; ; attempt++ {
@@ -5516,18 +5513,75 @@ func (e *captionEngine) rememberTail(words []string) {
 	e.tail = append([]string(nil), words...)
 }
 
-// captionSettle is how long the stream must have been flowing before the
-// expensive part of starting captions is allowed to begin.
+// captionSettle is how long every stream on the machine must have been
+// flowing before the expensive part of starting captions is allowed to begin.
 //
-// The first byte is not that signal, and treating it as one failed a real
-// tune: the DVR probes the stream for its first several seconds before it
-// calls the tune good, and loading gigabytes of weights competes for the
-// disk and memory bandwidth the probe window is measuring. Ten seconds of
-// continuous flow is past any probe and comfortably inside the tune timeout,
-// so the load lands on a stream that has already won. It costs ten more
-// seconds before the first caption on a cold start, and nothing on a warm
-// one where the model is already resident.
-const captionSettle = 10 * time.Second
+// The first byte is not that signal, and neither was ten seconds: a load that
+// began ten seconds into a real tune still killed it at thirty-two. The DVR
+// judges a tune over its whole first half minute — probing, buffering,
+// deciding — and a gigabytes-long weights load competes for the disk and
+// memory bandwidth that judgment is measuring, wherever in that window it
+// runs. So the load waits out the entire window with margin, and it waits on
+// every tuner, not just its own: the machine is shared, and a load for tuner
+// one starving a fresh tune on tuner two is the same failure wearing a
+// different number. It costs under a minute before the first caption on a
+// cold start, and nothing on a warm one where the model is already resident.
+const captionSettle = 45 * time.Second
+
+// lastTuneStart is when a tune last began anywhere on the machine, as unix
+// nanoseconds. Written on every tune, captioned or not; read by loads waiting
+// for the machine to go quiet.
+var lastTuneStart int64
+
+// captionTuneStarting marks that a tune is beginning somewhere on the
+// machine, which postpones any heavy caption work until it has settled.
+func captionTuneStarting() {
+	atomic.StoreInt64(&lastTuneStart, time.Now().UnixNano())
+}
+
+// prewarmModelFile reads the weights into the page cache, pausing whenever a
+// tune is young so the disk always belongs to the tune. Best effort: any
+// error just means the engine's own load reads from disk instead.
+func prewarmModelFile(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	buf := make([]byte, 8<<20)
+	began := time.Now()
+	paused := false
+	for {
+		if quiet, wait := tuneQuiet(); !quiet {
+			if !paused {
+				paused = true
+				logger("[CC] Pausing the model warm-up for a tune in progress")
+			}
+			time.Sleep(wait)
+			continue
+		}
+		paused = false
+		n, err := f.Read(buf)
+		if err != nil || n == 0 {
+			break
+		}
+	}
+	logger("[CC] Warmed %s into memory in %s", filepath.Base(path), time.Since(began).Round(time.Millisecond))
+}
+
+// tuneQuiet reports whether the newest tune on the machine is old enough for
+// heavy work, and if not, how long until it would be.
+func tuneQuiet() (bool, time.Duration) {
+	last := atomic.LoadInt64(&lastTuneStart)
+	if last == 0 {
+		return true, 0
+	}
+	age := time.Since(time.Unix(0, last))
+	if age >= captionSettle {
+		return true, 0
+	}
+	return false, captionSettle - age
+}
 
 // feed offers stream bytes to the recognizer without blocking.
 func (e *captionEngine) feed(b []byte) {
@@ -6053,20 +6107,64 @@ func atLeastOne(n int) int {
 	return n
 }
 
-// captionComputeThreads is the shared recognizer's allowance: most of the
-// machine, with a quarter (at least two threads) held back for the ffmpeg
-// decoders and the proxy — the things captions exist to decorate, not to cost.
+// captionComputeThreads is the shared recognizer's allowance: the machine's
+// performance cores, one thread per physical core.
+//
+// More was tried and measured worse. ggml synchronises its workers with spin
+// barriers, so every thread waits for the slowest at every step: mix in
+// hyperthread siblings and the barriers pay for shared execution units; mix
+// in a hybrid chip's efficiency cores and every op finishes at E-core speed.
+// The fast configuration was a handful of threads landing on performance
+// cores — which is also what leaves the efficiency cores free for the ffmpeg
+// decoders and the proxy, the things captions decorate rather than compete
+// with.
 func captionComputeThreads() int {
-	cpus := availableCPUs()
-	reserve := cpus / 4
-	if reserve < 2 {
-		reserve = 2
+	n := performanceCores()
+	if reserve := availableCPUs() / 4; n > availableCPUs()-reserve {
+		n = availableCPUs() - reserve
 	}
-	n := cpus - reserve
 	if n < 2 {
 		n = 2
 	}
 	return n
+}
+
+// performanceCores counts physical performance cores. On an Intel hybrid chip
+// the kernel lists the P-cores' logical CPUs under cpu_core; elsewhere every
+// core is a performance core and the count is physical rather than logical.
+// Both fall back conservatively: half the logical CPUs.
+func performanceCores() int {
+	if b, err := os.ReadFile("/sys/devices/cpu_core/cpus"); err == nil {
+		if n := countCPUList(strings.TrimSpace(string(b))); n > 0 {
+			// The list is logical CPUs; P-cores have two apiece.
+			return (n + 1) / 2
+		}
+	}
+	return (availableCPUs() + 1) / 2
+}
+
+// countCPUList counts entries in a kernel cpu list like "0-15" or "0-7,16-19".
+func countCPUList(s string) int {
+	total := 0
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if lo, hi, ok := strings.Cut(part, "-"); ok {
+			a, err1 := strconv.Atoi(lo)
+			b, err2 := strconv.Atoi(hi)
+			if err1 != nil || err2 != nil || b < a {
+				return 0
+			}
+			total += b - a + 1
+		} else if _, err := strconv.Atoi(part); err == nil {
+			total++
+		} else {
+			return 0
+		}
+	}
+	return total
 }
 
 // captionedStreams is how many tuners could be captioning at the same time.
