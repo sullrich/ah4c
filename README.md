@@ -77,9 +77,10 @@ leaving the box.
   `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
-- **No GPU, no /dev/dri, no hardware encoder.** Every model runs faster than real time on
-  an ordinary CPU. A GPU build is offered if you have one and buys headroom for captioning
-  several tuners at once, but nothing here requires it.
+- **No GPU, no /dev/dri, no hardware encoder.** Nothing here requires a graphics card:
+  three of the four models run faster than real time on an ordinary CPU, and the fourth is
+  the high-end choice that wants one. The backend is chosen automatically — the best build
+  this container can actually load — and the log says which one each model really runs on.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
 The page offers an engine plus your choice of model. Nothing is bundled and nothing is
@@ -153,67 +154,49 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models**, from Hugging Face — the Parakeet ones from
-[mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf), the rest from
-the [handy-computer](https://huggingface.co/handy-computer) collection. Each names the
-engine that runs it, and the page downloads that engine when you pick the model:
+**Models** — four, one per job. Each card on the page names the slot it fills, the engine
+that runs it, and what it costs; picking a model fetches the right engine automatically.
 
-| Model | Accuracy | Delay | Size | Languages | Engine |
-| --- | --- | --- | --- | --- | --- |
-| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, punctuated, sentence case | Good — 3.0% | Under a second | 938 MB | 25 | parakeet.cpp |
-| **Parakeet Unified 0.6B** — continuous and punctuated, twice as accurate on English | Excellent — 1.4% | About two seconds | 731 MB | English | transcribe.cpp |
-| **Multitalker Parakeet Streaming 0.6B** — trained on people talking over each other | Very good — 2.2% | About a second | 734 MB | English | transcribe.cpp |
-| **Parakeet Realtime 120M** — just as quick, no punctuation | Basic | Under a second | 168 MB | English | parakeet.cpp |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is, high-end systems | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 | transcribe.cpp |
-| **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
-| **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
-
-> **Watch the memory.** Every stream captioned at the same time loads its own copy of the
-> model, so captioning several tuners at once uses several copies — roughly a gigabyte per
-> stream for most of these. It is released as soon as a stream ends, so this is a ceiling
-> reached while streams are actually running, not a permanent cost. The Closed Captions
-> page works the figure out for your own tuner count.
-
-**Memory.** Every stream being captioned at the same time loads its own copy of the model.
-Copies are not shared between streams: the engines decode one thing at a time per copy, so
-sharing would make concurrent streams take turns and fall behind live audio. Memory is
-released the moment a stream ends, so nothing stays committed for a stream that is not
-running.
-
-| Model | Per stream | 2 tuners at once | 3 tuners at once |
-| --- | --- | --- | --- |
-| Nemotron 3.5 Streaming 0.6B *(default)* | ~1.2 GB | ~2.3 GB | ~3.5 GB |
-| Parakeet Unified 0.6B | ~0.9 GB | ~1.9 GB | ~2.8 GB |
-| Multitalker Parakeet Streaming 0.6B | ~1.0 GB | ~1.9 GB | ~2.9 GB |
-| Parakeet Realtime 120M | ~300 MB | ~600 MB | ~900 MB |
-| **Cohere Transcribe 03-2026** | **~2.2 GB** | **~4.4 GB** | **~6.6 GB** |
-| Parakeet TDT 0.6B v3 | ~1.1 GB | ~2.2 GB | ~3.4 GB |
-| Parakeet TDT-CTC 110M | ~300 MB | ~600 MB | ~900 MB |
-
-These are estimates, not measurements: the model repositories publish file sizes but not
-runtime memory, and a loaded model needs its weights plus the decoder cache, the encoder's
-activations and the engine's working buffers. Reckon on rather more than the download size —
-a second stream of a 2.4 GB model was measured at about 3 GB resident. On a GPU build the
-weights sit in video memory, which on integrated graphics is the same pool.
-
-If memory is tight: caption fewer tuners (there is a per-tuner setting on the page), or
-choose a smaller model. Captioning one or two tuners and leaving the rest uncaptioned is a
-perfectly reasonable setup.
+| Model | Role | Accuracy | Delay | Download | Languages | Engine |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Nemotron 3.5 Streaming 0.6B** *(default, recommended)* — continuous, punctuated, sentence case | All-round | Good — 3.0% | Under a second | 938 MB | 25 | parakeet.cpp |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | High-end | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 | transcribe.cpp |
+| **Parakeet TDT 0.6B v3** — waits for a phrase, strongest outside English | Multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
+| **Parakeet Realtime 120M** — quick and tiny, no punctuation | Low-end | Basic | Under a second | 168 MB | English | parakeet.cpp |
 
 Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
 publish. Read it as a ranking rather than a promise: it is clean read speech, and live
-television is harder than that for every model in the list. The two entries without a
-figure have no published number on it, and carry a rating rather than a guess.
+television is harder than that for every model here. An entry without a figure has no
+published number on that benchmark, and carries a rating rather than a guess.
 
-The streaming models transcribe as the audio arrives rather than waiting for a phrase to
-finish, which is the difference between captions about a second behind and captions three
-or four seconds behind.
+**Memory.** Two arrangements, and the page states which applies on every card.
 
-Punctuation is the other axis, and the reason the Nemotron model is the default: it is
-continuous, punctuated, multilingual and quick, which no other single entry manages. The
-120M produces no punctuation at all — NVIDIA's model card is explicit that it outputs
-neither punctuation nor capitalisation, and no setting changes that — so it is there for
-hardware that cannot spare the cores.
+Most models load one copy **per captioning stream**, freed the moment that stream ends.
+Copies are not shared, because a copy decodes one thing at a time: sharing would make
+concurrent streams take turns and fall behind live audio.
+
+**Cohere Transcribe is the exception: one copy, shared.** Every tuner hands its phrases to
+the same copy through the engine's batch interface, which decodes them together in a single
+dispatch. It is loaded when the first stream needs it and freed when the last one ends —
+about 2.2 GB total however many tuners caption, which at several tuners makes the heaviest
+model the cheapest one in memory.
+
+| Model | Per stream | 5 tuners at once |
+| --- | --- | --- |
+| Nemotron 3.5 Streaming 0.6B | ~1.2 GB | ~6.0 GB |
+| **Cohere Transcribe 03-2026** | shared | **~2.2 GB total** |
+| Parakeet TDT 0.6B v3 | ~1.1 GB | ~5.7 GB |
+| Parakeet Realtime 120M | ~300 MB | ~1.5 GB |
+
+These are estimates: the model repositories publish file sizes, not runtime memory, and a
+loaded model needs its weights plus the decoder cache and the engine's working buffers —
+reckon on a quarter or so more than the download. The page computes the total for your own
+tuner count and warns when it gets large. If memory is tight, caption fewer tuners (there
+is a per-tuner setting) or pick a smaller model.
+
+Nothing is loaded until a tune is already playing: model loading starts when the first
+bytes of video arrive, never before, so captions can delay themselves but never a tune. A
+start that fails says why in the log and keeps retrying while the stream plays.
 
 **Delay against work.** Streaming models are trained on a menu of context windows and
 phrase-at-a-time models pay a fixed cost per call, and the same setting on the page governs
@@ -224,23 +207,13 @@ eight times faster than real time, and the same model fed two-second phrases run
 than real time. If captions fall behind with several tuners captioned, this setting is the
 first thing to move.
 
-**Which one to pick.** The page marks a recommendation based on what your machine can
-actually do, so it is worth reading there rather than here. In short: with a usable GPU,
-**Parakeet Unified** is the pick — roughly twice as accurate as anything else that still
-captions as people speak, at the cost of about a second more delay, English only. Without
-one, or for any language other than English, the **Nemotron** is the better answer and is
-the default. **Multitalker** is worth trying on panel shows and news desks, where models
-trained on one voice at a time tend to run two speakers into a single sentence.
-
-**Cohere Transcribe** is back on the list and marked for high-end systems, which is what it
-means: the heaviest model here, best with a GPU and enough memory for a copy per captioned
-tuner, and not something to point at a NAS. Given those and a sensible delay setting it is
-the best captioning available, and it does not read like machine transcription.
-
-Captioning several tuners at once is the thing that costs, and it costs in both memory and
-speed: each stream loads its own copy of the model and needs its own share of the processor
-or graphics card. If captions start arriving late, or the log reports dropped phrases,
-caption fewer tuners or move to a lighter model.
+**Which one to pick.** The **Nemotron**: it is the recommendation on every machine, because
+it keeps pace with live speech on a processor or a GPU alike, writes punctuation and
+sentence case, and handles every supported language. The others are for when you know what
+you want instead: **Cohere Transcribe** for the best captioning available on a machine with
+the muscle for it — a GPU is strongly recommended, and its shared memory means many tuners
+cost no more than one; **TDT v3** when accuracy outside English matters more than latency;
+the **120M** for a NAS or a Pi, accepting that it writes no punctuation.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That
