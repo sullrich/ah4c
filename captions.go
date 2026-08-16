@@ -3494,22 +3494,24 @@ func (t *transcribeModel) leaveGPU(held bool) {
 	}
 }
 
-// txLoadGate allows one set of weights to be loaded at a time.
+// txLoadGate limits how many sets of weights load at once.
 //
-// Seven tuners starting together used to mean seven multi-gigabyte loads at
-// once, each fighting the others for memory bandwidth and all of them slower
-// for it — and on a machine that cannot hold seven copies, the first symptom is
-// the whole box slowing down rather than captions failing. Loading them one
-// after another is barely slower in total and leaves the machine usable
-// throughout. Nothing waits on this except captions.
-var txLoadGate sync.Mutex
+// Seven tuners starting together meant seven multi-gigabyte loads at once, each
+// fighting the others for memory bandwidth and all of them slower for it. One
+// at a time fixed that and introduced a worse problem: the loads queued, and
+// the last tuner to start waited for the six in front of it, which is most of a
+// minute before its captions appear.
+//
+// Two at a time is the compromise. Memory bandwidth is not saturated by a pair,
+// and the queue is half as long. Nothing waits on this except captions.
+var txLoadGate = make(chan struct{}, 2)
 
 // acquireTxModel loads a copy of the weights for one stream. alive is checked
 // once the gate is held, so a stream that ended while queued never loads at all.
 func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxModel, string, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
-	txLoadGate.Lock()
-	defer txLoadGate.Unlock()
+	txLoadGate <- struct{}{}
+	defer func() { <-txLoadGate }()
 	if alive != nil && !alive() {
 		return nil, "", fmt.Errorf("the stream ended before its model finished loading")
 	}
@@ -3829,22 +3831,39 @@ func (t *transcribeModel) runParams() txRunParams {
 // single call can take the captions with it. Every entry point that decodes
 // uses them, not just the offline one: a streaming feed that never returns
 // stops captions just as completely.
+// arm brackets a decode: the model's own lock, a place on the accelerator, and
+// the run deadline. armSetup is the same without the accelerator, for the calls
+// that open and close a stream.
+//
+// Opening a session is bookkeeping, not compute, and making it queue behind two
+// running decodes was making a new stream wait seconds for a place it did not
+// need — with phrases now up to fourteen seconds long, sometimes a great many
+// seconds. Starting a stream should never wait on other streams' work.
 func (t *transcribeModel) arm() {
+	t.armSetup()
+	t.heldGPU = t.enterGPU()
+}
+
+func (t *transcribeModel) armSetup() {
 	if t.shared != nil {
 		t.shared.compute.Lock()
 	}
-	t.heldGPU = t.enterGPU()
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
 }
 
-func (t *transcribeModel) disarm() {
+func (t *transcribeModel) disarmSetup() {
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, 0)
 	runtime.KeepAlive(t.abort)
-	t.leaveGPU(t.heldGPU)
-	t.heldGPU = false
 	if t.shared != nil {
 		t.shared.compute.Unlock()
 	}
+}
+
+func (t *transcribeModel) disarm() {
+	held := t.heldGPU
+	t.heldGPU = false
+	t.leaveGPU(held)
+	t.disarmSetup()
 }
 
 // transcribe runs one utterance of 16 kHz mono audio through the model. This is
@@ -3916,9 +3935,9 @@ func (t *transcribeModel) beginStreamLocked() error {
 	// prompt-conditioned model is told which locale to expect rather than
 	// having to work it out from the first few seconds of audio.
 	rp := t.runParams()
-	t.arm()
+	t.armSetup()
 	st := txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
-	t.disarm()
+	t.disarmSetup()
 	runtime.KeepAlive(t.lang)
 	runtime.KeepAlive(&pkExt)
 	runtime.KeepAlive(&bufExt)
@@ -3928,9 +3947,9 @@ func (t *transcribeModel) beginStreamLocked() error {
 		// model's own rather than leaving the stream unopened.
 		logger("[CC] %s window not available on this model (%s); using its default", t.latency, txStatusString(st))
 		sp.family = 0
-		t.arm()
+		t.armSetup()
 		st = txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
-		t.disarm()
+		t.disarmSetup()
 	}
 	if st != txOK {
 		return fmt.Errorf("%s", txStatusString(st))
@@ -3979,7 +3998,7 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	if !u.committedChanged {
 		return nil
 	}
-	return t.takeCommitted()
+	return t.takeCommitted(false)
 }
 
 // idleFlush ends the utterance and opens a new one, which is how the last words
@@ -4002,7 +4021,7 @@ func (t *transcribeModel) idleFlush() *streamResult {
 	t.disarm()
 	var r *streamResult
 	if st == txOK {
-		r = t.takeCommitted()
+		r = t.takeCommitted(true)
 	}
 	t.streaming = false
 	if err := t.beginStreamLocked(); err != nil {
@@ -4033,7 +4052,7 @@ func (t *transcribeModel) finishStream() *streamResult {
 	if st != txOK {
 		return nil
 	}
-	r := t.takeCommitted()
+	r := t.takeCommitted(true)
 	if r != nil {
 		r.EOU = 1
 	}
@@ -4052,7 +4071,7 @@ func (t *transcribeModel) finishStream() *streamResult {
 // The caller must hold the lock. The returned pointers belong to the session
 // and are only valid until the next call, which is why the text is copied out
 // before anything else happens.
-func (t *transcribeModel) takeCommitted() *streamResult {
+func (t *transcribeModel) takeCommitted(final bool) *streamResult {
 	var view txStreamText
 	txStreamTextInit(unsafe.Pointer(&view))
 	if st := txStreamGetText(t.session, unsafe.Pointer(&view)); st != txOK {
@@ -4065,11 +4084,36 @@ func (t *transcribeModel) takeCommitted() *streamResult {
 		// the end of a shorter string.
 		t.committed = 0
 	}
-	fresh := strings.TrimSpace(full[t.committed:])
-	t.committed = len(full)
+	tail := full[t.committed:]
+
+	// Commit arrives as bytes, not as words, so the end of it is very often
+	// half a word: "broadcast" appears as "broad" and then, a moment later,
+	// "cast". Taking whatever has arrived and splitting it on spaces therefore
+	// put a caption on screen reading "broad cast", one fragment at a time —
+	// which is what the transcript looked like, and why the model appeared to
+	// have lost its accuracy when it had not.
+	//
+	// So only whole words are taken: everything up to the last space, with any
+	// trailing fragment left where it is until the rest of it arrives. On the
+	// last call of a stream there is no more coming, and the remainder is a
+	// whole word by definition.
+	fresh := tail
+	if !final {
+		cut := strings.LastIndexAny(tail, " \t\r\n")
+		if cut < 0 {
+			// Nothing but a fragment so far. Leave it for next time.
+			return nil
+		}
+		fresh = tail[:cut]
+		t.committed += cut
+	} else {
+		t.committed = len(full)
+	}
+	fresh = strings.TrimSpace(fresh)
 	if fresh == "" {
 		return nil
 	}
+
 	fields := strings.Fields(fresh)
 	r := &streamResult{Text: fresh, Words: make([]streamWord, 0, len(fields))}
 	for _, w := range fields {
@@ -4121,6 +4165,12 @@ type captionEngine struct {
 	// mu guards ffmpeg and audioIn, which are replaced when the decoder is
 	// restarted underneath the goroutine writing to it.
 	mu sync.Mutex
+	// cfg and model2 are held until the first stream bytes arrive, when the
+	// expensive part of starting up is finally allowed to happen.
+	cfg2      captionConfig
+	model2    captionModel
+	startOnce sync.Once
+	begun     int64
 
 	// done is closed when the listening goroutine has returned. Nothing the
 	// engine owns may be freed before then: the recognizer is native code, and
@@ -4173,8 +4223,22 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		closed:  make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	go e.start(cfg, m)
+	// Deliberately not started here. Loading weights moves gigabytes through
+	// memory, and doing that while the tuner is still negotiating slows the
+	// thing that actually matters — even on its own goroutine, the bandwidth is
+	// shared. The load waits until the stream is delivering video, which is the
+	// moment the tune is known to have worked and the point at which nothing is
+	// waiting on the machine any more.
+	e.cfg2, e.model2 = cfg, m
 	return e, nil
+}
+
+// begin starts the slow work, once, when the first stream bytes arrive.
+func (e *captionEngine) begin() {
+	e.startOnce.Do(func() {
+		atomic.StoreInt64(&e.begun, 1)
+		go e.start(e.cfg2, e.model2)
+	})
 }
 
 // start does the slow part off the tune path.
@@ -4901,6 +4965,9 @@ func (e *captionEngine) rememberTail(words []string) {
 
 // feed offers stream bytes to the recognizer without blocking.
 func (e *captionEngine) feed(b []byte) {
+	// The first bytes of video are the signal that the tune succeeded and the
+	// machine is free to do something expensive.
+	e.begin()
 	cp := make([]byte, len(b))
 	copy(cp, b)
 	select {
@@ -4930,6 +4997,12 @@ func (e *captionEngine) Close() {
 		// Wait for the listener to finish before releasing anything it might be
 		// inside. If it somehow does not stop, leaking the session is far
 		// better than freeing it from under a call in flight.
+		if atomic.LoadInt64(&e.begun) == 0 {
+			// Nothing was ever started, so there is nothing to wait for. This
+			// is an ordinary outcome: a tune that failed delivers no bytes.
+			e.startOnce.Do(func() {})
+			close(e.done)
+		}
 		stopped := true
 		select {
 		case <-e.done:
