@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -1211,6 +1212,9 @@ func startDriverDownload(kind string) error {
 			logger("[CC] %s could not be set up: %v", g.Name, err)
 		} else {
 			logger("[CC] %s is ready", g.Name)
+			// Whether a GPU build can load is cached, and installing a
+			// driver is the one moment that answer changes.
+			forgetEngineUsable()
 			// Record that this driver is wanted. Downloading it is the only
 			// point at which the intent is expressed: the engine picker will
 			// not offer a GPU build until the driver already loads, so waiting
@@ -2776,7 +2780,14 @@ func initParakeet() error {
 			pkErr = err
 			return
 		}
-		handle, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		// Opened privately rather than globally. libparakeet.so embeds its own
+		// ggml and exports eight hundred ggml_* symbols; transcribe.cpp imports
+		// the same names for its own build. Published process-wide, whichever
+		// engine loaded first would capture the other's compute layer, which is
+		// a class of bug nobody should ever have to debug. Neither engine needs
+		// to be global: their backend modules resolve through their own
+		// DT_NEEDED entries and an $ORIGIN runpath.
+		handle, err := purego.Dlopen(abs, purego.RTLD_NOW)
 		if err != nil {
 			pkErr = fmt.Errorf("opening %s: %w", abs, err)
 			return
@@ -2922,6 +2933,12 @@ func (p *parakeet) beginStream(language string) error {
 			return fmt.Errorf("%s", msg)
 		}
 		return fmt.Errorf("this model does not support streaming")
+	}
+	if p.stream != 0 {
+		// A session can be opened more than once now that the decoder is
+		// restarted after a failure, and each one owns an encoder cache. Losing
+		// the handle would leak that cache on every restart of a long capture.
+		pkStreamFree(p.stream)
 	}
 	p.stream = s
 	return nil
@@ -3156,6 +3173,8 @@ var (
 	txStreamFinalize func(session uintptr, update unsafe.Pointer) int32
 	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
 
+	txSetAbortCallback  func(session uintptr, cb uintptr, userData unsafe.Pointer)
+	txWasAborted        func(session uintptr) bool
 	txLoadParamsInit    func(p unsafe.Pointer)
 	txSessionParamsInit func(p unsafe.Pointer)
 	txRunParamsInit     func(p unsafe.Pointer)
@@ -3187,7 +3206,8 @@ func initTranscribe(dir string) error {
 			txErr = err
 			return
 		}
-		handle, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		// Private, for the reason given in initParakeet.
+		handle, err := purego.Dlopen(abs, purego.RTLD_NOW)
 		if err != nil || handle == 0 {
 			txErr = fmt.Errorf("opening %s: %w", abs, err)
 			return
@@ -3209,6 +3229,8 @@ func initTranscribe(dir string) error {
 		purego.RegisterLibFunc(&txSessionFree, handle, "transcribe_session_free")
 		purego.RegisterLibFunc(&txRun, handle, "transcribe_run")
 		purego.RegisterLibFunc(&txFullText, handle, "transcribe_full_text")
+		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
+		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
 		purego.RegisterLibFunc(&txStreamBegin, handle, "transcribe_stream_begin")
 		purego.RegisterLibFunc(&txStreamFeed, handle, "transcribe_stream_feed")
 		purego.RegisterLibFunc(&txStreamFinalize, handle, "transcribe_stream_finalize")
@@ -3258,6 +3280,22 @@ func txCheckABI() error {
 
 // txBackend maps the processor choice on the page onto the backend the engine
 // is asked for.
+// gpuVariant is the best GPU build this container can actually load, or "" if
+// there is none.
+func gpuVariant() string {
+	nodes := renderNodes()
+	for _, v := range engineVariants {
+		if v.Key == "cpu" || !engineUsable(v) {
+			continue
+		}
+		if v.Key == "vulkan" && len(nodes) == 0 {
+			continue
+		}
+		return v.Key
+	}
+	return ""
+}
+
 func txBackend(variant string) int32 {
 	switch variant {
 	case "vulkan":
@@ -3273,10 +3311,108 @@ func txBackend(variant string) int32 {
 	return txBackendCPU
 }
 
+// A recognition that never returns used to take the captions with it: the
+// recognizer goroutine is the only thing calling the model, so one call that
+// does not come back means no captions for the rest of the tune, with the
+// picture running on perfectly and nothing on screen changing. The engine
+// offers a way out — a callback it polls during a run, which aborts it when it
+// returns true — so every run is given a deadline.
+//
+// The deadline is generous. It is not there to hurry a slow machine along; it
+// is there so that "slow" can never become "stopped".
+const txRunDeadline = 12 * time.Second
+
+var (
+	txAbortOnce sync.Once
+	txAbortPtr  uintptr
+)
+
+// txAbortHandle is what the callback is handed. It holds no Go pointers, so its
+// address can be given to C and read back from the run thread safely.
+type txAbortHandle struct{ deadlineUnixNano int64 }
+
+// txAbortCallback returns the C function pointer the engine polls, creating it
+// once: purego callbacks come from a small fixed pool and must not be made per
+// session.
+func txAbortCallback() uintptr {
+	txAbortOnce.Do(func() {
+		txAbortPtr = purego.NewCallback(func(userData unsafe.Pointer) bool {
+			if userData == nil {
+				return false
+			}
+			d := atomic.LoadInt64((*int64)(userData))
+			return d != 0 && time.Now().UnixNano() > d
+		})
+	})
+	return txAbortPtr
+}
+
+// Loaded weights are shared between tuners; sessions are not.
+//
+// The engine separates the two deliberately — a model is read-only once loaded,
+// and a session is the decoder state one caller needs — so captioning a second
+// stream needs a second session but not a second copy of the weights. Loading
+// per tuner instead meant Cohere Transcribe cost 2.4 GB every time another
+// stream started, so three tuners wanted seven gigabytes of a machine that
+// needed 2.4. The saving is the whole model: what a session adds is its own
+// decoder cache, which is megabytes.
+//
+// Reference counted, because the last tuner to stop has to be the one that
+// frees it, and which tuner that will be is not known in advance.
+type sharedTxModel struct {
+	handle uintptr
+	refs   int
+}
+
+var (
+	txModelLock sync.Mutex
+	txModels    = map[string]*sharedTxModel{}
+)
+
+// acquireTxModel returns the weights, loading them only if nobody else has.
+// The backend is part of the key: the same file loaded for the processor and
+// for a GPU are different objects to the engine.
+func acquireTxModel(path string, backend int32) (uintptr, string, error) {
+	key := fmt.Sprintf("%s|%d", path, backend)
+	txModelLock.Lock()
+	defer txModelLock.Unlock()
+	if m, ok := txModels[key]; ok {
+		m.refs++
+		logger("[CC] Reusing %s already in memory (%d streams now sharing it)", filepath.Base(path), m.refs)
+		return m.handle, key, nil
+	}
+	load := txLoadParams{}
+	txLoadParamsInit(unsafe.Pointer(&load))
+	load.backend = backend
+	var h uintptr
+	if st := txModelLoadFile(path, unsafe.Pointer(&load), unsafe.Pointer(&h)); st != txOK || h == 0 {
+		return 0, "", fmt.Errorf("loading %s: %s", filepath.Base(path), txStatusString(st))
+	}
+	txModels[key] = &sharedTxModel{handle: h, refs: 1}
+	return h, key, nil
+}
+
+// releaseTxModel drops one user's claim, freeing the weights with the last.
+func releaseTxModel(key string) {
+	txModelLock.Lock()
+	defer txModelLock.Unlock()
+	m, ok := txModels[key]
+	if !ok {
+		return
+	}
+	if m.refs--; m.refs > 0 {
+		return
+	}
+	delete(txModels, key)
+	txModelFree(m.handle)
+}
+
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
-	model   uintptr
-	session uintptr
+	model uintptr
+	// modelKey identifies the shared weights this session borrows.
+	modelKey string
+	session  uintptr
 	// lang is the NUL-terminated language code handed to the engine. It lives
 	// on the heap for the life of the model for the same reason parakeet's
 	// event mask does: a pointer into a goroutine stack is not safe to give to
@@ -3288,11 +3424,27 @@ type transcribeModel struct {
 	committed int
 	streaming bool
 	mu        sync.Mutex // the session holds decoder state: one call at a time
+	// abort carries the current run's deadline to the engine's callback. It is
+	// allocated once and never moves for the life of the model.
+	abort *txAbortHandle
 }
 
 // loadTranscribe opens the weights the user downloaded.
 func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 	variant := currentEngineVariant()
+	// A model that cannot work on a processor must not be given the processor
+	// because that is what the engine picker happens to say. The picker
+	// defaults to CPU and most people never touch it, so a GPU-only model
+	// otherwise passed the gate — which only asks whether a GPU exists — and
+	// then loaded strictly on the processor, where it falls behind live audio
+	// and drops most of what is said. That is the exact failure the gate is
+	// there to prevent, arrived at by a different route.
+	if m, ok := findCaptionModel(cfg.Model); ok && m.NeedsGPU && variant == "cpu" {
+		if g := gpuVariant(); g != "" {
+			logger("[CC] %s needs a GPU, so it is being loaded on the %s build rather than the processor", m.Name, g)
+			variant = g
+		}
+	}
 	dir := runtimeDirFor(rtTranscribe, variant)
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -3309,24 +3461,21 @@ func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 		return nil, err
 	}
 
-	load := txLoadParams{}
-	txLoadParamsInit(unsafe.Pointer(&load))
-	load.backend = txBackend(variant)
-
-	var model uintptr
-	if st := txModelLoadFile(weights, unsafe.Pointer(&load), unsafe.Pointer(&model)); st != txOK || model == 0 {
-		return nil, fmt.Errorf("loading %s: %s", filepath.Base(gguf), txStatusString(st))
+	model, key, err := acquireTxModel(weights, txBackend(variant))
+	if err != nil {
+		return nil, err
 	}
 
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
 	var session uintptr
 	if st := txSessionInit(model, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
-		txModelFree(model)
+		releaseTxModel(key)
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 
-	t := &transcribeModel{model: model, session: session}
+	t := &transcribeModel{model: model, modelKey: key, session: session, abort: &txAbortHandle{}}
+	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
 	if l := cfg.Language; l != "" && l != "auto" {
@@ -3343,7 +3492,9 @@ func (t *transcribeModel) Close() {
 		t.session = 0
 	}
 	if t.model != 0 {
-		txModelFree(t.model)
+		// The weights may be in use by another tuner, so this drops a claim
+		// rather than freeing outright.
+		releaseTxModel(t.modelKey)
 		t.model = 0
 	}
 }
@@ -3364,6 +3515,19 @@ func (t *transcribeModel) runParams() txRunParams {
 	return p
 }
 
+// arm and disarm bracket a call into the engine with the run deadline, so no
+// single call can take the captions with it. Every entry point that decodes
+// uses them, not just the offline one: a streaming feed that never returns
+// stops captions just as completely.
+func (t *transcribeModel) arm() {
+	atomic.StoreInt64(&t.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
+}
+
+func (t *transcribeModel) disarm() {
+	atomic.StoreInt64(&t.abort.deadlineUnixNano, 0)
+	runtime.KeepAlive(t.abort)
+}
+
 // transcribe runs one utterance of 16 kHz mono audio through the model. This is
 // the path Cohere Transcribe takes: it reads a whole phrase and writes it out,
 // which is why it cannot be as immediate as a streaming model however fast the
@@ -3378,12 +3542,21 @@ func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
 		return "", fmt.Errorf("model is closed")
 	}
 	p := t.runParams()
+	t.arm()
 	st := txRun(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&p))
+	t.disarm()
 	// The engine reads the samples during the call, so keep them reachable for
 	// its duration rather than trusting the argument alone to pin them.
 	runtime.KeepAlive(pcm)
 	runtime.KeepAlive(t.lang)
+	runtime.KeepAlive(t.abort)
 	if st != txOK {
+		if txWasAborted(t.session) {
+			// Whatever went wrong with this phrase, the next one gets a clean
+			// try. This is the difference between one lost sentence and a
+			// recording with no captions after the first ten seconds.
+			return "", fmt.Errorf("gave up on this phrase after %s", txRunDeadline)
+		}
 		return "", fmt.Errorf("%s", txStatusString(st))
 	}
 	return cleanRecognized(txFullText(t.session)), nil
@@ -3394,6 +3567,11 @@ func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
 func (t *transcribeModel) beginStream(language string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.beginStreamLocked()
+}
+
+// beginStreamLocked opens the session with the lock already held.
+func (t *transcribeModel) beginStreamLocked() error {
 	if t.session == 0 {
 		return fmt.Errorf("model is closed")
 	}
@@ -3422,11 +3600,26 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	if t.session == 0 || !t.streaming {
 		return nil
 	}
+	if !t.streaming {
+		// The session died and the last attempt to reopen it failed. Try again
+		// rather than decoding audio into nothing for the rest of the tune: a
+		// stream that cannot be reopened once may well open on the next try,
+		// and the alternative is captions that never come back.
+		if err := t.beginStreamLocked(); err != nil {
+			return nil
+		}
+		logger("[CC] continuous recognition recovered after a failed session")
+	}
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
+	t.arm()
 	st := txStreamFeed(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&u))
+	t.disarm()
 	runtime.KeepAlive(pcm)
 	if st != txOK {
+		// A failed feed leaves the session unusable; mark it so the next one
+		// reopens rather than feeding a stream that will never answer.
+		t.streaming = false
 		return nil
 	}
 	if !u.committedChanged {
@@ -3450,17 +3643,21 @@ func (t *transcribeModel) idleFlush() *streamResult {
 	}
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
+	t.arm()
 	st := txStreamFinalize(t.session, unsafe.Pointer(&u))
+	t.disarm()
 	var r *streamResult
 	if st == txOK {
 		r = t.takeCommitted()
 	}
 	t.streaming = false
-	t.mu.Unlock()
-
-	if err := t.beginStream(""); err != nil {
+	if err := t.beginStreamLocked(); err != nil {
+		// Not fatal: the next feed tries again rather than giving up on
+		// captions for the rest of the tune.
 		logger("[CC] could not reopen the continuous session after a pause: %v", err)
 	}
+	t.mu.Unlock()
+
 	if r != nil {
 		// The talking stopped, so whatever just came out finishes a sentence.
 		r.EOU = 1
@@ -3583,6 +3780,9 @@ type captionEngine struct {
 	// Only the reader goroutine touches dropped.
 	phrases chan []float32
 	dropped int
+	// slow counts phrases that took longer to recognize than they were to say.
+	// Only the recognizer goroutine touches it.
+	slow int
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
@@ -3685,6 +3885,17 @@ func (e *captionEngine) startDecoder() (io.ReadCloser, error) {
 		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
 	e.mu.Lock()
+	select {
+	case <-e.closed:
+		// Lost the race with Close, which has already taken the decoder it
+		// knew about. Own this one rather than orphaning it.
+		e.mu.Unlock()
+		audioIn.Close()
+		cmd.Process.Kill()
+		cmd.Wait()
+		return nil, fmt.Errorf("captions are shutting down")
+	default:
+	}
 	e.ffmpeg, e.audioIn = cmd, audioIn
 	e.mu.Unlock()
 	return pcm, nil
@@ -3716,6 +3927,14 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 	if old != nil && old.Process != nil {
 		old.Process.Kill()
 		old.Wait()
+	}
+	// Checked again after the kill: Close may have run while this was working,
+	// and starting a decoder afterwards leaves an ffmpeg nobody owns and a
+	// reader blocked on it forever.
+	select {
+	case <-e.closed:
+		return nil, false
+	default:
 	}
 	pcm, err := e.startDecoder()
 	if err != nil {
@@ -3774,7 +3993,44 @@ const (
 	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
 	vadMaxPhrase = 3.5                // backstop, so captions never fall this far behind
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
+
+	// The bar for "somebody is talking" is three times an adaptive noise floor,
+	// and left to itself that arrangement can talk the detector deaf.
+	//
+	// The floor rises on every frame that is not already over the bar, and the
+	// bar is derived from the floor, so the two feed each other. On a stretch
+	// of audio that sits just under the bar — an advert with a music bed is the
+	// reliable way to find it — the floor climbs, the bar climbs with it, more
+	// frames fall under the bar, and the floor climbs faster. Measured: a bed
+	// at 0.0149 settles the bar at 0.0447, which is above ordinary dialogue.
+	// Nothing is then loud enough to start a phrase, nothing is ever handed to
+	// the recognizer, and captions stop dead until something quiet enough comes
+	// along to let the floor decay again. It looks exactly like the recognizer
+	// hanging. It is the opposite: the recognizer is idle and starving.
+	//
+	// Capping the floor alone is not enough — it only moves the bar from 0.0447
+	// to 0.03, which is still above a quiet talker. So the bar itself is capped.
+	// Above vadBarMax the adaptation is switched off entirely, which means
+	// speech at any normal level is always audible no matter what preceded it.
+	//
+	// This fails towards hearing. Too low a cap and a noisy channel gets its
+	// noise transcribed, which is untidy and was the behaviour before any of
+	// this; too high and the captions stop, which is the bug.
+	vadFloorMax = 0.01
+	vadBarMin   = 0.012
+	vadBarMax   = 0.018
+
+	// framesPerMinute is how many voice activity frames make up a minute, used
+	// only for the "audio but no speech" report.
+	framesPerMinute = 60 * asrSampleRate / vadFrame
 )
+
+// vadBar is the level at which audio counts as somebody talking. It follows the
+// noise floor upwards, but only so far: see vadBarMax for why the ceiling
+// matters more than the adaptation does.
+func vadBar(floor float64) float64 {
+	return math.Min(math.Max(floor*3.0, vadBarMin), vadBarMax)
+}
 
 // listenStreaming feeds audio to a cache-aware streaming session and shows text
 // the moment the model finalizes it.
@@ -3857,11 +4113,11 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// waiting for the next one to start. The floor tracks the channel's own
 		// noise, because broadcast audio is never actually silent.
 		rms := math.Sqrt(sum / float64(len(buf)))
-		if rms > math.Max(floor*3.0, 0.012) {
+		if rms > vadBar(floor) {
 			quiet, settled = 0, false
 			continue
 		}
-		floor = 0.995*floor + 0.005*rms
+		floor = math.Min(0.995*floor+0.005*rms, vadFloorMax)
 		if settled {
 			continue
 		}
@@ -3908,6 +4164,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var silenceRun, speechLen float64
 	floor := 0.005
 	decoderTries := 0
+	var frames, cutThisMinute int
 
 	for {
 		select {
@@ -3931,6 +4188,17 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		// that hiccups twice an hour should recover every time.
 		decoderTries = 0
 
+		// Say when audio is arriving but no speech is being cut out of it. It
+		// is the one line that separates "the decoder died" from "the model
+		// stopped answering", and it stays quiet while things are working.
+		frames++
+		if frames%framesPerMinute == 0 {
+			if cutThisMinute == 0 {
+				logger("[CC] %s a minute of audio arrived but no speech was found in it; if people were talking, the audio being decoded is not what you think it is", e.label)
+			}
+			cutThisMinute = 0
+		}
+
 		frame := make([]float32, vadFrame)
 		var sum float64
 		for i := range frame {
@@ -3940,9 +4208,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		rms := math.Sqrt(sum / float64(len(frame)))
 
-		loud := rms > math.Max(floor*3.0, 0.012)
+		loud := rms > vadBar(floor)
 		if !loud {
-			floor = 0.995*floor + 0.005*rms
+			floor = math.Min(0.995*floor+0.005*rms, vadFloorMax)
 		}
 		if loud {
 			if !speaking {
@@ -3995,6 +4263,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			continue
 		}
 		speechLen = 0
+		cutThisMinute++
 		e.queue(audio)
 	}
 }
@@ -4033,10 +4302,24 @@ func (e *captionEngine) recognize() {
 
 // caption recognizes one phrase and queues it for display.
 func (e *captionEngine) caption(audio []float32) {
+	secs := float64(len(audio)) / asrSampleRate
+	start := time.Now()
 	text, err := e.model.transcribe(audio)
+	took := time.Since(start)
 	if err != nil {
-		logger("[CC] %s recognition failed: %v", e.label, err)
+		logger("[CC] %s recognition failed after %s on %.1fs of audio: %v", e.label, took.Round(time.Millisecond), secs, err)
 		return
+	}
+	// A recognizer that cannot beat real time will fall behind for as long as
+	// people keep talking, and that shows up as captions that stop rather than
+	// captions that lag. Say so the first time it happens rather than leaving
+	// it to be deduced from the silence.
+	if took.Seconds() > secs {
+		e.slow++
+		if e.slow == 1 || e.slow%20 == 0 {
+			logger("[CC] %s took %s to recognize %.1fs of audio (%d times now); this model cannot keep up on this hardware",
+				e.label, took.Round(time.Millisecond), secs, e.slow)
+		}
 	}
 	text = e.trimOverlap(text)
 	if text == "" {
@@ -4110,9 +4393,18 @@ func (e *captionEngine) Close() {
 		close(e.closed)
 		// Stopping ffmpeg closes the pipe the listener is blocked on, which is
 		// what lets it notice the shutdown and return.
-		if e.ffmpeg != nil && e.ffmpeg.Process != nil {
-			e.ffmpeg.Process.Kill()
-			e.ffmpeg.Wait()
+		//
+		// Taken under the lock and cleared, because the reader goroutine
+		// replaces the decoder when it restarts one. Killing a copy that has
+		// already been replaced would leave the new ffmpeg running with nobody
+		// feeding it and the reader blocked on it forever.
+		e.mu.Lock()
+		cmd := e.ffmpeg
+		e.ffmpeg = nil
+		e.mu.Unlock()
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
 		}
 		// Wait for the listener to finish before releasing anything it might be
 		// inside. If it somehow does not stop, leaking the session is far
