@@ -3628,7 +3628,14 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		svc.refs++
 		n := svc.refs
 		txServiceLock.Unlock()
-		<-svc.ready
+		select {
+		case <-svc.ready:
+		case <-time.After(150 * time.Second):
+			txServiceLock.Lock()
+			svc.refs--
+			txServiceLock.Unlock()
+			return nil, fmt.Errorf("the shared model is still loading, or stuck; this tune runs without captions")
+		}
 		if svc.err != nil {
 			return nil, svc.err
 		}
@@ -3700,7 +3707,9 @@ func (svc *txBatchService) release() {
 // the next dispatch takes them all at once.
 func (svc *txBatchService) run() {
 	defer func() {
-		txSessionFree(svc.session)
+		if svc.session != 0 {
+			txSessionFree(svc.session)
+		}
 		releaseTxModel(svc.key, svc.shared)
 		logger("[CC] Shared model released")
 	}()
@@ -3808,6 +3817,38 @@ func (b *batchClient) finishStream() *streamResult        { return nil }
 func (b *batchClient) idleFlush() *streamResult           { return nil }
 func (b *batchClient) Close()                             { b.svc.release() }
 
+// runWithDeadline runs fn and stops waiting for it after d.
+//
+// It cannot stop fn — native code has no cancellation — so on timeout fn is
+// left running and its completion is reported to the returned channel. What
+// this buys is containment: a load that has wedged inside a driver costs the
+// one stream that wanted it, instead of holding a lock that every other
+// stream then queues behind. A model wedging is an inconvenience; a model
+// wedging everything is an outage.
+func runWithDeadline(d time.Duration, what string, fn func()) (finished bool, done <-chan struct{}) {
+	ch := make(chan struct{})
+	go func() { defer close(ch); fn() }()
+	select {
+	case <-ch:
+		return true, ch
+	case <-time.After(d):
+		logger("[CC] %s did not finish within %s; carrying on without it (it may still complete in the background)", what, d)
+		return false, ch
+	}
+}
+
+// initTranscribeDeadline is initTranscribe with the waiting bounded. The Once
+// inside initTranscribe means a wedged first call would block every later
+// caller forever; this way they get an error and their tunes run uncaptioned.
+func initTranscribeDeadline(variant string) error {
+	var err error
+	ok, _ := runWithDeadline(60*time.Second, "loading the speech engine", func() { err = initTranscribe(variant) })
+	if !ok {
+		return fmt.Errorf("the speech engine is not responding")
+	}
+	return err
+}
+
 // txLoadGate limits how many sets of weights load at once.
 //
 // Seven tuners starting together meant seven multi-gigabyte loads at once, each
@@ -3824,7 +3865,11 @@ var txLoadGate = make(chan struct{}, 2)
 // once the gate is held, so a stream that ended while queued never loads at all.
 func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxModel, string, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
-	txLoadGate <- struct{}{}
+	select {
+	case txLoadGate <- struct{}{}:
+	case <-time.After(90 * time.Second):
+		return nil, "", fmt.Errorf("gave up queueing behind other model loads")
+	}
 	defer func() { <-txLoadGate }()
 	if alive != nil && !alive() {
 		return nil, "", fmt.Errorf("the stream ended before its model finished loading")
@@ -3842,7 +3887,23 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
 	var h uintptr
-	if st := txModelLoadFile(path, unsafe.Pointer(&load), unsafe.Pointer(&h)); st != txOK || h == 0 {
+	var st int32
+	ok, done := runWithDeadline(120*time.Second, "loading "+filepath.Base(path), func() {
+		st = txModelLoadFile(path, unsafe.Pointer(&load), unsafe.Pointer(&h))
+	})
+	if !ok {
+		// If the wedged load ever does finish, its weights belong to nobody:
+		// give them straight back rather than leaking gigabytes.
+		go func() {
+			<-done
+			if st == txOK && h != 0 {
+				txModelFree(h)
+				logger("[CC] A model load that had been given up on finished late; its memory was freed")
+			}
+		}()
+		return nil, "", fmt.Errorf("loading %s took too long; it may be wedged in the driver", filepath.Base(path))
+	}
+	if st != txOK || h == 0 {
 		return nil, "", fmt.Errorf("loading %s: %s", filepath.Base(path), txStatusString(st))
 	}
 	m := &sharedTxModel{handle: h, refs: 1}
@@ -4068,7 +4129,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 	if err != nil {
 		return nil, err
 	}
-	if err := initTranscribe(variant); err != nil {
+	if err := initTranscribeDeadline(variant); err != nil {
 		return nil, err
 	}
 	weights, err := filepath.Abs(gguf)
@@ -4495,6 +4556,12 @@ type captionEngine struct {
 	model2    captionModel
 	startOnce sync.Once
 	begun     int64
+	// doneOnce makes closing done idempotent. Three different paths finish an
+	// engine — a failed start, the recognizer returning, and a stream that
+	// closed before it ever began — and two of them could race: closing a
+	// channel twice is a panic, a panic in a goroutine takes the whole process
+	// with it, and this process is every tuner somebody is watching.
+	doneOnce sync.Once
 	// ready is set once the decoder is running and there is something to feed.
 	ready int64
 
@@ -4559,6 +4626,11 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 	return e, nil
 }
 
+// finish marks the engine done, exactly once, whoever gets there first.
+func (e *captionEngine) finish() {
+	e.doneOnce.Do(func() { close(e.done) })
+}
+
 // begin starts the slow work, once, when the first stream bytes arrive.
 func (e *captionEngine) begin() {
 	e.startOnce.Do(func() {
@@ -4569,6 +4641,14 @@ func (e *captionEngine) begin() {
 
 // start does the slow part off the tune path.
 func (e *captionEngine) start(cfg captionConfig, m captionModel) {
+	// This runs in the background with native code below it; nothing it does
+	// may take the process down. The stream it serves is already flowing.
+	defer func() {
+		if r := recover(); r != nil {
+			logger("[CC] %s captions failed to start (%v); this tune runs without them", e.label, r)
+			e.finish()
+		}
+	}()
 	began := time.Now()
 	// The stream may end while this is queued behind another load, and a model
 	// loaded for a stream that has gone is pure waste — gigabytes and half a
@@ -4581,17 +4661,39 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 			return true
 		}
 	}
-	model, err := loadRecognizer(m, cfg, alive)
-	if err != nil {
-		logger("[CC] %s could not load %s: %v; this tune has no captions", e.label, m.Name, err)
-		close(e.done)
-		return
+
+	// Failing to start is not the end of it. The stream this serves runs for
+	// hours, and most of the ways a start can fail — an engine still
+	// downloading, a wedged load that a retry gets fresh, another stream
+	// holding the load gate — are better in a minute than they are now. So the
+	// reason is said plainly, and then it is tried again for as long as the
+	// stream is alive, backing off so a genuinely broken setup logs a line
+	// every couple of minutes rather than a scroll.
+	var model recognizer
+	backoff := 15 * time.Second
+	for attempt := 1; ; attempt++ {
+		var err error
+		model, err = loadRecognizer(m, cfg, alive)
+		if err == nil {
+			break
+		}
+		logger("[CC] %s captions have not started (attempt %d): %v — retrying in %s while the stream plays",
+			e.label, attempt, err, backoff)
+		select {
+		case <-e.closed:
+			e.finish()
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 2*time.Minute {
+			backoff *= 2
+		}
 	}
 	select {
 	case <-e.closed:
 		// The stream ended while the weights were loading.
 		model.Close()
-		close(e.done)
+		e.finish()
 		return
 	default:
 	}
@@ -4600,7 +4702,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if err != nil {
 		logger("[CC] %s could not start the audio decoder: %v", e.label, err)
 		model.Close()
-		close(e.done)
+		e.finish()
 		return
 	}
 
@@ -4651,7 +4753,7 @@ func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recog
 			if err != nil {
 				return nil, err
 			}
-			if err := initTranscribe(variant); err != nil {
+			if err := initTranscribeDeadline(variant); err != nil {
 				return nil, err
 			}
 			weights, err := filepath.Abs(modelPath(m))
@@ -4990,7 +5092,7 @@ func vadPeak(peak, rms float64) float64 {
 // the audio arrives and marks where an utterance ends, which is what keeps this
 // about a second behind instead of a phrase behind.
 func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
-	defer close(e.done)
+	defer e.finish()
 	defer pcm.Close()
 
 	// 100 ms per feed: short enough that nothing waits on a buffer, long enough
@@ -5259,7 +5361,7 @@ func (e *captionEngine) queue(audio []float32) {
 // wait for this goroutine and then free the model safely: no other goroutine
 // ever calls into it on this path.
 func (e *captionEngine) recognize() {
-	defer close(e.done)
+	defer e.finish()
 	for audio := range e.phrases {
 		select {
 		case <-e.closed:
@@ -5402,12 +5504,13 @@ func (e *captionEngine) Close() {
 		// Wait for the listener to finish before releasing anything it might be
 		// inside. If it somehow does not stop, leaking the session is far
 		// better than freeing it from under a call in flight.
-		if atomic.LoadInt64(&e.begun) == 0 {
-			// Nothing was ever started, so there is nothing to wait for. This
-			// is an ordinary outcome: a tune that failed delivers no bytes.
-			e.startOnce.Do(func() {})
-			close(e.done)
-		}
+		// If nothing has begun yet, win the race for the start slot: whoever
+		// runs this Do first decides, so either the closure below marks the
+		// engine finished, or begin() already claimed the slot and the started
+		// work owns finishing. Checking a flag and then closing was a window in
+		// which both happened, and closing a channel twice is a panic that
+		// takes every tuner down with it.
+		e.startOnce.Do(func() { e.finish() })
 		stopped := true
 		select {
 		case <-e.done:
