@@ -482,7 +482,10 @@ type captionModel struct {
 	// page, because the choice between these is a trade rather than a ranking:
 	// the most accurate model is the slowest, and the fastest writes no
 	// punctuation.
-	Desc     string `json:"desc"`
+	Desc string `json:"desc"`
+	// Role is the slot this model fills. Four models, four answers — a list
+	// where everything has a reason to exist reads as a menu, not homework.
+	Role     string `json:"role"`
 	Latency  string `json:"latency"`
 	Hardware string `json:"hardware"`
 	// Accuracy is the plain-English tier and Benchmark the measurement behind
@@ -495,12 +498,7 @@ type captionModel struct {
 	Runtime string `json:"runtime"`
 	Repo    string `json:"repo"`
 	File    string `json:"file"`
-	// AltFiles are filenames this model used to ship under. They are not
-	// loaded — the current file is the only one that counts — but one found on
-	// disk is reported as superseded, and deleted the moment its replacement
-	// finishes downloading, so the catalog moving on does not strand gigabytes.
-	AltFiles []string `json:"-"`
-	SizeMB   int      `json:"sizeMB"`
+	SizeMB  int    `json:"sizeMB"`
 	// Streaming models transcribe as the audio arrives. Punctuation says
 	// whether the model writes any: the ones that do not cannot be made to, and
 	// a wall of unpunctuated capitals is worth knowing about in advance.
@@ -534,6 +532,7 @@ var captionModelCatalog = []captionModel{
 	{
 		Key:         "realtime-multilingual",
 		Name:        "Nemotron 3.5 Streaming 0.6B",
+		Role:        "The all-round choice",
 		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The one to use for anything other than English, and a little quicker than the Unified at some cost in accuracy.",
 		Latency:     "Under a second",
 		Accuracy:    "Good",
@@ -547,24 +546,9 @@ var captionModelCatalog = []captionModel{
 		Languages:   euroLanguages,
 	},
 	{
-		Key:         "multitalker-en",
-		Name:        "Multitalker Parakeet Streaming 0.6B",
-		Desc:        "Trained on people talking over each other, which is most of live television. Continuous, punctuated and cased. Worth trying on panel shows and news desks, where a model trained on one voice at a time tends to run two speakers into a single sentence.",
-		Latency:     "About a second",
-		Accuracy:    "Very good",
-		Benchmark:   "2.2% of words come out wrong",
-		Hardware:    "A modern multi-core CPU.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf",
-		File:        "multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf",
-		SizeMB:      734,
-		Streaming:   true,
-		Punctuation: true,
-		Languages:   []string{"en"},
-	},
-	{
 		Key:       "realtime-120m",
 		Name:      "Parakeet Realtime 120M",
+		Role:      "The low-end choice",
 		Desc:      "Just as quick and a fifth of the size, for hardware that cannot spare the cores. Writes no punctuation at all: the model produces none, and no setting changes that.",
 		Latency:   "Under a second",
 		Accuracy:  "Basic",
@@ -577,7 +561,8 @@ var captionModelCatalog = []captionModel{
 	},
 	{
 		Key:  "cohere-transcribe",
-		Name: "Cohere Transcribe 03-2026 (high-end systems)",
+		Name: "Cohere Transcribe 03-2026",
+		Role: "The high-end choice",
 		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a whole phrase and writes it out rather than transcribing as the audio arrives, and what it writes does not read like machine transcription — it reads like the closed captions on a broadcast channel. It asks for more of a machine than anything else here, and repays it.",
 		// It is quick when it is given room. On a laptop APU over Vulkan it
 		// does eleven seconds of audio in about one and a half, eight times
@@ -593,7 +578,6 @@ var captionModelCatalog = []captionModel{
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
-		AltFiles:    []string{"cohere-transcribe-03-2026-Q8_0.gguf"},
 		SizeMB:      1760,
 		Punctuation: true,
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
@@ -601,6 +585,7 @@ var captionModelCatalog = []captionModel{
 	{
 		Key:         "parakeet-v3",
 		Name:        "Parakeet TDT 0.6B v3",
+		Role:        "The multilingual choice",
 		Desc:        "Waits for a whole phrase and then transcribes it, with punctuation. A solid multilingual option, at the cost of arriving later.",
 		Latency:     "Three to four seconds",
 		Accuracy:    "Very good",
@@ -610,19 +595,6 @@ var captionModelCatalog = []captionModel{
 		SizeMB:      897,
 		Punctuation: true,
 		Languages:   euroLanguages,
-	},
-	{
-		Key:         "parakeet-110m",
-		Name:        "Parakeet TDT-CTC 110M",
-		Desc:        "Phrase at a time, English only, with punctuation. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
-		Latency:     "Three to four seconds",
-		Accuracy:    "Good",
-		Hardware:    "Modest hardware. Comfortable on a NAS.",
-		Runtime:     rtParakeet,
-		File:        "tdt_ctc-110m-q8_0.gguf",
-		SizeMB:      170,
-		Punctuation: true,
-		Languages:   []string{"en"},
 	},
 }
 
@@ -787,24 +759,9 @@ func modelURL(m captionModel) string {
 	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", repo, m.File)
 }
 
-// modelPath is where a model's weights live once downloaded. Only the
-// catalog's current file counts: quietly loading some earlier variant that
-// happens to be on disk means the page claims one file and runs another, and a
-// card that cannot be believed is worse than a re-download.
+// modelPath is where a model's weights live once downloaded.
 func modelPath(m captionModel) string {
 	return filepath.Join(captionModels, m.File)
-}
-
-// supersededFile is an earlier variant of this model still on disk: no longer
-// used, worth telling the user about, and removed when its replacement lands.
-func supersededFile(m captionModel) (path string, sizeMB int) {
-	for _, alt := range m.AltFiles {
-		p := filepath.Join(captionModels, alt)
-		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
-			return p, int(st.Size() / (1024 * 1024))
-		}
-	}
-	return "", 0
 }
 
 // modelInstalled reports whether the model's weights are on disk.
@@ -887,11 +844,6 @@ func fetchModel(m captionModel) error {
 	logger("[CC] Downloading %s from %s", m.File, url)
 	if err := streamToFile(client, url, modelPath(m)); err != nil {
 		return fmt.Errorf("%s: %w", m.File, err)
-	}
-	if old, sizeMB := supersededFile(m); old != "" {
-		if err := os.Remove(old); err == nil {
-			logger("[CC] Removed the superseded %s (freed %s)", filepath.Base(old), humanMB(sizeMB))
-		}
 	}
 	return nil
 }
@@ -1135,10 +1087,8 @@ func removeCaptionModel(m captionModel) error {
 	if active {
 		return fmt.Errorf("that model is still downloading")
 	}
-	for _, f := range append([]string{m.File}, m.AltFiles...) {
-		if err := os.Remove(filepath.Join(captionModels, f)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	if err := os.Remove(modelPath(m)); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	logger("[CC] Removed model %s", m.Key)
 	return nil
@@ -5766,8 +5716,6 @@ type captionStatusModel struct {
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
 	Reuse  string `json:"reuse"`
-	// Superseded explains an earlier download that no longer counts.
-	Superseded string `json:"superseded"`
 	// MemoryMB is one stream's cost and MemoryTotalMB the ceiling across the
 	// tuners actually being captioned, worked out here so the page never asks
 	// anyone to multiply anything.
@@ -5797,22 +5745,22 @@ func memoryWarning(cfg captionConfig) string {
 	per := streamMemoryMB(m)
 	totalMB := per * n
 	if runtimeOf(m) == rtTranscribe && !m.Streaming {
-		// Shared: one copy no matter how many tuners, and the banner has to
-		// say that rather than reciting the per-stream story.
-		if per < 2000 {
-			return ""
-		}
-		return fmt.Sprintf("%s uses about %s of memory, shared by every tuner captioned at once "+
-			"— the copy is loaded when the first stream needs it and freed when the last one ends. "+
-			"That is the weights plus the working memory a decode needs, so it is more than the "+
-			"download size, and it is on top of everything else this machine is doing.",
-			m.Name, humanMB(per))
+		// Shared: the total is one copy no matter how many tuners, and by the
+		// same yardstick as everything else that rarely warrants a banner.
+		totalMB = per
 	}
-	// Two gigabytes is the point at which this stops being a detail. A single
-	// large model on one tuner is above it on its own, which is deliberate: it
-	// is worth knowing before you turn it on, not after.
-	if totalMB < 2000 {
+	// One threshold for every model, judged on the total the current settings
+	// would actually use. A shared model is judged on its one copy; a
+	// per-stream model on all of its copies together — which is how a
+	// middleweight on many tuners outranks a heavyweight that is shared, and
+	// the warnings land where the memory actually goes.
+	if totalMB < 4000 {
 		return ""
+	}
+	if runtimeOf(m) == rtTranscribe && !m.Streaming {
+		return fmt.Sprintf("%s keeps about %s in memory — one copy shared by every tuner, loaded when "+
+			"the first stream needs it and freed when the last one ends — on top of everything else "+
+			"this machine is doing.", m.Name, humanMB(totalMB))
 	}
 	each := humanMB(per)
 	total := humanMB(totalMB)
@@ -5859,28 +5807,18 @@ func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 	per := streamMemoryMB(m)
 	if runtimeOf(m) == rtTranscribe && !m.Streaming {
 		// One copy serves every tuner on this path; see txBatchService.
-		memory = "About " + humanMB(per) + " of RAM, shared"
-		total = fmt.Sprintf("about %s however many tuners are captioned — every stream shares one copy", humanMB(per))
-		reuse = "All streams share a single copy, which is freed when the last of them ends."
+		memory = "one copy shared by every stream"
+		total = "about " + humanMB(per) + " total, however many tuners caption"
+		reuse = "Freed when the last stream ends."
 		return memory, reuse, total
 	}
-	memory = "About " + humanMB(per) + " per stream"
+	memory = humanMB(per) + " per stream"
 	if streams > 1 {
-		total = fmt.Sprintf("up to %s with %d tuners captioned at once", humanMB(per*streams), streams)
+		total = fmt.Sprintf("up to %s with %d tuners captioning at once", humanMB(per*streams), streams)
 	} else {
-		total = fmt.Sprintf("about %s with one tuner captioned", humanMB(per))
+		total = "about " + humanMB(per) + " with one tuner captioning"
 	}
-	// The wording scales with the model. "Can use a lot of memory" on a model
-	// small enough for a Pi is not caution, it is noise — and noise on every
-	// card teaches people to ignore the one card where the warning is real.
-	switch {
-	case per < 400:
-		reuse = "Each stream loads its own copy, and at this size that is cheap: comfortable on low-power hardware, freed as soon as the stream ends."
-	case per < 2000:
-		reuse = "Each stream captioned at the same time loads its own copy, freed as soon as the stream ends."
-	default:
-		reuse = "Every stream captioned at the same time loads its own copy, so this can use a lot of memory. It is freed as soon as the stream ends."
-	}
+	reuse = "Each stream has its own copy, freed the moment it ends."
 	return memory, reuse, total
 }
 
@@ -6048,11 +5986,10 @@ func captionStatusPayload() captionStatus {
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
 		mem, reuse, total := memoryNote(m, streams)
-		superseded := ""
-		if _, oldMB := supersededFile(m); oldMB > 0 && !modelInstalled(m) {
-			superseded = fmt.Sprintf("An earlier version of this model (%s) is on disk and is no longer used. "+
-				"Press Download to fetch the current version — the old file is removed automatically once it arrives.",
-				humanMB(oldMB))
+		perMB := streamMemoryMB(m)
+		totalMB := perMB * streams
+		if runtimeOf(m) == rtTranscribe && !m.Streaming {
+			totalMB = perMB // one shared copy, whatever the tuner count
 		}
 		blocked := ""
 		switch {
@@ -6082,9 +6019,8 @@ func captionStatusPayload() captionStatus {
 			Blocked:       blocked,
 			Memory:        mem,
 			Reuse:         reuse,
-			Superseded:    superseded,
-			MemoryMB:      streamMemoryMB(m),
-			MemoryTotalMB: streamMemoryMB(m) * streams,
+			MemoryMB:      perMB,
+			MemoryTotalMB: totalMB,
 			MemoryTotal:   total,
 			URL:           modelURL(m),
 		})

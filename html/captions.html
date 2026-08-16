@@ -419,7 +419,8 @@ function render() {
             <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''}
                    ${m.runnable ? '' : 'disabled'} onchange="pickModel('${esc(m.key)}')">
             <div>
-                <div class="model-name">${esc(m.name)}${m.recommended ? ' <span class="badge badge-active">Recommended</span>' : ''}</div>
+                <div class="model-name">${esc(m.name)}${m.recommended ? ' <span class="badge badge-active">Recommended</span>' : ''}
+                    ${m.role ? `<span class="tag" style="margin-left:0.4rem;">${esc(m.role)}</span>` : ''}</div>
                 ${m.why ? `<div class="model-meta" style="margin-top:0.2rem;">${esc(m.why)}</div>` : ''}
                 <div class="model-meta">${esc(m.desc)}</div>
                 ${m.runnable ? '' : `<div class="warn" style="margin:0.5rem 0 0;">
@@ -436,15 +437,13 @@ function render() {
                     <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
-                    <span class="tag ${m.memoryMB >= 2000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
+                    <span class="tag ${m.memoryTotalMB >= 4000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
                     ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
-                    ${m.memoryMB >= 2000 ? '<span class="tag tag-warn">High-end systems</span>' : ''}
-                    ${m.memoryMB < 400 ? '<span class="tag tag-live">Light — fine for low-power hardware</span>' : ''}
+
                     <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
-                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)}, so ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
-                ${m.superseded ? `<div class="model-meta" style="margin-top:0.2rem;"><strong>${esc(m.superseded)}</strong></div>` : ''}
+                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)} — ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
