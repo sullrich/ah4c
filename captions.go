@@ -4443,7 +4443,7 @@ type captionLatency struct {
 var captionLatencies = []captionLatency{
 	{
 		Key: "fast", Name: "Lowest delay",
-		Desc:    "Phrases are cut within three seconds — about a second closer to the picture than Balanced, with slightly less context per phrase. Cutting shorter than this was tried and measured: the model needs acoustic context, and below three seconds accuracy falls apart while the per-phrase overhead makes it slower, not faster.",
+		Desc:    "Phrases are cut within three seconds — about a second closer to the picture than Balanced, with slightly less context per phrase.",
 		chunkMS: 80, rightMS: 80, cacheRight: 3, phraseSec: 3,
 	},
 	{
@@ -4453,7 +4453,7 @@ var captionLatencies = []captionLatency{
 	},
 	{
 		Key: "accurate", Name: "Most accurate",
-		Desc:    "The most accurate, at the cost of arriving latest. Streaming models use their own published settings; a phrase-at-a-time model gets up to six seconds per phrase — more context and fewer cuts, which is where mistakes cluster — so the start of a sentence can trail six or seven seconds.",
+		Desc:    "Phrases run up to six seconds — the most context per phrase and the most accurate, arriving latest.",
 		chunkMS: -1, rightMS: -1, cacheRight: -1, phraseSec: 6,
 	},
 }
