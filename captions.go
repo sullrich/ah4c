@@ -5907,25 +5907,53 @@ func (e *captionEngine) rememberTail(words []string) {
 // the stream finding its feet.
 const captionSettle = 5 * time.Second
 
-// tuneFresh is how recently a tune may have started, anywhere on the
-// machine, for the un-pausable part of a model load to run. The load's disk
-// work is done beforehand by a warm-up loop that yields to tunes on its own;
-// what remains is a couple of seconds of native call, and holding that back
-// while any tune is this young keeps it off the window where the DVR is
-// judging the stream. Waiting 45 seconds here was tried and read as broken
-// captions: every channel change reset the clock and the model looked like
-// it never loaded.
-const tuneFresh = 12 * time.Second
+// The quiet gate holds heavy caption work while any tune is in its fragile
+// stretch — and fragile is a state, not an age. A tune is fragile from the
+// /play request until its video actually starts flowing to the DVR, however
+// long its device takes to prove playback: one box confirms in three seconds
+// and another takes its whole forty-second window, and a fixed twelve-second
+// age test released the load straight into the slow box's window. After the
+// video flows, a short grace covers the DVR settling onto the fresh stream.
+const (
+	// tuneSettledGrace: how old the newest tune must be once every pending
+	// tune has its video flowing.
+	tuneSettledGrace = 8 * time.Second
+	// tunePendingCap: a tune that never reports its video is done holding
+	// things up after this long. The safety valve for a /play that died
+	// without saying so; without it, one lost tune would starve captions
+	// until restart.
+	tunePendingCap = 50 * time.Second
+)
 
-// lastTuneStart is when a tune last began anywhere on the machine, as unix
-// nanoseconds. Written on every tune, captioned or not; read by loads waiting
-// for the machine to go quiet.
-var lastTuneStart int64
+var (
+	tuneMu sync.Mutex
+	// tunePending holds the start time of every tune whose video has not yet
+	// begun flowing, oldest first.
+	tunePending []time.Time
+	// lastTuneStart is when a tune last began anywhere on the machine, as
+	// unix nanoseconds, for the settled grace.
+	lastTuneStart int64
+)
 
 // captionTuneStarting marks that a tune is beginning somewhere on the
-// machine, which postpones any heavy caption work until it has settled.
+// machine, which postpones any heavy caption work until its video flows.
 func captionTuneStarting() {
+	tuneMu.Lock()
+	tunePending = append(tunePending, time.Now())
+	tuneMu.Unlock()
 	atomic.StoreInt64(&lastTuneStart, time.Now().UnixNano())
+}
+
+// captionTuneSettled marks that a tune's video has started flowing to the
+// DVR — or that the tune failed outright and there is nothing left to
+// protect. Paired oldest-first with captionTuneStarting; a tune that never
+// reports either way ages out at tunePendingCap.
+func captionTuneSettled() {
+	tuneMu.Lock()
+	if len(tunePending) > 0 {
+		tunePending = tunePending[1:]
+	}
+	tuneMu.Unlock()
 }
 
 // prewarmModelFile reads the weights into the page cache, pausing whenever a
@@ -5983,18 +6011,49 @@ func waitTuneQuiet(bound time.Duration) bool {
 	}
 }
 
-// tuneQuiet reports whether the newest tune on the machine is old enough for
-// heavy work, and if not, how long until it would be.
+// tuneSettleReader marks the tune settled on the first byte it delivers.
+type tuneSettleReader struct {
+	inner io.Reader
+	once  sync.Once
+}
+
+func newTuneSettleReader(r io.Reader) *tuneSettleReader { return &tuneSettleReader{inner: r} }
+
+func (t *tuneSettleReader) Read(p []byte) (int, error) {
+	n, err := t.inner.Read(p)
+	if n > 0 {
+		t.once.Do(captionTuneSettled)
+	}
+	return n, err
+}
+
+// tuneQuiet reports whether every tune on the machine is out of its fragile
+// stretch, and if not, roughly how long to wait before asking again.
 func tuneQuiet() (bool, time.Duration) {
+	now := time.Now()
+	tuneMu.Lock()
+	live := tunePending[:0]
+	for _, t0 := range tunePending {
+		if now.Sub(t0) < tunePendingCap {
+			live = append(live, t0)
+		}
+	}
+	tunePending = live
+	pending := len(live) > 0
+	tuneMu.Unlock()
+	if pending {
+		// Settling is an event, not a schedule: poll shortly.
+		return false, 2 * time.Second
+	}
 	last := atomic.LoadInt64(&lastTuneStart)
 	if last == 0 {
 		return true, 0
 	}
 	age := time.Since(time.Unix(0, last))
-	if age >= tuneFresh {
+	if age >= tuneSettledGrace {
 		return true, 0
 	}
-	return false, tuneFresh - age
+	return false, tuneSettledGrace - age
 }
 
 // feed offers stream bytes to the recognizer without blocking.

@@ -682,6 +682,8 @@ func run() error {
 		captionTuneStarting()
 		reader, err := tune(tuner, channel)
 		if err != nil {
+			// A tune that failed outright has nothing left to protect.
+			captionTuneSettled()
 			logger("[ERR] Failed to tune %s", err)
 			errorMessage := fmt.Sprintf("<html><body><h1>Error: %s</h1></body></html>", err.Error())
 			c.Data(500, "text/html; charset=utf-8", []byte(errorMessage))
@@ -694,9 +696,13 @@ func run() error {
 		defer func() {
 			reader.Close()
 		}()
+		// The tune leaves its fragile stretch the moment it delivers its
+		// first byte to the DVR — whichever tuner type and gating path got
+		// it there. If it never delivers one, the hold ages out on its own.
+		settled := newTuneSettleReader(reader)
 		starttime := time.Now()
 		var bytesCopied int64
-		if bytesCopied, err = io.Copy(c.Writer, reader); err != nil {
+		if bytesCopied, err = io.Copy(c.Writer, settled); err != nil {
 			logger("[IO] io.Copy: %v", err)
 		}
 		logger("[IOINFO] Successfully copied %v bytes", bytesCopied)

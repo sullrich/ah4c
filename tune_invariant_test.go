@@ -73,10 +73,15 @@ func TestTunePathIsInstant(t *testing.T) {
 	}
 
 	// And a tune anywhere on the machine must hold the heavy work off:
-	// tuneQuiet has to say "not yet" for a fresh tune.
+	// tuneQuiet has to say "not yet" while a tune is pending, and again
+	// through the settled grace once its video flows.
 	captionTuneStarting()
 	if quiet, _ := tuneQuiet(); quiet {
-		t.Fatal("tuneQuiet ignored a tune that just started")
+		t.Fatal("tuneQuiet ignored a pending tune")
+	}
+	captionTuneSettled()
+	if quiet, _ := tuneQuiet(); quiet {
+		t.Fatal("tuneQuiet skipped the settled grace")
 	}
 }
 
