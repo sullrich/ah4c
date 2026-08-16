@@ -164,6 +164,7 @@
                 downloaded; the other is shown so you can see it exists and is not being fetched.
             </p>
             <div class="card-title" style="margin-top:1rem;">Model</div>
+            <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
             <div id="dl" class="hidden">
                 <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
@@ -394,6 +395,17 @@ function render() {
         </div>`;
     }).join('');
 
+    // Memory is the one setting here that can take the whole machine down, so
+    // when the numbers get large it is said loudly rather than in a footnote.
+    document.getElementById('memWarn').innerHTML = state.memoryWarning ? `
+        <div class="warn" style="margin:0.6rem 0;">
+            <span class="dot"></span>
+            <div>
+                <div class="h">This will use a lot of memory</div>
+                <div class="d">${esc(state.memoryWarning)}</div>
+            </div>
+        </div>` : '';
+
     // Models. One that cannot run here is shown but not selectable, with the
     // reason spelled out: hiding it entirely just raises the same question
     // later, and the reason is something the reader can act on.
@@ -422,6 +434,7 @@ function render() {
                     <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
+                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)}. ${esc(m.reuse)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">

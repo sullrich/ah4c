@@ -4155,17 +4155,30 @@ const (
 	// along to let the floor decay again. It looks exactly like the recognizer
 	// hanging. It is the opposite: the recognizer is idle and starving.
 	//
-	// Capping the floor alone is not enough — it only moves the bar from 0.0447
-	// to 0.03, which is still above a quiet talker. So the bar itself is capped.
-	// Above vadBarMax the adaptation is switched off entirely, which means
-	// speech at any normal level is always audible no matter what preceded it.
+	// Capping the floor was not enough. It only moved the bar from 0.0447 to
+	// 0.03, and simulating the arithmetic showed the latch intact: a channel
+	// whose speech sits between 0.015 and 0.018 still drives the bar to its cap
+	// and then hears nothing, permanently, because recovery needs the audio to
+	// go quieter than broadcast ever goes.
 	//
-	// This fails towards hearing. Too low a cap and a noisy channel gets its
-	// noise transcribed, which is untidy and was the behaviour before any of
-	// this; too high and the captions stop, which is the bug.
+	// The bar is therefore also held below a fraction of the loudest thing
+	// heard recently. That is what breaks the ratchet rather than narrowing it:
+	// whatever the loudest audio on this channel is, it stays audible, because
+	// the bar is defined partly by it instead of only by the noise underneath
+	// it. A floor is kept so that a genuinely silent channel is not treated as
+	// wall-to-wall speech.
+	//
+	// It fails towards hearing. A noisy channel gets its noise transcribed,
+	// which is untidy and was the behaviour before any of this; the alternative
+	// is captions that stop, which is the bug.
 	vadFloorMax = 0.01
 	vadBarMin   = 0.012
 	vadBarMax   = 0.018
+	// vadPeakShare is how far below the recent peak the bar is held.
+	vadPeakShare = 0.5
+	// vadPeakDecay lets the peak fall by about half over thirty seconds, so a
+	// loud passage does not keep the bar high long after it has ended.
+	vadPeakDecay = 0.99954
 
 	// framesPerMinute is how many voice activity frames make up a minute, used
 	// only for the "audio but no speech" report.
@@ -4175,8 +4188,20 @@ const (
 // vadBar is the level at which audio counts as somebody talking. It follows the
 // noise floor upwards, but only so far: see vadBarMax for why the ceiling
 // matters more than the adaptation does.
-func vadBar(floor float64) float64 {
-	return math.Min(math.Max(floor*3.0, vadBarMin), vadBarMax)
+func vadBar(floor, peak float64) float64 {
+	bar := math.Min(floor*3.0, vadBarMax)
+	if p := peak * vadPeakShare; p < bar {
+		bar = p
+	}
+	return math.Max(bar, vadBarMin)
+}
+
+// vadPeak follows the loudest recent audio, falling slowly when it goes away.
+func vadPeak(peak, rms float64) float64 {
+	if rms > peak {
+		return rms
+	}
+	return peak * vadPeakDecay
 }
 
 // listenStreaming feeds audio to a cache-aware streaming session and shows text
@@ -4200,6 +4225,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	raw := make([]byte, chunk*2)
 	buf := make([]float32, chunk)
 	floor := 0.005
+	peak := 0.0
 	quiet := 0.0
 	// Nothing is pending before anyone has spoken, so the first silence has
 	// nothing to flush.
@@ -4260,7 +4286,8 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// waiting for the next one to start. The floor tracks the channel's own
 		// noise, because broadcast audio is never actually silent.
 		rms := math.Sqrt(sum / float64(len(buf)))
-		if rms > vadBar(floor) {
+		peak = vadPeak(peak, rms)
+		if rms > vadBar(floor, peak) {
 			quiet, settled = 0, false
 			continue
 		}
@@ -4310,6 +4337,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	speaking := false
 	var silenceRun, speechLen float64
 	floor := 0.005
+	peak := 0.0
 	decoderTries := 0
 	var frames, cutThisMinute int
 
@@ -4341,7 +4369,13 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		frames++
 		if frames%framesPerMinute == 0 {
 			if cutThisMinute == 0 {
-				logger("[CC] %s a minute of audio arrived but no speech was found in it; if people were talking, the audio being decoded is not what you think it is", e.label)
+				logger("[CC] %s a minute of audio arrived but no speech was found in it; starting the level detector again in case it has settled somewhere useless", e.label)
+				// Whatever the detector has learned, it is not working. The
+				// arithmetic above should make this unreachable; it is here
+				// because captions that never come back is the failure this
+				// file keeps being bitten by, and one minute of silence is a
+				// cheap price for being certain it cannot last.
+				floor, peak = 0.005, 0
 			}
 			cutThisMinute = 0
 		}
@@ -4355,7 +4389,8 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		rms := math.Sqrt(sum / float64(len(frame)))
 
-		loud := rms > vadBar(floor)
+		peak = vadPeak(peak, rms)
+		loud := rms > vadBar(floor, peak)
 		if !loud {
 			floor = math.Min(0.995*floor+0.005*rms, vadFloorMax)
 		}
@@ -4731,6 +4766,10 @@ type captionStatus struct {
 	Persistent     bool                             `json:"persistent"`
 	PersistWarning string                           `json:"persistWarning"`
 	Tuners         int                              `json:"tuners"`
+	// MemoryWarning is spelled out when the current choice could use a lot of
+	// memory, worked out for the tuners actually being captioned rather than
+	// left as arithmetic for the reader.
+	MemoryWarning string `json:"memoryWarning"`
 }
 
 type captionStatusDriver struct {
@@ -4769,7 +4808,86 @@ type captionStatusModel struct {
 	// Blocked says what is missing, in the words the page shows.
 	Runnable bool   `json:"runnable"`
 	Blocked  string `json:"blocked"`
-	URL      string `json:"url"`
+	// Memory is what one simultaneous stream costs in RAM, and Reuse says what
+	// happens to that copy when the stream ends.
+	Memory string `json:"memory"`
+	Reuse  string `json:"reuse"`
+	URL    string `json:"url"`
+}
+
+// memoryWarning says, in gigabytes, what the current settings could use, when
+// that is enough to matter.
+//
+// Getting this wrong is expensive in a way the rest of the page is not: a
+// machine that runs out of memory does not caption badly, it stops doing
+// everything, and the number is not obvious from a model list because it
+// multiplies by the tuners being captioned. So it is worked out here and said
+// plainly rather than left as a sum for the reader.
+func memoryWarning(cfg captionConfig) string {
+	if !cfg.Enabled {
+		return ""
+	}
+	m, ok := findCaptionModel(cfg.Model)
+	if !ok {
+		return ""
+	}
+	n := len(cfg.Tuners)
+	if n == 0 {
+		n = len(tuners)
+	}
+	if n == 0 {
+		n = 1
+	}
+	totalMB := m.SizeMB * n
+	// Two gigabytes is the point at which this stops being a detail. A single
+	// Cohere stream is above it on its own, which is deliberate: 2.4 GB for one
+	// tuner is worth knowing before you turn it on, not after.
+	if totalMB < 2000 {
+		return ""
+	}
+	each := fmt.Sprintf("%.1f GB", float64(m.SizeMB)/1024)
+	total := fmt.Sprintf("%.1f GB", float64(totalMB)/1024)
+	which := fmt.Sprintf("all %d tuners", n)
+	if len(cfg.Tuners) > 0 {
+		which = fmt.Sprintf("the %d tuners you have selected", n)
+	}
+	return fmt.Sprintf("%s uses about %s of memory per stream, and every stream captioned at "+
+		"the same time loads its own copy. With captions on for %s that is up to %s of RAM in "+
+		"use at once — reached when all of them are recording together, on top of everything "+
+		"else this machine is doing. Nothing is shared between streams: the engine can only "+
+		"decode one thing at a time per copy, so sharing would make the streams wait for each "+
+		"other and fall behind the picture. If that is more memory than you have, caption fewer "+
+		"tuners below or choose a smaller model.",
+		m.Name, each, which, total)
+}
+
+// memoryNote describes what a model costs to run and whether the cost is paid
+// again next time.
+//
+// No model can share one copy between two streams that are both transcribing.
+// The engines decode one thing at a time per loaded copy, so sharing would make
+// concurrent streams take turns, and a stream that waits its turn falls behind
+// live audio and drops speech. Concurrency is bought with memory, always.
+//
+// What does differ is what happens between streams. transcribe.cpp separates
+// the weights from the decoder state, so a finished stream's copy is kept and
+// handed to the next one — which is why those models load once and start
+// instantly afterwards. parakeet.cpp's handle is both at once and cannot be
+// reused, so those models are loaded per stream and freed with it. They are
+// also a fraction of the size, which is why that costs about a second rather
+// than half a minute.
+func memoryNote(m captionModel) (memory, reuse string) {
+	size := fmt.Sprintf("%d MB", m.SizeMB)
+	if m.SizeMB >= 1024 {
+		size = fmt.Sprintf("%.1f GB", float64(m.SizeMB)/1024)
+	}
+	memory = "About " + size + " of RAM for each stream captioned at once"
+	if runtimeOf(m) == rtTranscribe {
+		reuse = "Stays in memory when a stream ends, so the next tune starts straight away. Loaded once at startup as well."
+		return memory, reuse
+	}
+	reuse = "Loaded when a stream starts and freed when it ends, which takes about a second at this size."
+	return memory, reuse
 }
 
 func captionStatusPayload() captionStatus {
@@ -4779,6 +4897,7 @@ func captionStatusPayload() captionStatus {
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
+		mem, reuse := memoryNote(m)
 		blocked := ""
 		if m.NeedsGPU && !hasGPU {
 			blocked = "This model needs a GPU and no GPU build can run in this container yet. " +
@@ -4795,6 +4914,8 @@ func captionStatusPayload() captionStatus {
 			EngineReady:  runtimeInstalled(rt, cur),
 			Runnable:     blocked == "",
 			Blocked:      blocked,
+			Memory:       mem,
+			Reuse:        reuse,
 			URL:          modelURL(m),
 		})
 	}
@@ -4884,6 +5005,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeURL:     engineURL,
 		Persistent:     persistent,
 		PersistWarning: persistWarning,
+		MemoryWarning:  memoryWarning(cfg),
 		Engines:        engines,
 		Drivers:        drivers,
 		Accel:          accelStatus(),

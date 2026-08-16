@@ -168,15 +168,43 @@ engine that runs it, and the page downloads that engine when you pick the model:
 | **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
-**Memory.** A model occupies roughly its download size in RAM while a stream is being
-captioned, and every stream captioning at the same time loads its own copy. Two streams on
-Cohere Transcribe is about 5 GB, three about 7 GB; two on the default Nemotron is about
-1.9 GB. Copies are not shared between streams because the engine decodes one thing at a
-time per copy, so sharing would make the streams take turns and fall behind live audio —
-memory is the cheaper thing to spend. A copy stays resident after its stream ends so the
-next tune starts instantly rather than reloading gigabytes, and the selected model is
-loaded once at startup for the same reason. If memory is tight, caption fewer tuners
-(there is a per-tuner setting on the page) or choose a smaller model.
+> **Watch the memory.** These models are large and they are not shared between streams. The
+> default is under a gigabyte per stream, but **Cohere Transcribe is about 2.4 GB per stream
+> — captioning three tuners with it uses up to roughly 7 GB of RAM**, reached when all three
+> record at once, on top of whatever else the machine is doing. A box that runs out of memory does not caption badly, it falls
+> over. The Closed Captions page works the figure out for your tuner count and warns you
+> when it gets large, and you can caption a single tuner and leave the rest alone.
+
+**Memory.** Every stream being captioned at the same time loads its own copy of the model,
+and a copy costs roughly its download size in RAM. The totals below are ceilings, reached
+only when that many tuners are captioning at the same moment — one tuner recording uses one
+copy. Multiply by the number of tuners you caption at once:
+
+| Model | RAM per stream | Up to, 2 streams | Up to, 3 streams | When a stream ends |
+| --- | --- | --- | --- | --- |
+| Nemotron 3.5 Streaming 0.6B *(default)* | ~940 MB | ~1.9 GB | ~2.8 GB | freed, reloads in about a second |
+| Parakeet Unified 0.6B | ~730 MB | ~1.5 GB | ~2.2 GB | stays resident, reloads instantly |
+| Multitalker Parakeet Streaming 0.6B | ~735 MB | ~1.5 GB | ~2.2 GB | stays resident, reloads instantly |
+| Parakeet Realtime 120M | ~170 MB | ~340 MB | ~510 MB | freed, reloads in about a second |
+| **Cohere Transcribe 03-2026** | **~2.4 GB** | **~4.8 GB** | **~7.2 GB** | stays resident, reloads instantly |
+| Parakeet TDT 0.6B v3 | ~900 MB | ~1.8 GB | ~2.7 GB | freed, reloads in about a second |
+| Parakeet TDT-CTC 110M | ~170 MB | ~340 MB | ~510 MB | freed, reloads in about a second |
+
+**No model shares one copy between two streams that are both captioning.** The engines
+decode one thing at a time per loaded copy, so sharing would make concurrent streams take
+turns, and a stream that waits its turn falls behind live audio and drops speech.
+Concurrency is bought with memory, deliberately.
+
+What differs between the two engines is what happens *between* streams. transcribe.cpp
+keeps the weights separate from the decoder state, so a finished stream's copy is kept and
+handed to the next one — those models also load once at startup, so the first tune does not
+wait. parakeet.cpp's handle is both at once and cannot be reused, so those models load when
+a stream starts and are freed when it ends; at a tenth of the size that costs about a
+second, not half a minute.
+
+If memory is tight: caption fewer tuners (there is a per-tuner setting on the page), or
+choose a smaller model. Captioning one tuner with Cohere Transcribe and leaving the rest
+uncaptioned is a perfectly reasonable setup.
 
 Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
 publish. Read it as a ranking rather than a promise: it is clean read speech, and live
