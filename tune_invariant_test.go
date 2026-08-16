@@ -112,6 +112,9 @@ func TestWrapWithMissingPiecesIsInstant(t *testing.T) {
 	if _, wrapped := out.(*captionStream); wrapped {
 		t.Fatal("wrapped a stream for a model that is not on disk")
 	}
+	// Wrapping marked a tune as beginning; closing settles it so no pending
+	// entry leaks into later tests.
+	out.Close()
 }
 
 type nopReadCloser struct{ *os.File }
