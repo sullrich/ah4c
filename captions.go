@@ -3297,16 +3297,27 @@ func txCheckABI() error {
 // CPU and most people never touch it, so a GPU-only model otherwise passed the
 // gate — which only asks whether a GPU exists — and then loaded strictly on the
 // processor, where it falls behind live audio and drops most of what is said.
-// That is the exact failure the gate is there to prevent, reached another way.
-func captionVariantFor(m captionModel) string {
+//
+// Refusing is the right answer when there is no GPU build to run it on. Having
+// a graphics card is not the same as having downloaded the build that uses it:
+// the CUDA build is a separate download, so a machine with an NVIDIA card and
+// no CUDA build would otherwise pass the gate and then quietly run on the
+// processor anyway, which is the exact failure the gate exists to prevent.
+func captionVariantFor(m captionModel) (string, error) {
 	variant := currentEngineVariant()
-	if m.NeedsGPU && variant == "cpu" {
-		if g := gpuVariant(rtTranscribe); g != "" {
-			logger("[CC] %s needs a GPU, so it runs on the %s build rather than the processor", m.Name, g)
-			return g
-		}
+	if !m.NeedsGPU {
+		return variant, nil
 	}
-	return variant
+	rt := runtimeOf(m)
+	if variant != "cpu" && runtimeInstalled(rt, variant) {
+		return variant, nil
+	}
+	if g := gpuVariant(rt); g != "" {
+		logger("[CC] %s needs a GPU, so it runs on the %s build rather than the processor", m.Name, g)
+		return g, nil
+	}
+	return "", fmt.Errorf("%s needs a GPU build of %s and none is downloaded; fetch one from the Closed Captions page",
+		m.Name, findSpeechRuntime(rt).Name)
 }
 
 // gpuVariant is the best GPU build this container can actually load, or "" if
@@ -3499,7 +3510,10 @@ type transcribeModel struct {
 // loadTranscribe opens the weights the user downloaded.
 func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
 	m, _ := findCaptionModel(cfg.Model)
-	variant := captionVariantFor(m)
+	variant, err := captionVariantFor(m)
+	if err != nil {
+		return nil, err
+	}
 	if err := initTranscribe(variant); err != nil {
 		return nil, err
 	}
@@ -4898,12 +4912,20 @@ func captionStatusPayload() captionStatus {
 		rt := runtimeOf(m)
 		mem, reuse, total := memoryNote(m, streams)
 		blocked := ""
-		if m.NeedsGPU && !hasGPU {
+		switch {
+		case m.NeedsGPU && !hasGPU:
 			blocked = "This model needs a GPU and no GPU build can run in this container yet. " +
 				"On a processor it cannot keep pace with live audio: it falls further behind every " +
 				"minute and drops most of what is said, so it is not offered rather than left to " +
 				"disappoint after a multi-gigabyte download. The bar is low — integrated graphics " +
 				"clear it comfortably — so set up Vulkan or CUDA above and this appears."
+		case m.NeedsGPU && gpuVariant(rt) == "":
+			// The card is there; the build that uses it is not. Saying so is
+			// the difference between a two minute fix and a mystery.
+			blocked = "This machine has a usable GPU, but the GPU build of " + findSpeechRuntime(rt).Name +
+				" has not been downloaded yet. Download it above and this becomes available. It is " +
+				"deliberately not offered on the processor build: this model cannot keep pace with " +
+				"live audio there and would drop most of what is said."
 		}
 		models = append(models, captionStatusModel{
 			captionModel:  m,
