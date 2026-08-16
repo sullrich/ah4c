@@ -1286,7 +1286,6 @@ func main() {
 	loadCaptionConfig()
 	warnIfNotPersistent()
 	restoreGPURuntime()
-	warmCaptionModel()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {

@@ -1448,60 +1448,6 @@ func accelStatus() accelReport {
 	return r
 }
 
-// warmCaptionModel loads the selected model into memory at startup, in the
-// background, so that a tune never waits for it.
-//
-// Loading weights is slow in proportion to their size, and Cohere Transcribe is
-// 2.4 GB: doing it on the first tune held the picture for more than thirty
-// seconds and the tune timed out before any video arrived. Captions are a
-// convenience and must never cost a tune, so the expensive part happens once,
-// here, before anybody asks for anything.
-//
-// What is loaded here goes straight into the pool, so the first tune finds it
-// already resident. Copies stay in the pool when a stream ends, which is what
-// keeps a stop-and-start from paying the load cost twice.
-func warmCaptionModel() {
-	cfg := currentCaptionConfig()
-	if !cfg.Enabled {
-		return
-	}
-	m, ok := findCaptionModel(cfg.Model)
-	if !ok || runtimeOf(m) != rtTranscribe || !modelInstalled(m) {
-		// Only the transcribe.cpp engine separates weights from decoder state,
-		// so it is the only one that can usefully be warmed. The parakeet
-		// models are a fraction of the size and load in about a second.
-		return
-	}
-	if m.NeedsGPU && !gpuAvailable() {
-		return
-	}
-	go func() {
-		start := time.Now()
-		// The variant is settled first and used for everything after, so the
-		// library, its backends and the backend the weights are loaded on are
-		// all the same build. Working it out twice is how they diverge.
-		variant := captionVariantFor(m)
-		if err := initTranscribe(variant); err != nil {
-			logger("[CC] Could not preload %s: %v", m.Name, err)
-			return
-		}
-		weights, err := filepath.Abs(modelPath(m))
-		if err != nil {
-			return
-		}
-		warm, key, err := acquireTxModel(weights, txBackend(variant))
-		if err != nil {
-			logger("[CC] Could not preload %s: %v", m.Name, err)
-			return
-		}
-		// Straight into the pool: nothing is using it yet, and the first tune
-		// should find it there.
-		releaseTxModel(key, warm)
-		logger("[CC] %s is loaded and resident after %s; tunes will not wait for it",
-			m.Name, time.Since(start).Round(time.Second))
-	}()
-}
-
 // gpuAvailable reports whether any GPU build could actually run here: its
 // driver loads, and for Vulkan a graphics device is present as well. It asks
 // the same questions accelStatus does, but about every build rather than the
@@ -3438,22 +3384,25 @@ func txAbortCallback() uintptr {
 	return txAbortPtr
 }
 
-// Loaded weights are pooled, not shared.
+// Loaded weights are per-stream and are freed the moment the stream ends.
 //
-// The engine permits one decode in flight per model across every session built
-// on it, not one per session. Sharing a single copy between tuners would
-// therefore mean they take turns, and two streams that each need to keep pace
-// with live audio cannot afford to wait for each other — one would fall behind
-// and start dropping speech. Overlapping them instead is documented to corrupt
-// decodes outright. Neither is acceptable, so each concurrent stream gets its
-// own copy of the weights and memory is what pays for it.
+// Two rules shape this. The engine permits one decode in flight per loaded copy
+// across every session built on it, so concurrent streams cannot share one copy
+// without taking turns — and a stream that waits its turn falls behind live
+// audio and drops speech. So each concurrent stream gets its own copy.
 //
-// They are pooled rather than freed on release, so a stream that stops and
-// starts again finds its weights already resident instead of spending thirty
-// seconds reloading them. That is also what the startup preload puts in: the
-// first tune takes the warm copy and begins instantly.
+// And nothing is kept once it is not being used. These are gigabytes: holding
+// them against a stream that might start later means a machine that captioned
+// three tuners an hour ago is still carrying three copies now, on a box that
+// also has to run everything else. Memory is borrowed for as long as a stream
+// needs it and given straight back.
+//
+// The cost of that is the load time on the next tune, which is why nothing on
+// the tune path waits for it: the picture starts immediately and captions join
+// when the weights are ready.
 type sharedTxModel struct {
 	handle uintptr
+	refs   int
 	// compute guards this copy. Nothing shares one today, so it is never
 	// contended; it is here so that the engine's one-decode-at-a-time rule
 	// cannot be broken by accident if anything ever does.
@@ -3462,31 +3411,21 @@ type sharedTxModel struct {
 
 var (
 	txModelLock sync.Mutex
-	// txIdle holds loaded-but-unused copies, keyed by weights and backend.
-	txIdle = map[string][]*sharedTxModel{}
-	txLive = map[string]int{}
+	txLive      = map[string]int{}
 )
 
-// acquireTxModel takes a resident copy if one is free, and loads another if not.
+// acquireTxModel loads a copy of the weights for one stream.
 func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
 	txModelLock.Lock()
-	if pool := txIdle[key]; len(pool) > 0 {
-		m := pool[len(pool)-1]
-		txIdle[key] = pool[:len(pool)-1]
-		txLive[key]++
-		txModelLock.Unlock()
-		logger("[CC] Using a copy of %s already in memory", filepath.Base(path))
-		return m, key, nil
-	}
 	live := txLive[key]
 	txModelLock.Unlock()
+	if live > 0 {
+		logger("[CC] Loading another copy of %s for a second stream; the copies cannot be shared without the streams waiting on each other", filepath.Base(path))
+	}
 
 	// Loaded outside the lock: this takes tens of seconds for a large model and
 	// holding the lock across it would stall an unrelated stream trying to stop.
-	if live > 0 {
-		logger("[CC] Loading another copy of %s for a second stream; this costs memory rather than making the streams wait for each other", filepath.Base(path))
-	}
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
@@ -3494,26 +3433,42 @@ func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) 
 	if st := txModelLoadFile(path, unsafe.Pointer(&load), unsafe.Pointer(&h)); st != txOK || h == 0 {
 		return nil, "", fmt.Errorf("loading %s: %s", filepath.Base(path), txStatusString(st))
 	}
-	m := &sharedTxModel{handle: h}
+	m := &sharedTxModel{handle: h, refs: 1}
 	txModelLock.Lock()
 	txLive[key]++
-	total := txLive[key] + len(txIdle[key])
+	n := txLive[key]
 	txModelLock.Unlock()
-	logger("[CC] %s is loaded (%d copies resident)", filepath.Base(path), total)
+	logger("[CC] %s loaded (%d copies now in memory)", filepath.Base(path), n)
 	return m, key, nil
 }
 
-// releaseTxModel returns a copy to the pool, still loaded and ready.
+// releaseTxModel gives the memory back.
 func releaseTxModel(key string, m *sharedTxModel) {
 	if m == nil {
 		return
 	}
 	txModelLock.Lock()
-	defer txModelLock.Unlock()
+	if m.refs <= 0 {
+		// Already given back. Freeing native memory a second time is a crash
+		// rather than an error, so this refuses rather than trusting callers.
+		txModelLock.Unlock()
+		return
+	}
+	if m.refs--; m.refs > 0 {
+		txModelLock.Unlock()
+		return
+	}
+	handle := m.handle
+	m.handle = 0
 	if txLive[key] > 0 {
 		txLive[key]--
 	}
-	txIdle[key] = append(txIdle[key], m)
+	n := txLive[key]
+	txModelLock.Unlock()
+
+	// Freed outside the lock for the same reason it is loaded outside it.
+	txModelFree(handle)
+	logger("[CC] Released %s (%d copies still in memory)", filepath.Base(strings.SplitN(key, "|", 2)[0]), n)
 }
 
 // transcribeModel is a loaded model and the session that runs it.
@@ -3587,8 +3542,7 @@ func (t *transcribeModel) Close() {
 		t.session = 0
 	}
 	if t.model != 0 {
-		// Returned to the pool rather than freed, so the next stream on this
-		// model starts instantly instead of reloading gigabytes.
+		// Given back now rather than held for a stream that may never come.
 		releaseTxModel(t.modelKey, t.shared)
 		t.model = 0
 		t.shared = nil
@@ -4838,26 +4792,26 @@ func memoryWarning(cfg captionConfig) string {
 		return ""
 	}
 	n := captionedStreams(cfg)
-	totalMB := m.SizeMB * n
+	per := streamMemoryMB(m)
+	totalMB := per * n
 	// Two gigabytes is the point at which this stops being a detail. A single
 	// Cohere stream is above it on its own, which is deliberate: 2.4 GB for one
 	// tuner is worth knowing before you turn it on, not after.
 	if totalMB < 2000 {
 		return ""
 	}
-	each := fmt.Sprintf("%.1f GB", float64(m.SizeMB)/1024)
-	total := fmt.Sprintf("%.1f GB", float64(totalMB)/1024)
+	each := humanMB(per)
+	total := humanMB(totalMB)
 	which := fmt.Sprintf("all %d tuners", n)
 	if len(cfg.Tuners) > 0 {
 		which = fmt.Sprintf("the %d tuners you have selected", n)
 	}
 	return fmt.Sprintf("%s uses about %s of memory per stream, and every stream captioned at "+
-		"the same time loads its own copy. With captions on for %s that is up to %s of RAM in "+
-		"use at once — reached when all of them are recording together, on top of everything "+
-		"else this machine is doing. Nothing is shared between streams: the engine can only "+
-		"decode one thing at a time per copy, so sharing would make the streams wait for each "+
-		"other and fall behind the picture. If that is more memory than you have, caption fewer "+
-		"tuners below or choose a smaller model.",
+		"the same time loads its own copy. With captions on for %s that is up to %s of RAM at "+
+		"once, on top of everything else this machine is doing. Copies are not shared, because "+
+		"sharing one would make the streams wait for each other and fall behind the picture. "+
+		"Memory is released as soon as a stream ends. If this is more than you have, caption "+
+		"fewer tuners below or pick a smaller model.",
 		m.Name, each, which, total)
 }
 
@@ -4877,18 +4831,41 @@ func memoryWarning(cfg captionConfig) string {
 // also a fraction of the size, which is why that costs about a second rather
 // than half a minute.
 func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
-	memory = "About " + humanMB(m.SizeMB) + " of RAM for each stream captioned at once"
+	per := streamMemoryMB(m)
+	memory = "About " + humanMB(per) + " per stream"
 	if streams > 1 {
-		total = fmt.Sprintf("up to %s across %d tuners", humanMB(m.SizeMB*streams), streams)
+		total = fmt.Sprintf("up to %s with %d tuners captioned at once", humanMB(per*streams), streams)
 	} else {
-		total = fmt.Sprintf("about %s for the one tuner being captioned", humanMB(m.SizeMB))
+		total = fmt.Sprintf("about %s with one tuner captioned", humanMB(per))
 	}
-	if runtimeOf(m) == rtTranscribe {
-		reuse = "Stays in memory when a stream ends, so the next tune starts straight away. Loaded once at startup as well."
-		return memory, reuse, total
-	}
-	reuse = "Loaded when a stream starts and freed when it ends, which takes about a second at this size."
+	reuse = "Every stream captioned at the same time loads its own copy, so this can use a lot of memory. It is freed as soon as the stream ends."
 	return memory, reuse, total
+}
+
+// streamMemoryMB is what one captioned stream really costs in memory.
+//
+// It is not the size of the file. The weights are the bulk of it, but a stream
+// also needs its decoder cache, the encoder's activations and ggml's own
+// working buffers, and those scale with the model rather than being a fixed
+// cost — which is why a second Cohere Transcribe stream was measured at about
+// three gigabytes against a 2.4 GB file, not at 2.4. Reporting the file size
+// as the memory cost understates it by roughly a quarter, and understating
+// memory is how a machine gets pushed into swap by a setting that looked safe.
+//
+// The allowance below is fitted to that measurement rather than derived, so it
+// is an estimate and is worded as one wherever it is shown. It is deliberately
+// not generous in the other direction: it is better to over-warn about memory
+// than to have somebody discover the truth when the box stops responding.
+const (
+	// streamOverhead covers buffers that grow with the model.
+	streamOverhead = 1.2
+	// streamWorkingMB covers the decoder cache and the fixed per-session cost.
+	// A Cohere run allocates about 33 MB of key/value cache alone.
+	streamWorkingMB = 100
+)
+
+func streamMemoryMB(m captionModel) int {
+	return int(float64(m.SizeMB)*streamOverhead) + streamWorkingMB
 }
 
 // humanMB writes a size the way a person would say it.
@@ -4938,8 +4915,8 @@ func captionStatusPayload() captionStatus {
 			Blocked:       blocked,
 			Memory:        mem,
 			Reuse:         reuse,
-			MemoryMB:      m.SizeMB,
-			MemoryTotalMB: m.SizeMB * streams,
+			MemoryMB:      streamMemoryMB(m),
+			MemoryTotalMB: streamMemoryMB(m) * streams,
 			MemoryTotal:   total,
 			URL:           modelURL(m),
 		})
