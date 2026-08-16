@@ -3881,6 +3881,19 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 	// second. The warm-up itself pauses whenever a tune is young, so the disk
 	// belongs to the tune whenever there is one.
 	prewarmModelFile(path)
+	// Hold the short native load off any tune younger than tuneFresh — but
+	// bounded. Under a run of channel changes an unbounded wait stacks into
+	// minutes of captions that look like they never loaded; past the cap the
+	// load simply goes, because by then it is a couple of seconds against a
+	// warmed file.
+	holdUntil := time.Now().Add(60 * time.Second)
+	for {
+		quiet, wait := tuneQuiet()
+		if quiet || time.Now().After(holdUntil) {
+			break
+		}
+		time.Sleep(wait)
+	}
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
@@ -4676,25 +4689,6 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	// reason is said plainly, and then it is tried again for as long as the
 	// stream is alive, backing off so a genuinely broken setup logs a line
 	// every couple of minutes rather than a scroll.
-	// Wait for every tune on the machine to be old news before anything
-	// heavy. This stream's own settle has passed (feed gated on it), but a
-	// different tuner may have started since, and a load competing with a
-	// young tune is how tunes die. A fresh tune during the wait pushes the
-	// deadline back; a fresh tune during the load itself is handled by the
-	// prewarm, which pauses for it.
-	for {
-		quiet, wait := tuneQuiet()
-		if quiet {
-			break
-		}
-		select {
-		case <-e.closed:
-			e.finish()
-			return
-		case <-time.After(wait):
-		}
-	}
-
 	var model recognizer
 	backoff := 15 * time.Second
 	for attempt := 1; ; attempt++ {
@@ -5513,20 +5507,22 @@ func (e *captionEngine) rememberTail(words []string) {
 	e.tail = append([]string(nil), words...)
 }
 
-// captionSettle is how long every stream on the machine must have been
-// flowing before the expensive part of starting captions is allowed to begin.
-//
-// The first byte is not that signal, and neither was ten seconds: a load that
-// began ten seconds into a real tune still killed it at thirty-two. The DVR
-// judges a tune over its whole first half minute — probing, buffering,
-// deciding — and a gigabytes-long weights load competes for the disk and
-// memory bandwidth that judgment is measuring, wherever in that window it
-// runs. So the load waits out the entire window with margin, and it waits on
-// every tuner, not just its own: the machine is shared, and a load for tuner
-// one starving a fresh tune on tuner two is the same failure wearing a
-// different number. It costs under a minute before the first caption on a
-// cold start, and nothing on a warm one where the model is already resident.
-const captionSettle = 45 * time.Second
+// captionSettle is how long this stream must have been flowing before its
+// caption engine starts up. The first byte proves the tune worked; a few
+// seconds of flow proves it has settled. The genuinely heavy work is gated
+// separately and machine-wide — see tuneFresh — so this only needs to cover
+// the stream finding its feet.
+const captionSettle = 5 * time.Second
+
+// tuneFresh is how recently a tune may have started, anywhere on the
+// machine, for the un-pausable part of a model load to run. The load's disk
+// work is done beforehand by a warm-up loop that yields to tunes on its own;
+// what remains is a couple of seconds of native call, and holding that back
+// while any tune is this young keeps it off the window where the DVR is
+// judging the stream. Waiting 45 seconds here was tried and read as broken
+// captions: every channel change reset the clock and the model looked like
+// it never loaded.
+const tuneFresh = 12 * time.Second
 
 // lastTuneStart is when a tune last began anywhere on the machine, as unix
 // nanoseconds. Written on every tune, captioned or not; read by loads waiting
@@ -5577,10 +5573,10 @@ func tuneQuiet() (bool, time.Duration) {
 		return true, 0
 	}
 	age := time.Since(time.Unix(0, last))
-	if age >= captionSettle {
+	if age >= tuneFresh {
 		return true, 0
 	}
-	return false, captionSettle - age
+	return false, tuneFresh - age
 }
 
 // feed offers stream bytes to the recognizer without blocking.
