@@ -6306,6 +6306,9 @@ func (e *captionEngine) recognize() {
 		reply <-chan txBatchReply
 		item  phraseItem
 		sent  time.Time
+		// giveUp is when to stop waiting on this one, carried per phrase so
+		// the wait can be part of a select rather than a call that blocks.
+		giveUp time.Time
 	}
 	async, canAsync := e.model.(interface {
 		submit(pcm []float32) (<-chan txBatchReply, error)
@@ -6340,43 +6343,88 @@ func (e *captionEngine) recognize() {
 		e.captionResult(p.item, r.text, r.err, time.Since(p.sent))
 		return true
 	}
-	for item := range e.phrases {
+	// A finished caption goes on screen the moment it is finished.
+	//
+	// This waited on the next phrase instead. Results were only ever collected
+	// on the way past — a phrase arrived, whatever had come back since last
+	// time was shown, and then the loop blocked on the channel again. So a
+	// caption that the recognizer had ready in half a second sat there until
+	// the speaker finished saying the next thing, which on continuous speech
+	// is another two and three quarter seconds. It was the phrase rate setting
+	// the delay, and the recognizer's speed barely entered into it: half a
+	// second of compute, three seconds on screen.
+	//
+	// Waiting on both at once is the whole fix. Whichever happens first —
+	// another phrase to send, or an answer to show — is dealt with when it
+	// happens, and nothing is held for the sake of something unrelated.
+	for {
+		var in <-chan phraseItem
+		if len(window) < 2 {
+			// Two in flight is the ceiling, so the channel is only listened to
+			// with room to accept. Not listening is the backpressure: it was a
+			// blocking settle before, which is the same bound reached by
+			// standing still instead of by waiting for the right thing.
+			in = e.phrases
+		}
+		var head <-chan txBatchReply
+		var lost <-chan time.Time
+		if len(window) > 0 {
+			head = window[0].reply
+			lost = time.After(time.Until(window[0].giveUp))
+		}
 		select {
 		case <-e.closed:
 			return
-		default:
-		}
-		// Skip anything that went stale in the queue. Dropping the oldest is
-		// what lets the newest stay current: the alternative is every phrase
-		// arriving late by however far behind the recognizer once fell.
-		if age := time.Since(item.cut); age > phraseStaleAfter {
-			n := atomic.AddInt64(&e.skippedStale, 1)
-			if n == 1 || n%10 == 0 {
-				logger("[CC] %s skipped a phrase %.0fs old to stay current (%d so far)", e.label, age.Seconds(), n)
-			}
-			continue
-		}
-		if !canAsync {
-			e.caption(item)
-			continue
-		}
-		for settleHead(false) {
-		}
-		reply, err := async.submit(item.pcm)
-		if err != nil {
-			// A full service is a dropped phrase; the falling-behind log
-			// already reports the count.
-			atomic.AddInt64(&e.dropped, 1)
-			continue
-		}
-		if reply == nil {
-			continue
-		}
-		window = append(window, pendingPhrase{reply: reply, item: item, sent: time.Now()})
-		for len(window) >= 2 {
-			if !settleHead(true) {
+		case r := <-head:
+			p := window[0]
+			window = window[1:]
+			e.captionResult(p.item, r.text, r.err, time.Since(p.sent))
+		case <-lost:
+			window = window[1:]
+			logger("[CC] %s the shared recognizer did not answer", e.label)
+		case item, ok := <-in:
+			if !ok {
+				// No more phrases coming: show what is still in flight and
+				// finish. Nothing is abandoned that has already been paid for.
+				for len(window) > 0 {
+					if !settleHead(true) {
+						return
+					}
+				}
 				return
 			}
+			// Skip anything that went stale in the queue. Dropping the oldest
+			// is what lets the newest stay current: the alternative is every
+			// phrase arriving late by however far behind the recognizer once
+			// fell.
+			if age := time.Since(item.cut); age > phraseStaleAfter {
+				n := atomic.AddInt64(&e.skippedStale, 1)
+				if n == 1 || n%10 == 0 {
+					logger("[CC] %s skipped a phrase %.0fs old to stay current (%d so far)", e.label, age.Seconds(), n)
+				}
+				continue
+			}
+			if !canAsync {
+				e.caption(item)
+				continue
+			}
+			reply, err := async.submit(item.pcm)
+			if err != nil {
+				// A full service is a dropped phrase; the falling-behind log
+				// already reports the count.
+				atomic.AddInt64(&e.dropped, 1)
+				continue
+			}
+			if reply == nil {
+				continue
+			}
+			now := time.Now()
+			window = append(window, pendingPhrase{
+				reply:  reply,
+				item:   item,
+				sent:   now,
+				giveUp: now.Add(txRunDeadline + 8*time.Second),
+			})
 		}
 	}
 }
