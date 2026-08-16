@@ -3337,6 +3337,20 @@ func initTranscribe(variant string) error {
 		if os.Getenv("TRANSCRIBE_PERF_DEBUG") == "" {
 			os.Setenv("TRANSCRIBE_PERF_DEBUG", "cohere")
 		}
+		// On a GPU, take the direct convolution paths. The encoder is
+		// convolution-heavy and measures as the bulk of every dispatch; the
+		// im2col fallback trades compute for memory bandwidth, which is the
+		// one thing an integrated GPU sharing system RAM has none to spare.
+		// The stage timings above say within a minute whether this was
+		// right on a given machine, and a hand-set value always wins.
+		if strings.Contains(variant, "vulkan") || strings.Contains(variant, "cuda") {
+			if os.Getenv("TRANSCRIBE_CONV_DIRECT_DW") == "" && os.Getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") == "" {
+				os.Setenv("TRANSCRIBE_CONV_DIRECT_DW", "1")
+			}
+			if os.Getenv("TRANSCRIBE_CONV_DIRECT_PW") == "" && os.Getenv("TRANSCRIBE_CONV_NO_DIRECT_PW") == "" {
+				os.Setenv("TRANSCRIBE_CONV_DIRECT_PW", "1")
+			}
+		}
 		// Point the graphics driver's compiled-shader cache at the bind
 		// mount. The first Vulkan initialization compiles every compute
 		// shader the engine uses — seconds of every core, and un-pausable.
