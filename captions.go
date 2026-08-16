@@ -4546,7 +4546,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		case strings.Contains(variant, "cuda"):
 			want = "cuda"
 		}
-		if want != "" && got != want {
+		if want != "" && !strings.Contains(strings.ToLower(got), want) {
 			logger("[CC] WARNING: asked for the %s backend and the engine is using %s instead. The %s module did not load — check the driver inside the container, and /dev/dri for Vulkan.",
 				want, got, want)
 		} else {
@@ -5493,8 +5493,10 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// nothing to flush.
 	settled := true
 	decoderTries := 0
-	// uttered is how much audio the open utterance has consumed.
+	// uttered is how much audio the open utterance has consumed; lead holds
+	// the last beats of quiet audio so new speech keeps its first word.
 	uttered := 0.0
+	var lead [][]float32
 
 	take := func(r *streamResult) {
 		if r == nil {
@@ -5561,6 +5563,35 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			}
 			continue
 		}
+		rms := math.Sqrt(sum / float64(len(buf)))
+		peak = vadPeak(peak, rms)
+		loud := rms > vadBar(floor, peak)
+		if !loud {
+			floor = math.Min(0.995*floor+0.005*rms, vadFloorMax)
+		}
+
+		// Between utterances, only speech opens a new one. Feeding the model
+		// whatever the channel is playing — music beds, crowd noise — sends
+		// a small model rambling until the engine cuts the decode off, and
+		// the transcript arrives truncated. The lead buffer keeps the last
+		// beats of audio so the first word of new speech is not clipped;
+		// gaps in what the model hears fall only between utterances, where
+		// the reopened stream starts clean.
+		if settled && !loud {
+			lead = append(lead, append([]float32(nil), buf...))
+			if len(lead) > 2 {
+				lead = lead[1:]
+			}
+			continue
+		}
+		if settled {
+			for _, l := range lead {
+				take(e.model.feedStream(l))
+				uttered += float64(len(l)) / asrSampleRate
+			}
+			lead = nil
+			settled = false
+		}
 		take(e.model.feedStream(buf))
 		uttered += chunkSec
 
@@ -5575,17 +5606,8 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			continue
 		}
 
-		// Watch for the talking stopping, so the end of a sentence is not left
-		// waiting for the next one to start. The floor tracks the channel's own
-		// noise, because broadcast audio is never actually silent.
-		rms := math.Sqrt(sum / float64(len(buf)))
-		peak = vadPeak(peak, rms)
-		if rms > vadBar(floor, peak) {
-			quiet, settled = 0, false
-			continue
-		}
-		floor = math.Min(0.995*floor+0.005*rms, vadFloorMax)
-		if settled {
+		if loud {
+			quiet = 0
 			continue
 		}
 		if quiet += chunkSec; quiet >= flushSilence {
