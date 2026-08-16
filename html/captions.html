@@ -406,8 +406,8 @@ function render() {
     const lats = state.latencies || [];
     const latSel = document.getElementById('latency');
     latSel.innerHTML = lats.map(l =>
-        `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'balanced') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
-    const chosen = lats.find(l => l.key === (cfg.latency || 'balanced'));
+        `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'fast') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+    const chosen = lats.find(l => l.key === (cfg.latency || 'fast'));
     document.getElementById('latencyNote').textContent = chosen
         ? chosen.desc + (model && !model.streaming
             ? ' For this model the setting decides how long a phrase may run before it is cut, which is most of the delay you see.'
