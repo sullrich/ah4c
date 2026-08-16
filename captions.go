@@ -1552,20 +1552,47 @@ func restoreGPURuntimeQuietly() {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// Nothing saved, or already loaded, means nothing heavy will happen —
-	// skip the wait so the common case is settled instantly.
+	// Nothing saved, or everything genuinely loadable, means nothing heavy
+	// will happen — skip the wait so the common case is settled instantly.
+	// "Loadable" is judged on the drivers themselves, not just the loader in
+	// front of them: a previous session can leave the loader present and the
+	// driver behind it broken, and taking the loader's word for it was how a
+	// container started processor-only with a fixable driver on disk.
 	need := false
 	for _, g := range gpuRuntimes {
-		if driverDownloaded(g) && !driverActive(g) {
+		if driverDownloaded(g) && (!driverActive(g) || len(brokenVulkanDrivers()) > 0) {
 			need = true
 		}
 	}
-	if need {
-		for !waitTuneQuiet(30 * time.Second) {
-		}
+	if !need {
+		return
+	}
+	for !waitTuneQuiet(30 * time.Second) {
 	}
 	restoreGPURuntime()
+	// The engine scans for backends once per process. If it already ran that
+	// scan while the driver was broken, this repair cannot reach it until the
+	// process restarts — which deserves saying plainly, because from outside
+	// it looks like a fixed driver being ignored.
+	if txInited() && len(brokenVulkanDrivers()) == 0 {
+		if v := currentEngineVariant(); strings.Contains(v, "vulkan") && !txBackendAvailable(txBackendVulkan) {
+			logger("[CC] The graphics driver is repaired, but the engine had already started without it. Restart the container to caption on the GPU.")
+		}
+	}
 }
+
+// txInited reports whether the engine's one-time initialisation has run.
+func txInited() bool {
+	select {
+	case <-txInitedCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// txInitedCh closes when initTranscribe's Once has completed.
+var txInitedCh = make(chan struct{})
 
 // restoreGPURuntime puts the driver back after a container rebuild, from the
 // copy in the bind mount, so the choice survives without anyone pressing
@@ -3101,6 +3128,10 @@ var (
 // that does not load, and the engine carries on with the ones that did.
 func initTranscribe(variant string) error {
 	txOnce.Do(func() {
+		// The engine can only scan for backends once per process, so tell
+		// the restore-repair goroutine when that has happened; a driver fixed
+		// after this point needs a restart to be seen, and the log says so.
+		defer close(txInitedCh)
 		// A fresh container may still be putting the driver back; opening the
 		// engine before that finishes would find no Vulkan library and settle
 		// on the processor for the life of the process. Bounded: a restore
@@ -4872,7 +4903,10 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < 2*time.Minute {
+		// Capped low: what unblocks a failed start is usually an external
+		// event — a driver finishing, the machine going quiet — and waiting
+		// minutes to notice it means captions sitting out recoverable time.
+		if backoff < 30*time.Second {
 			backoff *= 2
 		}
 	}
