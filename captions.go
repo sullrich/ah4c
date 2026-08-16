@@ -495,7 +495,12 @@ type captionModel struct {
 	Runtime string `json:"runtime"`
 	Repo    string `json:"repo"`
 	File    string `json:"file"`
-	SizeMB  int    `json:"sizeMB"`
+	// AltFiles are earlier filenames of the same model — a different
+	// quantisation the catalog used to point at. A file somebody already spent
+	// a download on keeps working when the catalog moves; asking them to fetch
+	// gigabytes they nearly have is not an upgrade.
+	AltFiles []string `json:"-"`
+	SizeMB   int      `json:"sizeMB"`
 	// Streaming models transcribe as the audio arrives. Punctuation says
 	// whether the model writes any: the ones that do not cannot be made to, and
 	// a wall of unpunctuated capitals is worth knowing about in advance.
@@ -588,6 +593,7 @@ var captionModelCatalog = []captionModel{
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
+		AltFiles:    []string{"cohere-transcribe-03-2026-Q8_0.gguf"},
 		SizeMB:      1760,
 		Punctuation: true,
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
@@ -781,9 +787,21 @@ func modelURL(m captionModel) string {
 	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", repo, m.File)
 }
 
-// modelPath is where a model's weights live once downloaded.
+// modelPath is where a model's weights live once downloaded. If the catalog's
+// current file is absent but an earlier quantisation of the same model is on
+// disk, that one is used: it is the same model and it is already here.
 func modelPath(m captionModel) string {
-	return filepath.Join(captionModels, m.File)
+	primary := filepath.Join(captionModels, m.File)
+	if st, err := os.Stat(primary); err == nil && st.Size() > 0 {
+		return primary
+	}
+	for _, alt := range m.AltFiles {
+		p := filepath.Join(captionModels, alt)
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return p
+		}
+	}
+	return primary
 }
 
 // modelInstalled reports whether the model's weights are on disk.
@@ -1109,8 +1127,10 @@ func removeCaptionModel(m captionModel) error {
 	if active {
 		return fmt.Errorf("that model is still downloading")
 	}
-	if err := os.Remove(modelPath(m)); err != nil && !os.IsNotExist(err) {
-		return err
+	for _, f := range append([]string{m.File}, m.AltFiles...) {
+		if err := os.Remove(filepath.Join(captionModels, f)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	logger("[CC] Removed model %s", m.Key)
 	return nil
@@ -5879,7 +5899,13 @@ const (
 )
 
 func streamMemoryMB(m captionModel) int {
-	return int(float64(m.SizeMB)*streamOverhead) + streamWorkingMB
+	sizeMB := m.SizeMB
+	// The file on disk is the truth when it is present — it may be an earlier,
+	// larger quantisation than the catalog now lists.
+	if st, err := os.Stat(modelPath(m)); err == nil && st.Size() > 0 {
+		sizeMB = int(st.Size() / (1024 * 1024))
+	}
+	return int(float64(sizeMB)*streamOverhead) + streamWorkingMB
 }
 
 // humanMB writes a size the way a person would say it.
