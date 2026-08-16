@@ -3289,8 +3289,73 @@ func initTranscribe(variant string) error {
 		logger("[CC] transcribe.cpp backends available here: %s", strings.Join(have, ", "))
 		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
 		logComputeDevices()
+		if strings.Contains(variant, "vulkan") && !txBackendAvailable(txBackendVulkan) {
+			explainMissingVulkan()
+		}
 	})
 	return txErr
+}
+
+// explainMissingVulkan prints everything that decides whether Vulkan works,
+// at the moment it turned out not to. One block in the log instead of a day
+// of comparing guesses: the device nodes, the loader, each driver manifest
+// and whether its library loads, and what the manifest pin was set to.
+func explainMissingVulkan() {
+	logger("[CC] Vulkan was asked for and is not available. The facts:")
+	if nodes := renderNodes(); len(nodes) == 0 {
+		logger("[CC]   - /dev/dri has no render nodes: the compose file is not passing the GPU through")
+	} else {
+		logger("[CC]   - /dev/dri render nodes: %s", strings.Join(nodes, ", "))
+	}
+	if h, err := purego.Dlopen("libvulkan.so.1", purego.RTLD_NOW); err != nil || h == 0 {
+		logger("[CC]   - the Vulkan loader itself does not load: %v", err)
+	} else {
+		logger("[CC]   - the Vulkan loader loads")
+	}
+	if v := os.Getenv("VK_DRIVER_FILES"); v != "" {
+		logger("[CC]   - drivers limited to: %s", v)
+	}
+	found := 0
+	for _, dir := range []string{
+		"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d",
+		"/usr/local/share/vulkan/icd.d", "/usr/local/etc/vulkan/icd.d",
+	} {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			found++
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var manifest struct {
+				ICD struct {
+					LibraryPath string `json:"library_path"`
+				} `json:"ICD"`
+			}
+			if json.Unmarshal(b, &manifest) != nil || manifest.ICD.LibraryPath == "" {
+				logger("[CC]   - %s: unreadable manifest", e.Name())
+				continue
+			}
+			lib := manifest.ICD.LibraryPath
+			if !filepath.IsAbs(lib) && strings.Contains(lib, "/") {
+				lib = filepath.Join(dir, lib)
+			}
+			if h, err := purego.Dlopen(lib, purego.RTLD_NOW); err != nil || h == 0 {
+				logger("[CC]   - %s: %s FAILS to load: %v", e.Name(), lib, err)
+			} else {
+				logger("[CC]   - %s: %s loads", e.Name(), lib)
+			}
+		}
+	}
+	if found == 0 {
+		logger("[CC]   - no driver manifests anywhere: the driver package is not installed. Press the Vulkan driver download on the Closed Captions page.")
+	}
 }
 
 // logComputeDevices names every device the engine registered, so "which chip is
