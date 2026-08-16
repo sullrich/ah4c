@@ -460,7 +460,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Streams share one copy taking turns, so each concurrent stream adds about a second of caption delay. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
+		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
@@ -717,6 +717,10 @@ func startModelDownload(m captionModel) error {
 	dlLock.Unlock()
 
 	go func() {
+		// A button press must not fight a recording: gigabytes to disk wait
+		// for the machine to go quiet, bounded so the press is still honored
+		// on a machine that never quite is.
+		waitTuneQuiet(60 * time.Second)
 		err := fetchModel(m)
 		dlLock.Lock()
 		dlState.Active = false
@@ -835,9 +839,10 @@ func startRuntimeDownload(variant, modelKey string) error {
 
 	logger("[CC] Downloading %s from %s", eng.Name, url)
 	go func() {
-		// parakeet.cpp is a single library; transcribe.cpp is a library plus
-		// the ggml backends it loads from alongside itself, so that one takes
-		// the whole archive.
+		// Same rule as the model download: never fight a recording.
+		waitTuneQuiet(60 * time.Second)
+		// The engine is a library plus the ggml backends it loads from
+		// alongside itself, so the whole archive is taken.
 		err := fetchRuntime(url, dir, lib, rt == rtTranscribe)
 		dlLock.Lock()
 		dlState.Active = false
@@ -1112,6 +1117,9 @@ func startDriverDownload(kind string) error {
 	gpuLock.Unlock()
 
 	go func() {
+		// apt and dpkg are heavy hands; they wait for the machine to go
+		// quiet, bounded so the press is still honored eventually.
+		waitTuneQuiet(60 * time.Second)
 		log, err := fetchDriver(g)
 		if err == nil {
 			var l2 string
@@ -1625,6 +1633,7 @@ func restoreGPURuntimeQuietly() {
 		}
 	}
 	if !saved {
+		warmEngineCache()
 		return
 	}
 	// Everything else waits for the machine to go quiet — including the
@@ -1642,10 +1651,10 @@ func restoreGPURuntimeQuietly() {
 			need = true
 		}
 	}
-	if !need {
-		return
+	if need {
+		restoreGPURuntime()
 	}
-	restoreGPURuntime()
+	warmEngineCache()
 	// The engine scans for backends once per process. If it already ran that
 	// scan while the driver was broken, this repair cannot reach it until the
 	// process restarts — which deserves saying plainly, because from outside
@@ -1669,6 +1678,19 @@ func txInited() bool {
 
 // txInitedCh closes when initTranscribe's Once has completed.
 var txInitedCh = make(chan struct{})
+
+// warmEngineCache primes the which-builds-can-load cache off the tune path.
+// The first tune otherwise pays those dlopens itself — under the tuner lock,
+// where one slow driver chain delays every tuner's tune.
+func warmEngineCache() {
+	for !waitTuneQuiet(30 * time.Second) {
+	}
+	for _, v := range engineVariants {
+		if v.Key != "auto" {
+			engineUsable(v)
+		}
+	}
+}
 
 // restoreGPURuntime puts the driver back after a container rebuild, from the
 // copy in the bind mount, so the choice survives without anyone pressing
@@ -3309,6 +3331,12 @@ func initTranscribe(variant string) error {
 		// line about its key/value cache for every phrase it transcribes, which
 		// on a busy channel is a line a second, for ever.
 		txLogSet(txLogCallback(), nil)
+		// Ask the engine for its per-stage timing breakdown; the log callback
+		// samples it every half minute. This is how a slow stage gets named
+		// by the engine itself instead of inferred from the outside.
+		if os.Getenv("TRANSCRIBE_PERF_DEBUG") == "" {
+			os.Setenv("TRANSCRIBE_PERF_DEBUG", "cohere")
+		}
 		// Point the graphics driver's compiled-shader cache at the bind
 		// mount. The first Vulkan initialization compiles every compute
 		// shader the engine uses — seconds of every core, and un-pausable.
@@ -3746,8 +3774,17 @@ func (t *transcribeModel) enterGPU() bool {
 	if !t.onGPU {
 		return false
 	}
-	gpuGate <- struct{}{}
-	return true
+	// Bounded: a decode that wedged while holding a slot must not turn the
+	// gate into a plug for every session that comes after it. Past the
+	// deadline the slot is presumed lost and the work proceeds without one —
+	// oversubscribing the device beats freezing every stream on it.
+	select {
+	case gpuGate <- struct{}{}:
+		return true
+	case <-time.After(txRunDeadline + 5*time.Second):
+		logger("[CC] a GPU slot was not released in time; proceeding without one")
+		return false
+	}
 }
 
 func (t *transcribeModel) leaveGPU(held bool) {
@@ -3918,6 +3955,17 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			return
 		}
 		go svc.run(w)
+		// Every stream that wanted this may have timed out and moved on
+		// while the load ran. A live service nobody references would hold
+		// the weights until restart; reap it here, and a later stream simply
+		// creates a fresh one.
+		txServiceLock.Lock()
+		if svc.refs <= 0 {
+			delete(txServices, key)
+			close(svc.closed)
+			logger("[CC] The shared model finished loading after every stream stopped waiting; releasing it")
+		}
+		txServiceLock.Unlock()
 	}()
 
 	select {
@@ -4142,7 +4190,14 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 // batchClient is the per-stream face of the shared service. It satisfies
 // recognizer; the streaming entry points refuse, which sends the caption
 // engine down the phrase-at-a-time path — the only path these models have.
-type batchClient struct{ svc *txBatchService }
+type batchClient struct {
+	svc *txBatchService
+	// stop is the owning engine's closed channel. A teardown must not sit
+	// out a reply that a tune hold is delaying — that was a circle: the
+	// close waited on the reply, the reply waited on the quiet gate, and
+	// the gate waited on the tune the close was making way for.
+	stop <-chan struct{}
+}
 
 func (b *batchClient) transcribe(pcm []float32) (string, error) {
 	if len(pcm) < asrSampleRate/4 {
@@ -4157,6 +4212,8 @@ func (b *batchClient) transcribe(pcm []float32) (string, error) {
 	select {
 	case r := <-reply:
 		return r.text, r.err
+	case <-b.stop:
+		return "", fmt.Errorf("stream is closing")
 	case <-time.After(txRunDeadline + 8*time.Second):
 		// The service dispatch is itself bounded by the run deadline, so this
 		// only fires if the service has died with the request in hand. Waiting
@@ -4308,9 +4365,18 @@ func releaseTxModel(key string, m *sharedTxModel) {
 	n := txLive[key]
 	txModelLock.Unlock()
 
-	// Freed outside the lock for the same reason it is loaded outside it.
-	txModelFree(handle)
-	logger("[CC] Freed %s (%d in memory)", filepath.Base(strings.SplitN(key, "|", 2)[0]), n)
+	// Freed outside the lock for the same reason it is loaded outside it —
+	// and off any caller's path, behind the tune gate: freeing gigabytes of
+	// weights (and a GPU's copy of them) is heavy work, and the last stream
+	// ends at exactly the moment a channel change begins a new tune.
+	go func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for tunesPending() && time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+		}
+		txModelFree(handle)
+		logger("[CC] Freed %s (%d in memory)", filepath.Base(strings.SplitN(key, "|", 2)[0]), n)
+	}()
 }
 
 // txLogCallback filters what the engine has to say down to what a person
@@ -4319,7 +4385,30 @@ func releaseTxModel(key string, m *sharedTxModel) {
 var (
 	txLogOnce sync.Once
 	txLogPtr  uintptr
+
+	txPerfLastSample int64
+	txPerfWindowEnd  int64
 )
+
+// txPerfSampleOpen opens a two-second pass-through window for the engine's
+// debug lines every thirty seconds, so the per-stage timing breakdown the
+// engine prints per phrase lands in the log as a periodic sample rather than
+// as either a firehose or silence. Races here cost at most a few extra lines.
+func txPerfSampleOpen() bool {
+	now := time.Now().UnixNano()
+	if now < atomic.LoadInt64(&txPerfWindowEnd) {
+		return true
+	}
+	last := atomic.LoadInt64(&txPerfLastSample)
+	if now-last < int64(30*time.Second) {
+		return false
+	}
+	if atomic.CompareAndSwapInt64(&txPerfLastSample, last, now) {
+		atomic.StoreInt64(&txPerfWindowEnd, now+int64(2*time.Second))
+		return true
+	}
+	return false
+}
 
 func txLogCallback() uintptr {
 	txLogOnce.Do(func() {
@@ -4337,8 +4426,12 @@ func txLogCallback() uintptr {
 		}()
 		txLogPtr = purego.NewCallback(func(level int32, msg *byte, _ unsafe.Pointer) {
 			// 2 is WARN and 3 is ERROR; INFO, DEBUG and continuation lines are
-			// dropped where they are made rather than filtered later.
-			if level != 2 && level != 3 {
+			// dropped where they are made rather than filtered later — except
+			// during a sampling window: the engine's per-stage timing
+			// breakdown arrives as DEBUG lines, and a sample of it every
+			// half minute is how "which stage is slow" stays a fact in the
+			// log instead of a day of guessing.
+			if level != 2 && level != 3 && !txPerfSampleOpen() {
 				return
 			}
 			text := strings.TrimSpace(txGoString(msg))
@@ -4631,6 +4724,13 @@ func (t *transcribeModel) disarm() {
 func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
 	if len(pcm) < asrSampleRate/4 {
 		return "", nil
+	}
+	// The same yield the shared service gives: no decode while any tune has
+	// yet to deliver video. This path is the fallback when a streaming
+	// session will not open, and it was the one decode left that could run
+	// straight through a channel change.
+	for tunesPending() {
+		time.Sleep(2 * time.Second)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -5053,7 +5153,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	backoff := 15 * time.Second
 	for attempt := 1; ; attempt++ {
 		var err error
-		model, err = loadRecognizer(m, cfg, alive)
+		model, err = loadRecognizer(m, cfg, alive, e.closed)
 		if err == nil {
 			break
 		}
@@ -5128,7 +5228,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
-func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
+func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool, stop <-chan struct{}) (recognizer, error) {
 	// Nothing below may fight a tune — and "below" includes more than the
 	// weights: the engine's first initialization compiles the GPU backend's
 	// shaders, an all-cores burst that is just as capable of starving a
@@ -5158,7 +5258,7 @@ func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recog
 		if err != nil {
 			return nil, err
 		}
-		return &batchClient{svc: svc}, nil
+		return &batchClient{svc: svc, stop: stop}, nil
 	}
 	return loadTranscribe(modelPath(m), cfg, alive)
 }
@@ -5550,6 +5650,14 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			v := float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
 			buf[i] = v
 			sum += float64(v) * float64(v)
+		}
+		// Continuous recognition yields to tunes like every other compute
+		// here: while any tune has yet to deliver its video, this chunk is
+		// read (so the decoder never blocks) and simply not recognized. A
+		// channel change costs this stream a few seconds of captions, never
+		// the other viewer's recording.
+		if tunesPending() {
+			continue
 		}
 		take(e.model.feedStream(buf))
 
@@ -6120,17 +6228,32 @@ func (e *captionEngine) Close() {
 		// which both happened, and closing a channel twice is a panic that
 		// takes every tuner down with it.
 		e.startOnce.Do(func() { e.finish() })
-		stopped := true
 		select {
 		case <-e.done:
 		case <-time.After(10 * time.Second):
-			stopped = false
-			logger("[CC] %s recognizer did not stop in time; leaving its memory alone. Its copy of the model stays loaded until ah4c restarts.", e.label)
+			// The recognizer is usually seconds from returning — a phrase in
+			// flight, a reply queued behind a tune hold — so its resources
+			// are handed back when it actually finishes, however late that
+			// is, rather than dropped. Dropping them here leaked a reference
+			// per busy channel change until the shared model could never be
+			// freed at all.
+			logger("[CC] %s recognizer is still finishing; its memory will be returned when it does", e.label)
+			go func() {
+				<-e.done
+				e.mu.Lock()
+				model := e.model
+				e.mu.Unlock()
+				if model != nil {
+					model.Close()
+				}
+				logger("[CC] %s captions stopped late, memory returned", e.label)
+			}()
+			return
 		}
 		e.mu.Lock()
 		model := e.model
 		e.mu.Unlock()
-		if stopped && model != nil {
+		if model != nil {
 			// Closing the recognizer releases its streaming session as well,
 			// so the order the two engines want is theirs to decide.
 			model.Close()
@@ -6221,7 +6344,10 @@ func (cs *captionStream) run() {
 		cs.inject()
 	}()
 	if raw {
-		cs.engine.Close()
+		// Bytes first: the DVR is mid-read, and a panic early in a tune is
+		// exactly when a stall would kill it. The engine winds down in the
+		// background; it no longer owns anything on the byte path.
+		go cs.engine.Close()
 		_, err := io.Copy(cs.pw, cs.src)
 		cs.pw.CloseWithError(err)
 	}
@@ -6229,7 +6355,13 @@ func (cs *captionStream) run() {
 
 // inject is the captioning path proper.
 func (cs *captionStream) inject() {
-	inj := newCaptionInjector(cs.pw, cs.engine.enc, cs.engine.label)
+	// The injector emits packet by packet, and an io.Pipe write is a
+	// synchronous rendezvous with the reader — per 188-byte packet that was
+	// thousands of goroutine handoffs a second per stream. Buffering between
+	// them turns that into one handoff per read chunk; the flush after each
+	// chunk keeps latency at exactly one chunk, which the pipe already had.
+	bw := bufio.NewWriterSize(cs.pw, 64*1024)
+	inj := newCaptionInjector(bw, cs.engine.enc, cs.engine.label)
 	buf := make([]byte, 64*1024)
 	for {
 		n, err := cs.src.Read(buf)
@@ -6239,9 +6371,14 @@ func (cs *captionStream) inject() {
 				cs.pw.CloseWithError(werr)
 				return
 			}
+			if werr := bw.Flush(); werr != nil {
+				cs.pw.CloseWithError(werr)
+				return
+			}
 		}
 		if err != nil {
 			inj.Flush()
+			bw.Flush()
 			cs.pw.CloseWithError(err)
 			return
 		}
@@ -6251,11 +6388,19 @@ func (cs *captionStream) inject() {
 func (cs *captionStream) Read(p []byte) (int, error) { return cs.pr.Read(p) }
 
 func (cs *captionStream) Close() error {
+	// The encoder connection is released first and immediately: on a channel
+	// change the next tune needs this tuner's encoder, and holding it while
+	// the recognizer winds down was measured at up to ten seconds of the new
+	// tune's window — the engine teardown even waits on work that the new
+	// tune's own quiet gate is holding, a circle only this ordering breaks.
+	// The engine cleans itself up in the background; nothing about it can
+	// touch the stream that no longer exists.
+	err := cs.src.Close()
 	cs.once.Do(func() {
-		cs.engine.Close()
 		cs.pr.Close()
+		go cs.engine.Close()
 	})
-	return cs.src.Close()
+	return err
 }
 
 // ---------------------------------------------------------------------------
