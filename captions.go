@@ -495,10 +495,10 @@ type captionModel struct {
 	Runtime string `json:"runtime"`
 	Repo    string `json:"repo"`
 	File    string `json:"file"`
-	// AltFiles are earlier filenames of the same model — a different
-	// quantisation the catalog used to point at. A file somebody already spent
-	// a download on keeps working when the catalog moves; asking them to fetch
-	// gigabytes they nearly have is not an upgrade.
+	// AltFiles are filenames this model used to ship under. They are not
+	// loaded — the current file is the only one that counts — but one found on
+	// disk is reported as superseded, and deleted the moment its replacement
+	// finishes downloading, so the catalog moving on does not strand gigabytes.
 	AltFiles []string `json:"-"`
 	SizeMB   int      `json:"sizeMB"`
 	// Streaming models transcribe as the audio arrives. Punctuation says
@@ -787,21 +787,24 @@ func modelURL(m captionModel) string {
 	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", repo, m.File)
 }
 
-// modelPath is where a model's weights live once downloaded. If the catalog's
-// current file is absent but an earlier quantisation of the same model is on
-// disk, that one is used: it is the same model and it is already here.
+// modelPath is where a model's weights live once downloaded. Only the
+// catalog's current file counts: quietly loading some earlier variant that
+// happens to be on disk means the page claims one file and runs another, and a
+// card that cannot be believed is worse than a re-download.
 func modelPath(m captionModel) string {
-	primary := filepath.Join(captionModels, m.File)
-	if st, err := os.Stat(primary); err == nil && st.Size() > 0 {
-		return primary
-	}
+	return filepath.Join(captionModels, m.File)
+}
+
+// supersededFile is an earlier variant of this model still on disk: no longer
+// used, worth telling the user about, and removed when its replacement lands.
+func supersededFile(m captionModel) (path string, sizeMB int) {
 	for _, alt := range m.AltFiles {
 		p := filepath.Join(captionModels, alt)
 		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
-			return p
+			return p, int(st.Size() / (1024 * 1024))
 		}
 	}
-	return primary
+	return "", 0
 }
 
 // modelInstalled reports whether the model's weights are on disk.
@@ -884,6 +887,11 @@ func fetchModel(m captionModel) error {
 	logger("[CC] Downloading %s from %s", m.File, url)
 	if err := streamToFile(client, url, modelPath(m)); err != nil {
 		return fmt.Errorf("%s: %w", m.File, err)
+	}
+	if old, sizeMB := supersededFile(m); old != "" {
+		if err := os.Remove(old); err == nil {
+			logger("[CC] Removed the superseded %s (freed %s)", filepath.Base(old), humanMB(sizeMB))
+		}
 	}
 	return nil
 }
@@ -5758,6 +5766,8 @@ type captionStatusModel struct {
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
 	Reuse  string `json:"reuse"`
+	// Superseded explains an earlier download that no longer counts.
+	Superseded string `json:"superseded"`
 	// MemoryMB is one stream's cost and MemoryTotalMB the ceiling across the
 	// tuners actually being captioned, worked out here so the page never asks
 	// anyone to multiply anything.
@@ -5830,10 +5840,12 @@ func memoryWarning(cfg captionConfig) string {
 // the Nemotron is the better answer — it is quicker off the mark and it is the
 // only recommendation that works in a language other than English.
 func recommendedModel() (key, why string) {
-	if gpuAvailable() {
-		return "cohere-transcribe", "Recommended for this machine: it has a usable GPU. The most accurate captioning available, and every tuner shares one copy of it in memory."
-	}
-	return "realtime-multilingual", "Recommended for this machine: no GPU is available, and this one keeps pace on a processor and handles every supported language."
+	// One recommendation, the same on every machine: the model that keeps pace
+	// with live speech on a processor or a GPU alike and handles every
+	// supported language. The heavier models are for people who already know
+	// they want them; a recommendation that changes with the hardware reads as
+	// authority the page does not have.
+	return "realtime-multilingual", "Recommended: keeps pace with live speech on a processor or a GPU alike, writes punctuation and sentence case, and handles every supported language."
 }
 
 // memoryNote describes what a model costs to run.
@@ -5900,8 +5912,7 @@ const (
 
 func streamMemoryMB(m captionModel) int {
 	sizeMB := m.SizeMB
-	// The file on disk is the truth when it is present — it may be an earlier,
-	// larger quantisation than the catalog now lists.
+	// The installed file is the truth when it is present.
 	if st, err := os.Stat(modelPath(m)); err == nil && st.Size() > 0 {
 		sizeMB = int(st.Size() / (1024 * 1024))
 	}
@@ -6037,6 +6048,12 @@ func captionStatusPayload() captionStatus {
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
 		mem, reuse, total := memoryNote(m, streams)
+		superseded := ""
+		if _, oldMB := supersededFile(m); oldMB > 0 && !modelInstalled(m) {
+			superseded = fmt.Sprintf("An earlier version of this model (%s) is on disk and is no longer used. "+
+				"Press Download to fetch the current version — the old file is removed automatically once it arrives.",
+				humanMB(oldMB))
+		}
 		blocked := ""
 		switch {
 		case m.NeedsGPU && !hasGPU:
@@ -6065,6 +6082,7 @@ func captionStatusPayload() captionStatus {
 			Blocked:       blocked,
 			Memory:        mem,
 			Reuse:         reuse,
+			Superseded:    superseded,
 			MemoryMB:      streamMemoryMB(m),
 			MemoryTotalMB: streamMemoryMB(m) * streams,
 			MemoryTotal:   total,

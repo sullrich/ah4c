@@ -444,6 +444,7 @@ function render() {
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
                 <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)}, so ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
+                ${m.superseded ? `<div class="model-meta" style="margin-top:0.2rem;"><strong>${esc(m.superseded)}</strong></div>` : ''}
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
