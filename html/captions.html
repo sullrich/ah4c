@@ -127,41 +127,20 @@
                 <span class="badge badge-idle" id="stateBadge">Off</span>
             </div>
             <p class="footnote">
-                Speech is transcribed here, on this machine, and written into the video as CEA-608
-                caption data, the same carriage an HDHomeRun uses for over-the-air captions. Channels
-                DVR and any other player will show it as CC1 with no sidecar file. The video itself
-                is never re-encoded, so picture quality and tune time are unchanged.
+                Transcribed on this machine and carried in the stream as ordinary CC1 captions —
+                no sidecar files, no re-encoding, no change to tune speed.
             </p>
         </div>
 
         <div class="card">
-            <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled in the image; fetch only what you want</span></div>
-            <p class="footnote" style="margin-top:0;">
-                Captions need two downloads and this page does both: a small <strong>helper
-                program</strong> here, and the <strong>voice</strong> itself further down, which is the
-                big one. Start by picking a voice at the bottom of this card &mdash; that is the only
-                real decision &mdash; then come back up here and choose whether it should run on the
-                processor or a graphics card. Nothing is included in ah4c, nothing downloads until you
-                press a button, and every button names the exact file it will fetch.
-            </p>
+            <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled; fetch only what you want</span></div>
             <div id="accel"></div>
-            <div id="engineFor"></div>
             <div class="model-list" id="runtimeRow"></div>
             <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
             <div id="drvState"></div>
             <p class="footnote">
-                Where the model runs. The processor build needs nothing and handles several tuners
-                at once. A GPU build is only offered when this container can actually load it: CUDA
-                appears once the NVIDIA container runtime is passing the driver through, Vulkan once
-                a Vulkan driver and <code>/dev/dri</code> are present. Neither needs a change to the
-                image &mdash; only to your compose file. Software Vulkan renderers are refused: if the
-                driver cannot reach a real graphics card, captions run on the processor directly, which
-                is faster than pretending, and the log names the device actually in use.
-            </p>
-            <p class="footnote">
-                One helper program, <strong>transcribe.cpp</strong>, runs every model. Pick where it
-                should run &mdash; the processor or a graphics card &mdash; and download it once; every
-                model uses the same copy of it.
+                GPU choices appear only when this container can load them (for Vulkan: a driver and
+                <code>/dev/dri</code>). The log names the device actually doing the work.
             </p>
             <div class="card-title" style="margin-top:1rem;">Model</div>
             <div id="memWarn"></div>
@@ -171,33 +150,9 @@
                 <div class="bar"><span id="dlBar"></span></div>
             </div>
             <p class="footnote">
-                Both land in <code>/opt/captions</code>, a bind mount, so they survive a container rebuild.
-                Remove them any time to get the space back.
-            </p>
-            <p class="footnote">
-                <strong>Memory.</strong> A model uses roughly its download size in RAM while a stream is
-                being captioned, and <strong>every stream captioning at once loads its own copy</strong>.
-                Two streams of a 0.6B model is roughly 2.5&nbsp;GB, three about 3.7&nbsp;GB. They are
-                not shared because the engine can only decode one thing at a time per copy, so sharing
-                would make the streams wait for each other and fall behind the picture. A copy stays in
-                memory after its stream ends so the next tune starts instantly. If RAM is tight, caption
-                fewer tuners on the Tuners card below, or pick a smaller model.
-            </p>
-            <p class="footnote">
-                <strong>Reading the labels.</strong> The percentage is how many words come out wrong on
-                a standard test, so lower is better and 3% means roughly three words in every hundred.
-                <em>Types as it hears</em> means captions appear while the person is still talking;
-                <em>waits for each sentence</em> means it listens to the whole phrase first, which is
-                more accurate but arrives later. Bigger models are generally more accurate and ask more
-                of the machine.
-            </p>
-            <p class="footnote">
-                Those percentages come from LibriSpeech test-clean, the one test all of these publish,
-                so they can be compared with each other. Read them as a ranking rather than a promise:
-                it is clean, clearly-read speech, and live television &mdash; music beds, crowd noise,
-                people talking over each other &mdash; is harder than that for every model here. Models
-                without a figure have no published number on that test, so they carry a rating and no
-                measurement rather than a guess.
+                Accuracy is the published word-error rate &mdash; lower is better, and live TV is harder
+                than the lab test for every model. Downloads land in <code>/opt/captions</code>, survive
+                rebuilds, and can be removed here any time.
             </p>
         </div>
 
@@ -231,15 +186,6 @@
                 <label for="offset">Extra delay</label>
                 <select id="offset"></select>
             </div>
-            <p class="footnote">
-                Capitals are the long-standing convention for broadcast captioning and are easier to
-                read across a room. They also even out the streaming models, which write in lower case.
-            </p>
-            <p class="footnote">
-                Captions appear a couple of seconds after the words are spoken, the same as live
-                broadcast captioning, because the sentence has to finish before it can be recognized.
-                Extra delay only pushes the text further back if you want it to line up more loosely.
-            </p>
         </div>
 
         <div class="card">
@@ -339,20 +285,9 @@ function render() {
 
     const engineKey = model ? model.engine : 'transcribe';
     const engineName = model ? model.engineName : '';
-    const engineReady = !!(model && model.engineReady);
     document.getElementById('engineHint').textContent = engineName
-        ? 'your model uses ' + engineName
-        : 'nothing is bundled in the image; fetch only what you want';
-    document.getElementById('engineFor').innerHTML = `
-        <div class="accel ${engineReady ? 'on' : ''}" style="margin-bottom:0.6rem;">
-            <span class="dot"></span>
-            <div>
-                <div class="h">${esc(model ? model.name : 'This model')} uses ${esc(engineName)}</div>
-                <div class="d">${engineReady
-                    ? 'It is already downloaded, so there is nothing to do here.'
-                    : 'That is the one to download below. The other engine listed is for other models and you can ignore it.'}</div>
-            </div>
-        </div>`;
+        ? 'every model runs on ' + engineName
+        : 'nothing is bundled; fetch only what you want';
 
     // Engine builds, grouped by engine, offered only where loadable.
     document.getElementById('runtimeRow').innerHTML = (state.runtimeList || []).map(rt => {
@@ -364,13 +299,9 @@ function render() {
         <div class="engine-group ${inUse ? 'in-use' : ''}">
             <div class="engine-head">
                 <span class="engine-title">${esc(rt.name)} ${esc(rt.version)}</span>
-                ${inUse ? '<span class="badge badge-active">Used by your model</span>'
-                        : '<span class="badge badge-idle">Not needed for your model</span>'}
                 ${anyHere ? '<span class="tag tag-live">Downloaded</span>' : ''}
             </div>
-            <div class="engine-note">${inUse
-                ? 'This is the program that will do the listening. Pick where it should run and download it once.'
-                : 'Another model uses this one. Nothing to do unless you switch to a model that needs it.'}</div>
+            <div class="engine-note">Pick where it runs; one download covers every model.</div>
             <div class="model-list">${builds.map(e => `
                 <div class="model-row ${inUse && e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
                     <input type="radio" name="engine" value="${esc(e.key)}" ${inUse && e.key === cfg.engine ? 'checked' : ''}
@@ -383,8 +314,7 @@ function render() {
                             ${e.installed ? '<span class="tag tag-live">Already downloaded</span>' : ''}
                             ${e.usable ? '' : '<span class="tag tag-warn">Not available in this container</span>'}
                         </div>
-                        ${e.shared ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.shared)}</div>` : ''}
-                        ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
+                        ${e.usable ? '' : (e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : '')}
                         <span class="model-src">Fetches <strong>${esc(e.file)}</strong> from
                             <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
                     </div>
@@ -429,17 +359,11 @@ function render() {
                 <div class="model-tags">
                     <span class="tag tag-acc">Accuracy: ${esc(m.accuracy || 'Unrated')}${m.benchmark ? ' &mdash; ' + esc(m.benchmark) : ''}</span>
                     <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Types as it hears' : 'Waits for each sentence'}</span>
-                    <span class="tag">Delay: ${esc(m.latency)}</span>
-                    <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
                     <span class="tag ${m.memoryTotalMB >= 4000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
-                    ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
-
-                    <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
+                    ${m.engineReady ? '' : '<span class="tag tag-warn">Engine not downloaded yet</span>'}
                 </div>
-                <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
-                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)} — ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
