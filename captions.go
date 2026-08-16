@@ -1330,7 +1330,80 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if !driverActive(g) {
 		return string(out), fmt.Errorf("%s still will not load", g.Needs)
 	}
+	// The loader loading proves nothing about the drivers behind it: a
+	// forced install can put a current driver on top of last-era libraries,
+	// and the driver then fails to load while everything looks installed —
+	// the loader just skips it and reports no devices. So each hardware
+	// driver is opened the way the loader would open it, failures are named
+	// with the loader's own words, and if the network is still here apt is
+	// asked to complete what the forced install skipped.
+	if bad := brokenVulkanDrivers(); len(bad) > 0 {
+		if _, e := exec.LookPath("apt-get"); e == nil {
+			logger("[CC] %d graphics drivers cannot load; asking apt to finish their dependencies", len(bad))
+			fix := exec.Command("apt-get", "install", "-f", "-y", "--no-install-recommends")
+			fix.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+			fo, _ := fix.CombinedOutput()
+			out = append(out, fo...)
+			bad = brokenVulkanDrivers()
+		}
+		for _, b := range bad {
+			logger("[CC] Vulkan driver %s", b)
+		}
+		if len(bad) > 0 {
+			return string(out), fmt.Errorf("%d graphics drivers installed but cannot load; the log names the missing pieces", len(bad))
+		}
+	}
 	return string(out), nil
+}
+
+// brokenVulkanDrivers opens every hardware driver named by the Vulkan
+// manifests and reports the ones that fail, each with the loader's verbatim
+// error — which names the missing library, and the missing library names the
+// stale dependency.
+func brokenVulkanDrivers() []string {
+	var bad []string
+	for _, dir := range []string{
+		"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d",
+		"/usr/local/share/vulkan/icd.d", "/usr/local/etc/vulkan/icd.d",
+	} {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			l := strings.ToLower(e.Name())
+			if strings.Contains(l, "lvp") || strings.Contains(l, "llvmpipe") || strings.Contains(l, "swiftshader") ||
+				strings.Contains(l, "gfxstream") || strings.Contains(l, "virtio") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var manifest struct {
+				ICD struct {
+					LibraryPath string `json:"library_path"`
+				} `json:"ICD"`
+			}
+			if json.Unmarshal(b, &manifest) != nil || manifest.ICD.LibraryPath == "" {
+				continue
+			}
+			lib := manifest.ICD.LibraryPath
+			if !filepath.IsAbs(lib) && strings.Contains(lib, "/") {
+				lib = filepath.Join(dir, lib)
+			}
+			h, err := purego.Dlopen(lib, purego.RTLD_NOW)
+			if err != nil {
+				bad = append(bad, fmt.Sprintf("%s: %s cannot load: %v", e.Name(), lib, err))
+				continue
+			}
+			_ = h
+		}
+	}
+	return bad
 }
 
 func tailLines(s string, n int) string {
@@ -3082,6 +3155,13 @@ func initTranscribe(variant string) error {
 		// line about its key/value cache for every phrase it transcribes, which
 		// on a busy channel is a line a second, for ever.
 		txLogSet(txLogCallback(), nil)
+		// Point the graphics driver's compiled-shader cache at the bind
+		// mount. The first Vulkan initialisation compiles every compute
+		// shader the engine uses — seconds of every core, and un-pausable.
+		// In the container's own filesystem that cache dies with every
+		// rebuild and the storm repeats on the first captioned tune of each
+		// new container; in the bind mount it is paid once per install.
+		persistShaderCache()
 		// Before the Vulkan module creates its instance: never let it pick a
 		// software renderer. Mesa's driver package installs llvmpipe alongside
 		// the real drivers, and when the real one cannot reach the card the
@@ -3152,6 +3232,24 @@ func softwareRenderer(desc string) bool {
 	return strings.Contains(l, "llvmpipe") || strings.Contains(l, "lavapipe") || strings.Contains(l, "swiftshader")
 }
 
+// persistShaderCache points the graphics driver's compiled-shader cache into
+// the caption directory, which is a bind mount, so shaders compiled on the
+// first Vulkan initialisation survive the container being rebuilt. A cache
+// location already set by hand is respected.
+func persistShaderCache() {
+	if os.Getenv("MESA_SHADER_CACHE_DIR") != "" {
+		return
+	}
+	dir, err := filepath.Abs(filepath.Join(captionDir, "shader-cache"))
+	if err != nil || os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	os.Setenv("MESA_SHADER_CACHE_DIR", dir)
+	// The older spelling, read by the driver generations that predate the
+	// current one.
+	os.Setenv("MESA_GLSL_CACHE_DIR", dir)
+}
+
 // pinHardwareVulkanICDs points the Vulkan loader at the hardware drivers only.
 //
 // The Vulkan loader reads driver manifests from the icd.d directories, and
@@ -3184,9 +3282,13 @@ func pinHardwareVulkanICDs() {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 				continue
 			}
-			// Mesa names the llvmpipe manifest lvp_icd.<arch>.json.
+			// Mesa names the llvmpipe manifest lvp_icd.<arch>.json. gfxstream
+			// and virtio are paravirtual drivers for guests of a VM — on real
+			// hardware they offer nothing and have been seen to get in the
+			// way of the instance the real driver needs.
 			l := strings.ToLower(e.Name())
-			if strings.Contains(l, "lvp") || strings.Contains(l, "llvmpipe") || strings.Contains(l, "swiftshader") {
+			if strings.Contains(l, "lvp") || strings.Contains(l, "llvmpipe") || strings.Contains(l, "swiftshader") ||
+				strings.Contains(l, "gfxstream") || strings.Contains(l, "virtio") {
 				sawSoftware = true
 				continue
 			}
@@ -4825,6 +4927,15 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 
 // loadRecognizer opens a model on whichever engine can run it.
 func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
+	// Nothing below may fight a tune — and "below" includes more than the
+	// weights: the engine's first initialisation compiles the GPU backend's
+	// shaders, an all-cores burst that is just as capable of starving a
+	// young tune as the load is, and it runs before any load. So the quiet
+	// gate stands in front of everything, and a machine that will not go
+	// quiet fails this attempt fast; the caller retries at the next lull.
+	if !waitTuneQuiet(30 * time.Second) {
+		return nil, fmt.Errorf("a tune has been starting the whole wait; will retry at a quiet moment")
+	}
 	// Spell the language the way this model wants it before anything is loaded;
 	// cfg is a copy, so the correction lives exactly as long as this model.
 	cfg.Language = modelLanguage(m, cfg.Language)
