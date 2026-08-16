@@ -143,6 +143,11 @@ type engineVariant struct {
 // container can actually load.
 var engineVariants = []engineVariant{
 	{
+		Key: "auto", Name: "Choose automatically (recommended)", Suffix: "cpu",
+		Desc:   "Uses a graphics card if this container can reach one, and the processor if it cannot. The right answer unless you have a reason to pin it.",
+		SizeMB: 1,
+	},
+	{
 		Key: "cpu", Name: "CPU", Suffix: "cpu",
 		Desc:   "Runs on the processor. Needs nothing beyond what is already in the image and is fast enough for several tuners at once.",
 		SizeMB: 1,
@@ -334,6 +339,9 @@ func transcribeLib(goos string) string {
 // an engine on this platform, so the page does not offer a build that is either
 // unpublished or identical to one already listed.
 func runtimeVariantOffered(rt, goos, goarch, variant string) bool {
+	if variant == "auto" {
+		return true
+	}
 	if rt == rtTranscribe {
 		_, lane, ok := transcribeAssetFor(goos, goarch, variant)
 		if !ok {
@@ -370,6 +378,17 @@ func runtimeVariantOffered(rt, goos, goarch, variant string) bool {
 // if the chosen one cannot load here.
 func currentEngineVariant() string {
 	cfg := currentCaptionConfig()
+	// "auto", and anything unset, means use the best build this machine can
+	// actually run. The old default was "cpu", which is indistinguishable from
+	// somebody deliberately choosing the processor — so a machine with a
+	// perfectly good graphics card sat there using none of it, and every
+	// measurement taken on it was a measurement of the processor.
+	if cfg.Engine == "" || cfg.Engine == "auto" {
+		if g := gpuVariant(neededRuntime()); g != "" {
+			return g
+		}
+		return "cpu"
+	}
 	v, found := findEngineVariant(cfg.Engine)
 	if !found || !engineUsable(v) {
 		return "cpu"
@@ -409,6 +428,9 @@ func engineLibPath() string {
 
 // runtimeLibPath is where a given engine's library lives once downloaded.
 func runtimeLibPath(rt, variant string) string {
+	if variant == "auto" {
+		variant = currentEngineVariant()
+	}
 	_, dir, lib, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
 	if !ok {
 		return ""
@@ -420,6 +442,9 @@ func runtimeLibPath(rt, variant string) string {
 // it by name at run time as well as at download time: its ggml backends are
 // separate libraries next to the engine, and it is told where to find them.
 func runtimeDirFor(rt, variant string) string {
+	if variant == "auto" {
+		variant = currentEngineVariant()
+	}
 	_, dir, _, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
 	if !ok {
 		return ""
@@ -432,6 +457,9 @@ func engineInstalled() bool {
 }
 
 func runtimeInstalled(rt, variant string) bool {
+	if variant == "auto" {
+		variant = currentEngineVariant()
+	}
 	p := runtimeLibPath(rt, variant)
 	if p == "" {
 		return false
@@ -669,7 +697,7 @@ func defaultCaptionConfig() captionConfig {
 		Language:  "en",
 		Style:     "rollup3",
 		Uppercase: true,
-		Engine:    "cpu",
+		Engine:    "auto",
 		Latency:   "balanced",
 		OffsetSec: 0,
 	}
@@ -919,7 +947,7 @@ func streamToFile(client *http.Client, url, dst string) error {
 // modelKey may name a model that has not been saved yet, so the page can fetch
 // the engine for something it is only considering.
 func startRuntimeDownload(variant, modelKey string) error {
-	if _, found := findEngineVariant(variant); !found {
+	if _, found := findEngineVariant(variant); !found || variant == "auto" {
 		variant = currentEngineVariant()
 	}
 	rt := neededRuntime()
@@ -1473,7 +1501,7 @@ func accelStatus() accelReport {
 func gpuAvailable() bool {
 	nodes := renderNodes()
 	for _, v := range engineVariants {
-		if v.Key == "cpu" || !engineUsable(v) {
+		if v.Key == "auto" || v.Key == "cpu" || !engineUsable(v) {
 			continue
 		}
 		if v.Key == "vulkan" && len(nodes) == 0 {
@@ -3103,6 +3131,7 @@ const (
 	txBackendCPU    = 1
 	txBackendVulkan = 3
 	txBackendCUDA   = 5
+	txBackendMetal  = 2
 
 	txOK = 0
 
@@ -3203,6 +3232,8 @@ var (
 
 	txSetAbortCallback   func(session uintptr, cb uintptr, userData unsafe.Pointer)
 	txAcceptsExtKind     func(model uintptr, slot int32, kind uint32) bool
+	txBackendAvailable   func(kind int32) bool
+	txModelBackend       func(model uintptr) int32
 	txPkStreamExtInit    func(p unsafe.Pointer)
 	txPkBufStreamExtInit func(p unsafe.Pointer)
 	txLogSet             func(cb uintptr, userData unsafe.Pointer)
@@ -3273,6 +3304,8 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
 		purego.RegisterLibFunc(&txLogSet, handle, "transcribe_log_set")
 		purego.RegisterLibFunc(&txAcceptsExtKind, handle, "transcribe_model_accepts_ext_kind")
+		purego.RegisterLibFunc(&txBackendAvailable, handle, "transcribe_backend_available")
+		purego.RegisterLibFunc(&txModelBackend, handle, "transcribe_model_backend")
 		purego.RegisterLibFunc(&txPkStreamExtInit, handle, "transcribe_parakeet_stream_ext_init")
 		purego.RegisterLibFunc(&txPkBufStreamExtInit, handle, "transcribe_parakeet_buffered_stream_ext_init")
 		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
@@ -3300,6 +3333,28 @@ func initTranscribe(variant string) error {
 			txErr = fmt.Errorf("registering the transcribe.cpp backends: %s", txStatusString(st))
 			return
 		}
+		// Say which backends actually registered.
+		//
+		// A backend module whose system dependencies are missing — the Vulkan
+		// one on a machine with a loader but no working driver, say — fails to
+		// load quietly and is skipped by design, leaving the processor to pick
+		// up the work. Quietly is the problem: somebody who has selected the
+		// Vulkan build, passed the device through and installed the driver has
+		// every reason to think it is being used, and nothing anywhere said
+		// otherwise. It is one line at startup and it settles the question.
+		var have []string
+		for _, b := range []struct {
+			name string
+			kind int32
+		}{{"processor", txBackendCPU}, {"Vulkan", txBackendVulkan}, {"CUDA", txBackendCUDA}, {"Metal", txBackendMetal}} {
+			if txBackendAvailable(b.kind) {
+				have = append(have, b.name)
+			}
+		}
+		if len(have) == 0 {
+			have = []string{"none"}
+		}
+		logger("[CC] transcribe.cpp backends available here: %s", strings.Join(have, ", "))
 		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
 	})
 	return txErr
@@ -3326,6 +3381,22 @@ func txCheckABI() error {
 		}
 	}
 	return nil
+}
+
+func txBackendName(k int32) string {
+	switch k {
+	case txBackendCPU:
+		return "the processor"
+	case txBackendVulkan:
+		return "Vulkan"
+	case txBackendCUDA:
+		return "CUDA"
+	case txBackendMetal:
+		return "Metal"
+	case txBackendAuto:
+		return "whatever it chose"
+	}
+	return fmt.Sprintf("backend %d", k)
 }
 
 // txBackend maps the processor choice on the page onto the backend the engine
@@ -3366,7 +3437,9 @@ func captionVariantFor(m captionModel) (string, error) {
 func gpuVariant(rt string) string {
 	nodes := renderNodes()
 	for _, v := range engineVariants {
-		if v.Key == "cpu" || !engineUsable(v) {
+		// "auto" is the question, not an answer: resolving it by asking about
+		// itself is how this recursed until the stack ran out.
+		if v.Key == "auto" || v.Key == "cpu" || !engineUsable(v) {
 			continue
 		}
 		if v.Key == "vulkan" && len(nodes) == 0 {
@@ -3785,6 +3858,16 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 
+	if txModelBackend != nil {
+		got := txModelBackend(shared.handle)
+		if asked := txBackend(variant); got != asked && asked != txBackendAuto {
+			logger("[CC] WARNING: asked for the %s backend and the engine is using %s instead. The %s module did not load — check the driver inside the container, and /dev/dri for Vulkan.",
+				txBackendName(asked), txBackendName(got), txBackendName(asked))
+		} else {
+			logger("[CC] %s is running on %s", filepath.Base(gguf), txBackendName(got))
+		}
+	}
+
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
 		abort: &txAbortHandle{}, onGPU: variant != "cpu", latency: cfg.Latency}
 	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
@@ -4171,6 +4254,8 @@ type captionEngine struct {
 	model2    captionModel
 	startOnce sync.Once
 	begun     int64
+	// ready is set once the decoder is running and there is something to feed.
+	ready int64
 
 	// done is closed when the listening goroutine has returned. Nothing the
 	// engine owns may be freed before then: the recognizer is native code, and
@@ -4293,6 +4378,8 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	atomic.StoreInt64(&e.lastAudio, time.Now().UnixNano())
 	go e.watchDecoder()
 	go e.pumpAudio()
+	// Only now is there anything on the other end of the queue.
+	atomic.StoreInt64(&e.ready, 1)
 	if e.streaming {
 		// A streaming model is fed a tenth of a second at a time and returns in
 		// a fraction of it, so reading and recognizing stay on one goroutine
@@ -4306,8 +4393,12 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if e.streaming {
 		mode = "continuous"
 	}
-	logger("[CC] %s captions on: %s, %s, %s, ready in %s",
-		e.label, m.Key, cfg.Language, mode, time.Since(began).Round(time.Millisecond))
+	where := currentEngineVariant()
+	if where == "cpu" {
+		where = "processor"
+	}
+	logger("[CC] %s captions on: %s, %s, %s, on the %s, ready in %s",
+		e.label, m.Key, cfg.Language, mode, where, time.Since(began).Round(time.Millisecond))
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
@@ -4352,7 +4443,11 @@ func (e *captionEngine) startDecoder() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = os.Stderr
+	// ffmpeg is already held to errors only, but live television produces a
+	// steady trickle of them and five tuners produce five trickles. They go
+	// through the log at a rate a person can read rather than straight to
+	// stderr, where they buried everything else.
+	cmd.Stderr = &decoderLog{label: e.label}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
@@ -4371,6 +4466,45 @@ func (e *captionEngine) startDecoder() (io.ReadCloser, error) {
 	e.ffmpeg, e.audioIn = cmd, audioIn
 	e.mu.Unlock()
 	return pcm, nil
+}
+
+// decoderLog carries ffmpeg's stderr into the log, saying the first of a run of
+// complaints and then how many followed rather than every one of them.
+type decoderLog struct {
+	label string
+	mu    sync.Mutex
+	seen  int
+	last  time.Time
+}
+
+func (d *decoderLog) Write(p []byte) (int, error) {
+	line := strings.TrimSpace(string(p))
+	if line == "" {
+		return len(p), nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.seen++
+	if time.Since(d.last) < 30*time.Second {
+		return len(p), nil
+	}
+	if d.seen > 1 {
+		logger("[CC] %s audio decoder: %s (and %d more)", d.label, firstLine(line), d.seen-1)
+	} else {
+		logger("[CC] %s audio decoder: %s", d.label, firstLine(line))
+	}
+	d.seen, d.last = 0, time.Now()
+	return len(p), nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 // restartDecoder brings the audio decoder back after it has stopped.
@@ -4968,6 +5102,17 @@ func (e *captionEngine) feed(b []byte) {
 	// The first bytes of video are the signal that the tune succeeded and the
 	// machine is free to do something expensive.
 	e.begin()
+
+	// Nothing is kept while the model loads. The decoder does not exist yet, so
+	// anything queued here would sit for several seconds and then be handed to
+	// ffmpeg as a block of stale transport stream followed by the gap where the
+	// queue overflowed — which is not a delay, it is a corrupt stream, and
+	// ffmpeg spends its time reporting broken audio frames instead of decoding.
+	// A transport stream can be joined at any point, so starting on live data
+	// costs the opening seconds of captions and nothing else.
+	if atomic.LoadInt64(&e.ready) == 0 {
+		return
+	}
 	cp := make([]byte, len(b))
 	copy(cp, b)
 	select {
