@@ -146,7 +146,7 @@ and all three run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. On a processor it keeps up with one or two streams; a GPU keeps it fast with many | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. On a processor it keeps up with one or two streams; a GPU keeps it fast with many | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
 | **Nemotron 3.5 Streaming 0.6B** — transcribes live as the audio arrives, punctuated | Processor-only machines running several streams at once | Very good — 3.1% | Under a second | 716 MB | 32 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 

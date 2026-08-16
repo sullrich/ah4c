@@ -459,8 +459,14 @@ var captionModelCatalog = []captionModel{
 		Hardware:    "On a processor it keeps up with one or two streams; a GPU keeps it fast with many, and integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
-		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
-		SizeMB:      1760,
+		// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
+		// accuracy (1.27% vs 1.26% word error), but Q4_K_M is a quant the
+		// engine's author benchmarks on GPU — eight times real time on an
+		// integrated-graphics machine of the same class where Q5_K_M, never
+		// benchmarked there, measured a third of that. GPU shader quality is
+		// per-quant, and the certified path is the one worth shipping.
+		File:   "cohere-transcribe-03-2026-Q4_K_M.gguf",
+		SizeMB: 1550,
 		Punctuation: true,
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 	},
