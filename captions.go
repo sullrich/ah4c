@@ -3190,7 +3190,8 @@ var (
 
 	txSetAbortCallback   func(session uintptr, cb uintptr, userData unsafe.Pointer)
 	txBackendAvailable   func(kind int32) bool
-	txModelBackend       func(model uintptr) int32
+	// Returns the backend's name — "cpu", "vulkan", "cuda" — not an enum.
+	txModelBackend       func(model uintptr) string
 	txRunBatch           func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
 	txBatchNResults      func(session uintptr) int32
 	txBatchStatus        func(session uintptr, i int32) int32
@@ -4538,11 +4539,18 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	if txModelBackend != nil {
 		got := txModelBackend(shared.handle)
-		if asked := txBackend(variant); got != asked && asked != txBackendAuto {
+		want := ""
+		switch {
+		case strings.Contains(variant, "vulkan"):
+			want = "vulkan"
+		case strings.Contains(variant, "cuda"):
+			want = "cuda"
+		}
+		if want != "" && got != want {
 			logger("[CC] WARNING: asked for the %s backend and the engine is using %s instead. The %s module did not load — check the driver inside the container, and /dev/dri for Vulkan.",
-				txBackendName(asked), txBackendName(got), txBackendName(asked))
+				want, got, want)
 		} else {
-			logger("[CC] %s is running on %s", filepath.Base(gguf), txBackendName(got))
+			logger("[CC] %s is running on %s", filepath.Base(gguf), got)
 		}
 	}
 
@@ -5485,6 +5493,8 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// nothing to flush.
 	settled := true
 	decoderTries := 0
+	// uttered is how much audio the open utterance has consumed.
+	uttered := 0.0
 
 	take := func(r *streamResult) {
 		if r == nil {
@@ -5523,7 +5533,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 				logger("[CC] %s could not resume continuous recognition: %v", e.label, err)
 				return
 			}
-			quiet, settled = 0, true
+			quiet, settled, uttered = 0, true, 0
 			continue
 		}
 		// See the phrase path: the budget counts consecutive failures.
@@ -5547,11 +5557,23 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		if tunesPending() {
 			if !settled {
 				take(e.model.idleFlush())
-				quiet, settled = 0, true
+				quiet, settled, uttered = 0, true, 0
 			}
 			continue
 		}
 		take(e.model.feedStream(buf))
+		uttered += chunkSec
+
+		// An utterance cannot run forever: the model decodes each one against
+		// a generation budget, and an utterance that outruns it comes back
+		// truncated mid-sentence. Close it off at a brief lull once it is
+		// eight seconds long, or at twelve seconds wherever the speech is —
+		// a seam at a word beats a sentence that ends in nothing.
+		if !settled && (uttered >= 12 || (uttered >= 8 && quiet >= 0.2)) {
+			take(e.model.idleFlush())
+			quiet, settled, uttered = 0, true, 0
+			continue
+		}
 
 		// Watch for the talking stopping, so the end of a sentence is not left
 		// waiting for the next one to start. The floor tracks the channel's own
@@ -5568,7 +5590,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		if quiet += chunkSec; quiet >= flushSilence {
 			take(e.model.idleFlush())
-			settled = true
+			settled, uttered = true, 0
 		}
 	}
 }
