@@ -85,14 +85,18 @@ type speechRuntime struct {
 	Desc    string `json:"desc"`
 }
 
+// The descriptions do not compare the two engines, on purpose. Which one a
+// model uses is not a choice anybody makes, and presenting them side by side as
+// though it were turns an implementation detail into homework. They are named
+// only so it is clear what is being downloaded.
 var speechRuntimes = []speechRuntime{
 	{
 		Key: rtParakeet, Name: "parakeet.cpp", Version: parakeetRelease,
-		Desc: "NVIDIA's Parakeet and Nemotron models. About a megabyte.",
+		Desc: "the helper program this model listens with",
 	},
 	{
 		Key: rtTranscribe, Name: "transcribe.cpp", Version: "v" + transcribeRelease,
-		Desc: "A wider set of families, including Cohere Transcribe. Larger, because it carries its own ggml backends.",
+		Desc: "the helper program this model listens with",
 	},
 }
 
@@ -4299,7 +4303,10 @@ type captionStatusEngine struct {
 	// when another build on the list fetches the very same one. Two rows both
 	// reading "28 MB" with no explanation is how someone ends up believing they
 	// have to download the engine twice.
-	File   string `json:"file"`
+	File string `json:"file"`
+	// PartOf names the engine and version this build belongs to, for the line
+	// under the heading rather than in it.
+	PartOf string `json:"partOf"`
 	Shared string `json:"shared"`
 }
 
@@ -4375,10 +4382,9 @@ func captionStatusPayload() captionStatus {
 				continue
 			}
 			v.SizeMB = runtimeSizeMB(eng.Key, v)
-			// Say which engine and which version this build belongs to. "GPU
-			// via Vulkan" on its own does not tell you what is about to be
-			// downloaded when there are two engines that both have one.
-			v.Name = eng.Name + " " + eng.Version + " · " + v.Name
+			// The heading stays the thing being chosen — where it runs. Which
+			// engine that build belongs to is said underneath, because it
+			// identifies the download without pretending to be a decision.
 			list = append(list, captionStatusEngine{
 				engineVariant: v,
 				Usable:        engineUsable(v),
@@ -4386,6 +4392,7 @@ func captionStatusPayload() captionStatus {
 				Selected:      v.Key == cur,
 				URL:           url,
 				File:          path.Base(url),
+				PartOf:        eng.Name + " " + eng.Version,
 			})
 		}
 		// Some builds are the same archive under two names, because an engine
@@ -4399,7 +4406,7 @@ func captionStatusPayload() captionStatus {
 					continue
 				}
 				list[i].Shared = fmt.Sprintf(
-					"The same download as %q — one archive carries both backends, so fetching either gives you both, and which one runs is decided when the model is loaded.",
+					"Same file as %q — one download covers both, so you only need to fetch one of them.",
 					list[j].Name)
 				break
 			}

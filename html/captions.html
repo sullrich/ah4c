@@ -127,12 +127,12 @@
         <div class="card">
             <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled in the image; fetch only what you want</span></div>
             <p class="footnote" style="margin-top:0;">
-                Captions need two downloads, and this page does both. The <strong>engine</strong> is a
-                small program that does the listening; the <strong>model</strong>, further down, is the
-                file that actually knows how to turn speech into words. Pick a model first &mdash; each
-                one names the engine it needs, and only that engine has to be fetched. Neither is in
-                the ah4c image, nothing is downloaded until you ask, and every button says exactly
-                which file it will fetch and from where.
+                Captions need two downloads and this page does both: a small <strong>helper
+                program</strong> here, and the <strong>voice</strong> itself further down, which is the
+                big one. Start by picking a voice at the bottom of this card &mdash; that is the only
+                real decision &mdash; then come back up here and choose whether it should run on the
+                processor or a graphics card. Nothing is included in ah4c, nothing downloads until you
+                press a button, and every button names the exact file it will fetch.
             </p>
             <div id="accel"></div>
             <div id="engineFor"></div>
@@ -147,12 +147,10 @@
                 image &mdash; only to your compose file.
             </p>
             <p class="footnote">
-                There are two engines and the model decides which one is used, so there is nothing to
-                choose here. <strong>parakeet.cpp</strong> runs NVIDIA's Parakeet and Nemotron models
-                and is about a megabyte. <strong>transcribe.cpp</strong> runs a much wider set of
-                families, Cohere Transcribe among them, and is larger because it carries its own ggml
-                backends rather than compiling them in. Both are downloaded here and neither is in the
-                image. Switching between models that use different engines means one more download,
+                Different models are built by different people and come with their own helper program,
+                so the name above the download changes with the model you picked. You never choose it
+                and there is nothing to compare: it is named only so you can see what is being fetched.
+                If you switch to a model that came with a different one, the page fetches that too,
                 once.
             </p>
             <div class="card-title" style="margin-top:1rem;">Model</div>
@@ -327,11 +325,13 @@ function render() {
         <div class="accel ${engineReady ? 'on' : ''}" style="margin-bottom:0.6rem;">
             <span class="dot"></span>
             <div>
-                <div class="h">${esc(model ? model.name : 'No model selected')} runs on ${esc(engineName)}</div>
-                <div class="d">${esc((state.runtimes || {})[engineKey] || '')}
-                ${engineReady
-                    ? 'It is downloaded, so this model needs nothing further.'
-                    : 'It is not downloaded yet. Choosing this model means fetching it once, below &mdash; that is the engine only, and the model itself is a separate download further down.'}</div>
+                <div class="h">${engineReady
+                    ? 'Ready &mdash; the helper program is downloaded'
+                    : 'Needs a one-off download below'}</div>
+                <div class="d">${esc(model ? model.name : 'This model')} listens using ${esc(engineName)},
+                a small helper program. ${engineReady
+                    ? 'It is already here, so nothing more is needed on this card.'
+                    : 'Pick where it should run below and press Download. The model itself is a separate download, further down the page.'}</div>
             </div>
         </div>`;
 
@@ -343,6 +343,7 @@ function render() {
             <div>
                 <div class="model-name">${esc(e.name)}</div>
                 <div class="model-meta">${esc(e.desc)}</div>
+                <div class="model-meta" style="margin-top:0.2rem;">Part of ${esc(e.partOf)}.</div>
                 <div class="model-tags">
                     <span class="tag tag-acc">Download: ${e.sizeMB >= 1024 ? (e.sizeMB / 1024).toFixed(1) + ' GB' : e.sizeMB + ' MB'}</span>
                     ${e.installed ? '<span class="tag tag-live">Already downloaded</span>' : ''}
