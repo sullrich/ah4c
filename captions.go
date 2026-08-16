@@ -4563,9 +4563,13 @@ type captionStatus struct {
 	// Runtimes describes each engine, keyed by engine, for the same reason
 	// Engines carries both: the page talks about the engine under the radio
 	// button, which is not always the saved one.
-	Runtimes       map[string]string `json:"runtimes"`
-	RuntimeVersion string            `json:"runtimeVersion"`
-	RuntimeURL     string            `json:"runtimeURL"`
+	Runtimes map[string]string `json:"runtimes"`
+	// RuntimeList is every engine, in order, so the page can show both as the
+	// separate programs they are rather than swapping one card's contents and
+	// leaving the reader to notice the name changed.
+	RuntimeList    []speechRuntime `json:"runtimeList"`
+	RuntimeVersion string          `json:"runtimeVersion"`
+	RuntimeURL     string          `json:"runtimeURL"`
 	// Engines carries the builds of both engines, keyed by engine, so the page
 	// can show what a model would need before it has been saved. Picking a
 	// radio button is browsing, not a decision, and must not change what a tune
@@ -4725,6 +4729,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeSizeMB:  runtimeSizeMB(needed.Key, curVariant),
 		RuntimeName:    needed.Name,
 		Runtimes:       runtimeDescriptions(),
+		RuntimeList:    speechRuntimes,
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Persistent:     persistent,
