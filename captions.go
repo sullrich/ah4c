@@ -3966,17 +3966,14 @@ func (svc *txBatchService) run(w *txWorker) {
 		// both; recognizing speech through somebody's channel change was the
 		// last way captions could still cost a recording. Held phrases age,
 		// the freshness rules thin them, and captions catch up on live audio
-		// the moment the machine is quiet — behind by nothing, minus a
-		// sentence or two around each tune.
-		for {
-			quiet, wait := tuneQuiet()
-			if quiet {
-				break
-			}
+		// the moment every tune is delivering video — dispatches are short,
+		// so unlike the un-pausable load they skip the settled grace and
+		// resume at the first byte.
+		for tunesPending() {
 			select {
 			case <-svc.closed:
 				return
-			case <-time.After(wait):
+			case <-time.After(2 * time.Second):
 			}
 		}
 		batch := []txBatchRequest{first}
