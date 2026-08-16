@@ -527,22 +527,6 @@ var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "
 // three or four seconds behind.
 var captionModelCatalog = []captionModel{
 	{
-		Key:         "parakeet-unified-en",
-		Name:        "Parakeet Unified 0.6B",
-		Desc:        "The most accurate model that still transcribes continuously, and about twice as accurate as the Nemotron on English. It buys that by looking a little further ahead before committing a word, so captions sit a second or so further behind the picture. English only: if you need another language, use the Nemotron below.",
-		Latency:     "About two seconds",
-		Accuracy:    "Excellent",
-		Benchmark:   "1.4% of words come out wrong",
-		Hardware:    "A modern multi-core CPU.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/parakeet-unified-en-0.6b-gguf",
-		File:        "parakeet-unified-en-0.6b-Q8_0.gguf",
-		SizeMB:      731,
-		Streaming:   true,
-		Punctuation: true,
-		Languages:   []string{"en"},
-	},
-	{
 		Key:         "realtime-multilingual",
 		Name:        "Nemotron 3.5 Streaming 0.6B",
 		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The one to use for anything other than English, and a little quicker than the Unified at some cost in accuracy.",
@@ -2836,13 +2820,13 @@ func initParakeet() error {
 			pkErr = err
 			return
 		}
-		// Opened privately rather than globally. libparakeet.so embeds its own
-		// ggml and exports eight hundred ggml_* symbols; transcribe.cpp imports
-		// the same names for its own build. Published process-wide, whichever
-		// engine loaded first would capture the other's compute layer, which is
-		// a class of bug nobody should ever have to debug. Neither engine needs
-		// to be global: their backend modules resolve through their own
-		// DT_NEEDED entries and an $ORIGIN runpath.
+		// Opened privately. libparakeet.so embeds its own ggml and exports eight
+		// hundred ggml_* symbols; transcribe.cpp imports the same names for its
+		// own build. Published process-wide, this one would capture the other's
+		// compute layer, which is a class of bug nobody should have to debug.
+		// It loses nothing by being private: it is a single self-contained
+		// library with no modules to load afterwards, which is precisely what
+		// transcribe.cpp is not.
 		handle, err := purego.Dlopen(abs, purego.RTLD_NOW)
 		if err != nil {
 			pkErr = fmt.Errorf("opening %s: %w", abs, err)
@@ -3234,6 +3218,10 @@ var (
 	txAcceptsExtKind     func(model uintptr, slot int32, kind uint32) bool
 	txBackendAvailable   func(kind int32) bool
 	txModelBackend       func(model uintptr) int32
+	txRunBatch           func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
+	txBatchNResults      func(session uintptr) int32
+	txBatchStatus        func(session uintptr, i int32) int32
+	txBatchFullText      func(session uintptr, i int32) string
 	txPkStreamExtInit    func(p unsafe.Pointer)
 	txPkBufStreamExtInit func(p unsafe.Pointer)
 	txLogSet             func(cb uintptr, userData unsafe.Pointer)
@@ -3278,8 +3266,19 @@ func initTranscribe(variant string) error {
 			txErr = err
 			return
 		}
-		// Private, for the reason given in initParakeet.
-		handle, err := purego.Dlopen(abs, purego.RTLD_NOW)
+		// Global, unlike parakeet.cpp, and the asymmetry is deliberate.
+		//
+		// This engine's compute backends are separate modules that it dlopens
+		// itself after this call, and they resolve their ggml symbols at that
+		// point. Loading the engine privately is exactly the condition under
+		// which a module can fail to find them and be skipped — which is what a
+		// missing Vulkan backend looks like from outside, and is
+		// indistinguishable from a missing driver. Publishing these symbols is
+		// safe now that the other engine no longer publishes its own: the
+		// collision that made both private was parakeet.cpp capturing this
+		// one's ggml, and keeping parakeet.cpp private prevents it just as well
+		// while leaving this engine's own modules able to link against it.
+		handle, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil || handle == 0 {
 			txErr = fmt.Errorf("opening %s: %w", abs, err)
 			return
@@ -3306,6 +3305,10 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txAcceptsExtKind, handle, "transcribe_model_accepts_ext_kind")
 		purego.RegisterLibFunc(&txBackendAvailable, handle, "transcribe_backend_available")
 		purego.RegisterLibFunc(&txModelBackend, handle, "transcribe_model_backend")
+		purego.RegisterLibFunc(&txRunBatch, handle, "transcribe_run_batch")
+		purego.RegisterLibFunc(&txBatchNResults, handle, "transcribe_batch_n_results")
+		purego.RegisterLibFunc(&txBatchStatus, handle, "transcribe_batch_status")
+		purego.RegisterLibFunc(&txBatchFullText, handle, "transcribe_batch_full_text")
 		purego.RegisterLibFunc(&txPkStreamExtInit, handle, "transcribe_parakeet_stream_ext_init")
 		purego.RegisterLibFunc(&txPkBufStreamExtInit, handle, "transcribe_parakeet_buffered_stream_ext_init")
 		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
@@ -3566,6 +3569,244 @@ func (t *transcribeModel) leaveGPU(held bool) {
 		<-gpuGate
 	}
 }
+
+// Phrase-at-a-time models are served from one shared copy of the weights.
+//
+// The engine's rule is one compute in flight per model, and its batch entry
+// point is what makes that rule cheap to obey: transcribe_run_batch takes any
+// number of clips of any lengths in a single call, pads and masks them
+// internally, returns a result per clip, and counts as one compute. So instead
+// of a copy of the weights per tuner taking turns — or worse, a copy each —
+// every tuner hands its phrase to one service goroutine, which runs whatever
+// has accumulated as a single batch and hands the texts back. Five tuners on a
+// 2 GB model cost 2 GB, not 10, and a batch of five costs one dispatch, which
+// on a GPU is far closer to the cost of one clip than of five.
+//
+// Streaming models are not served this way: an active stream holds engine
+// state between feeds, so those keep a copy per stream. They are a third of
+// the size, and it is the phrase-at-a-time models — one in particular — that
+// made memory the problem.
+type txBatchRequest struct {
+	pcm   []float32
+	reply chan txBatchReply
+}
+
+type txBatchReply struct {
+	text string
+	err  error
+}
+
+type txBatchService struct {
+	shared  *sharedTxModel
+	key     string
+	session uintptr
+	// lang mirrors transcribeModel.lang: NUL-terminated, heap-resident.
+	lang     []byte
+	abort    *txAbortHandle
+	onGPU    bool
+	requests chan txBatchRequest
+	refs     int
+	closed   chan struct{}
+	// ready is closed once the service is usable (or failed, with err set).
+	// Streams that arrive while the weights are still loading wait on it
+	// rather than loading their own copy, which is the entire point.
+	ready chan struct{}
+	err   error
+}
+
+var (
+	txServiceLock sync.Mutex
+	txServices    = map[string]*txBatchService{}
+)
+
+// acquireTxBatchService returns the shared service for a model, starting it on
+// first use.
+func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive func() bool) (*txBatchService, error) {
+	key := fmt.Sprintf("%s|%d", path, backend)
+	txServiceLock.Lock()
+	if svc, ok := txServices[key]; ok {
+		svc.refs++
+		n := svc.refs
+		txServiceLock.Unlock()
+		<-svc.ready
+		if svc.err != nil {
+			return nil, svc.err
+		}
+		logger("[CC] Sharing the copy of %s already in memory (%d streams on it)", filepath.Base(path), n)
+		return svc, nil
+	}
+	// Claim the key before the slow work, so every stream that arrives during
+	// the load waits for this copy instead of starting another.
+	svc := &txBatchService{
+		abort:    &txAbortHandle{},
+		onGPU:    backend != txBackendCPU,
+		requests: make(chan txBatchRequest, 32),
+		refs:     1,
+		closed:   make(chan struct{}),
+		ready:    make(chan struct{}),
+	}
+	txServices[key] = svc
+	txServiceLock.Unlock()
+
+	fail := func(err error) (*txBatchService, error) {
+		txServiceLock.Lock()
+		delete(txServices, key)
+		txServiceLock.Unlock()
+		svc.err = err
+		close(svc.ready)
+		return nil, err
+	}
+	shared, mkey, err := acquireTxModel(path, backend, alive)
+	if err != nil {
+		return fail(err)
+	}
+	sp := txSessionParams{}
+	txSessionParamsInit(unsafe.Pointer(&sp))
+	sp.nThreads = int32(captionThreads(cfg))
+	sp.nCtx = captionDecoderCtx
+	var session uintptr
+	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
+		releaseTxModel(mkey, shared)
+		return fail(fmt.Errorf("opening the shared session: %s", txStatusString(st)))
+	}
+	svc.shared, svc.key, svc.session = shared, mkey, session
+	if l := cfg.Language; l != "" && l != "auto" {
+		svc.lang = append([]byte(l), 0)
+	}
+	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&svc.abort.deadlineUnixNano))
+	close(svc.ready)
+	go svc.run()
+	return svc, nil
+}
+
+func (svc *txBatchService) release() {
+	txServiceLock.Lock()
+	svc.refs--
+	if svc.refs > 0 {
+		txServiceLock.Unlock()
+		return
+	}
+	delete(txServices, svc.key)
+	txServiceLock.Unlock()
+	close(svc.closed)
+}
+
+// run is the service loop: wait for one phrase, sweep up everything else that
+// arrived meanwhile, run the lot as one batch, answer everyone.
+//
+// The sweep is what makes the latency work. Nothing waits to fill a batch: a
+// lone phrase runs alone, immediately. Batching happens by itself exactly when
+// it is needed — while one batch runs, the other tuners' phrases queue, and
+// the next dispatch takes them all at once.
+func (svc *txBatchService) run() {
+	defer func() {
+		txSessionFree(svc.session)
+		releaseTxModel(svc.key, svc.shared)
+		logger("[CC] Shared model released")
+	}()
+	for {
+		var first txBatchRequest
+		select {
+		case <-svc.closed:
+			return
+		case first = <-svc.requests:
+		}
+		batch := []txBatchRequest{first}
+		for len(batch) < 16 {
+			select {
+			case r := <-svc.requests:
+				batch = append(batch, r)
+			default:
+				goto ready
+			}
+		}
+	ready:
+		svc.dispatch(batch)
+	}
+}
+
+func (svc *txBatchService) dispatch(batch []txBatchRequest) {
+	ptrs := make([]unsafe.Pointer, len(batch))
+	lens := make([]int32, len(batch))
+	for i, r := range batch {
+		ptrs[i] = unsafe.Pointer(&r.pcm[0])
+		lens[i] = int32(len(r.pcm))
+	}
+	p := txRunParams{}
+	txRunParamsInit(unsafe.Pointer(&p))
+	p.timestamps = txTimestampsNone
+	if len(svc.lang) > 0 {
+		p.language = &svc.lang[0]
+	}
+
+	if svc.shared != nil {
+		svc.shared.compute.Lock()
+	}
+	held := false
+	if svc.onGPU {
+		gpuGate <- struct{}{}
+		held = true
+	}
+	atomic.StoreInt64(&svc.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
+	st := txRunBatch(svc.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
+	atomic.StoreInt64(&svc.abort.deadlineUnixNano, 0)
+	if held {
+		<-gpuGate
+	}
+	if svc.shared != nil {
+		svc.shared.compute.Unlock()
+	}
+	for _, r := range batch {
+		runtime.KeepAlive(r.pcm)
+	}
+	runtime.KeepAlive(svc.lang)
+	runtime.KeepAlive(svc.abort)
+
+	if st != txOK {
+		err := fmt.Errorf("%s", txStatusString(st))
+		for _, r := range batch {
+			r.reply <- txBatchReply{err: err}
+		}
+		return
+	}
+	nres := int(txBatchNResults(svc.session))
+	for i, r := range batch {
+		if i >= nres {
+			r.reply <- txBatchReply{err: fmt.Errorf("no result for this phrase")}
+			continue
+		}
+		if pst := txBatchStatus(svc.session, int32(i)); pst != txOK {
+			r.reply <- txBatchReply{err: fmt.Errorf("%s", txStatusString(pst))}
+			continue
+		}
+		r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(svc.session, int32(i)))}
+	}
+}
+
+// batchClient is the per-stream face of the shared service. It satisfies
+// recognizer; the streaming entry points refuse, which sends the caption
+// engine down the phrase-at-a-time path — the only path these models have.
+type batchClient struct{ svc *txBatchService }
+
+func (b *batchClient) transcribe(pcm []float32) (string, error) {
+	if len(pcm) < asrSampleRate/4 {
+		return "", nil
+	}
+	reply := make(chan txBatchReply, 1)
+	select {
+	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply}:
+	default:
+		return "", fmt.Errorf("the shared recognizer is full; this phrase is dropped")
+	}
+	r := <-reply
+	return r.text, r.err
+}
+
+func (b *batchClient) beginStream(string) error           { return fmt.Errorf("phrase at a time only") }
+func (b *batchClient) feedStream([]float32) *streamResult { return nil }
+func (b *batchClient) finishStream() *streamResult        { return nil }
+func (b *batchClient) idleFlush() *streamResult           { return nil }
+func (b *batchClient) Close()                             { b.svc.release() }
 
 // txLoadGate limits how many sets of weights load at once.
 //
@@ -4404,6 +4645,25 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 // loadRecognizer opens a model on whichever engine can run it.
 func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
 	if runtimeOf(m) == rtTranscribe {
+		if !m.Streaming {
+			// One shared copy serves every tuner; see txBatchService.
+			variant, err := captionVariantFor(m)
+			if err != nil {
+				return nil, err
+			}
+			if err := initTranscribe(variant); err != nil {
+				return nil, err
+			}
+			weights, err := filepath.Abs(modelPath(m))
+			if err != nil {
+				return nil, err
+			}
+			svc, err := acquireTxBatchService(weights, txBackend(variant), cfg, alive)
+			if err != nil {
+				return nil, err
+			}
+			return &batchClient{svc: svc}, nil
+		}
 		return loadTranscribe(modelPath(m), cfg, alive)
 	}
 	return loadParakeet(modelPath(m), cfg.Language)
@@ -5403,6 +5663,10 @@ func memoryWarning(cfg captionConfig) string {
 	n := captionedStreams(cfg)
 	per := streamMemoryMB(m)
 	totalMB := per * n
+	if runtimeOf(m) == rtTranscribe && !m.Streaming {
+		// Shared: the total is one copy no matter how many tuners.
+		totalMB = per
+	}
 	// Two gigabytes is the point at which this stops being a detail. A single
 	// large model on one tuner is above it on its own, which is deliberate: it
 	// is worth knowing before you turn it on, not after.
@@ -5436,7 +5700,7 @@ func memoryWarning(cfg captionConfig) string {
 // only recommendation that works in a language other than English.
 func recommendedModel() (key, why string) {
 	if gpuAvailable() {
-		return "parakeet-unified-en", "Recommended for this machine: it has a usable GPU, and this is the most accurate model that still captions as people speak. English only."
+		return "cohere-transcribe", "Recommended for this machine: it has a usable GPU. The most accurate captioning available, and every tuner shares one copy of it in memory."
 	}
 	return "realtime-multilingual", "Recommended for this machine: no GPU is available, and this one keeps pace on a processor and handles every supported language."
 }
@@ -5450,6 +5714,13 @@ func recommendedModel() (key, why string) {
 // own copy, and every copy is freed the moment its stream ends.
 func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 	per := streamMemoryMB(m)
+	if runtimeOf(m) == rtTranscribe && !m.Streaming {
+		// One copy serves every tuner on this path; see txBatchService.
+		memory = "About " + humanMB(per) + " of RAM, shared"
+		total = fmt.Sprintf("about %s however many tuners are captioned — every stream shares one copy", humanMB(per))
+		reuse = "All streams share a single copy, which is freed when the last of them ends."
+		return memory, reuse, total
+	}
 	memory = "About " + humanMB(per) + " per stream"
 	if streams > 1 {
 		total = fmt.Sprintf("up to %s with %d tuners captioned at once", humanMB(per*streams), streams)
