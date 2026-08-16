@@ -1064,19 +1064,28 @@ func findGPURuntime(key string) (gpuRuntime, bool) {
 
 func driverDir(g gpuRuntime) string { return filepath.Join(captionDrivers, g.Key) }
 
-// driverDownloaded reports whether the packages are sitting in the bind mount,
-// which is what survives a rebuild.
+// driverDownloaded reports whether the saved set in the bind mount is
+// complete: every package the runtime names has its package file present. A
+// partial set — a loader without the drivers behind it, say — installs
+// something that looks alive and works as nothing, so partial does not count.
 func driverDownloaded(g gpuRuntime) bool {
 	ents, err := os.ReadDir(driverDir(g))
 	if err != nil {
 		return false
 	}
-	for _, e := range ents {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".deb") {
-			return true
+	for _, pkg := range g.Packages {
+		found := false
+		for _, e := range ents {
+			if !e.IsDir() && strings.HasPrefix(e.Name(), pkg+"_") && strings.HasSuffix(e.Name(), ".deb") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // driverActive reports whether the driver is loadable right now.
@@ -1166,15 +1175,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return "", fmt.Errorf("this image has no apt-get, so the driver cannot be fetched from here")
 	}
 	dir := driverDir(g)
-	// apt downloads into a partial subdirectory of its archive cache and moves
-	// the finished files up. Without that directory it refuses to start, which
-	// is the difference between the packages landing in the bind mount and not
-	// being downloaded at all.
-	if err := os.MkdirAll(filepath.Join(dir, "partial"), 0o755); err != nil {
-		return "", err
-	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	var log strings.Builder
@@ -1186,15 +1187,19 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		log.Write(b)
 		return e
 	}
-	// A fresh fetch replaces the saved set wholesale. Leaving the old
-	// packages beside the new ones would have the installer lay a 2022 driver
-	// over a 2026 one, or the reverse, depending on filename order — mixed
-	// versions are strictly worse than either.
-	if old, _ := savedDebs(g); len(old) > 0 {
-		for _, p := range old {
-			os.Remove(p)
-		}
-		logger("[CC] Cleared %d previously saved packages before fetching fresh ones", len(old))
+	// The download lands in a staging directory and replaces the saved set
+	// only once it is complete. Clearing first and downloading after was
+	// tried, and a fetch that failed partway left a set with the loader and
+	// no drivers behind it — which installs cleanly, loads cleanly, and
+	// captions nothing. A failed fetch now changes nothing.
+	staging := filepath.Join(dir, "incoming")
+	os.RemoveAll(staging)
+	if err := os.MkdirAll(filepath.Join(staging, "partial"), 0o755); err != nil {
+		return "", err
+	}
+	stagingAbs, err := filepath.Abs(staging)
+	if err != nil {
+		return "", err
 	}
 	// The stable suite of the base image freezes its graphics drivers for
 	// years — the driver it offers today shipped before this GPU's compute
@@ -1207,7 +1212,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return log.String(), fmt.Errorf("apt-get update: %w", err)
 	}
 	base := []string{"apt-get", "install", "-y", "--no-install-recommends",
-		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}
+		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + stagingAbs}
 	args := base
 	if suite != "" {
 		args = append(append([]string{}, base...), "-t", suite)
@@ -1218,6 +1223,43 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		logger("[CC] The backports fetch failed; falling back to the stable packages")
 		aptErr = run(append(append([]string{}, base...), g.Packages...)...)
 	}
+	// Completeness is judged before anything is replaced: every named
+	// package must be in the staging set.
+	complete := true
+	for _, pkg := range g.Packages {
+		found := false
+		if ents, e := os.ReadDir(staging); e == nil {
+			for _, f := range ents {
+				if strings.HasPrefix(f.Name(), pkg+"_") && strings.HasSuffix(f.Name(), ".deb") {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			complete = false
+		}
+	}
+	if !complete {
+		os.RemoveAll(staging)
+		if aptErr != nil {
+			return log.String(), fmt.Errorf("downloading %s: %w — the previously saved packages were left untouched", strings.Join(g.Packages, " "), aptErr)
+		}
+		return log.String(), fmt.Errorf("the download finished without every package; the previously saved packages were left untouched")
+	}
+	if old, _ := savedDebs(g); len(old) > 0 {
+		for _, p := range old {
+			os.Remove(p)
+		}
+	}
+	if ents, e := os.ReadDir(staging); e == nil {
+		for _, f := range ents {
+			if strings.HasSuffix(f.Name(), ".deb") {
+				os.Rename(filepath.Join(staging, f.Name()), filepath.Join(dir, f.Name()))
+			}
+		}
+	}
+	os.RemoveAll(staging)
 
 	// Whether or not apt honoured the archive directory, the packages have to
 	// end up in the bind mount, because that is the only thing a rebuild does
@@ -1346,7 +1388,10 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if bad := brokenVulkanDrivers(); len(bad) > 0 {
 		if _, e := exec.LookPath("apt-get"); e == nil {
 			logger("[CC] %d graphics drivers cannot load; asking apt to finish their dependencies", len(bad))
-			fix := exec.Command("apt-get", "install", "-f", "-y", "--no-install-recommends")
+			// --no-remove, pointedly: apt's other way of "fixing" a broken
+			// dependency is uninstalling the package it belongs to, which
+			// turns a slow driver into a missing one.
+			fix := exec.Command("apt-get", "install", "-f", "-y", "--no-install-recommends", "--no-remove")
 			fix.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 			fo, _ := fix.CombinedOutput()
 			out = append(out, fo...)
@@ -1359,7 +1404,32 @@ func applyDriver(g gpuRuntime) (string, error) {
 			return string(out), fmt.Errorf("%d graphics drivers installed but cannot load; the log names the missing pieces", len(bad))
 		}
 	}
+	// Zero broken drivers must mean drivers exist: an empty manifest
+	// directory verifies vacuously and captions nothing. This is the state a
+	// partial download installs into, and it is a failure with a next step,
+	// not a success.
+	if g.Key == "vulkan" && !anyVulkanManifests() {
+		return string(out), fmt.Errorf("the packages installed but no Vulkan driver manifests exist; the saved set is incomplete — press the driver download to fetch it fresh")
+	}
 	return string(out), nil
+}
+
+// anyVulkanManifests reports whether any driver manifest exists at all,
+// hardware or otherwise.
+func anyVulkanManifests() bool {
+	for _, dir := range []string{
+		"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d",
+		"/usr/local/share/vulkan/icd.d", "/usr/local/etc/vulkan/icd.d",
+	} {
+		if ents, err := os.ReadDir(dir); err == nil {
+			for _, e := range ents {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // brokenVulkanDrivers opens every hardware driver named by the Vulkan
@@ -1559,6 +1629,19 @@ func restoreGPURuntimeQuietly() {
 	for _, g := range gpuRuntimes {
 		if driverDownloaded(g) {
 			saved = true
+			continue
+		}
+		// Some packages but not all of them is a set a failed download left
+		// behind. It cannot be restored into anything that works, and the
+		// fix needs a button on the page, so say so rather than restoring
+		// silence.
+		if ents, err := os.ReadDir(driverDir(g)); err == nil {
+			for _, e := range ents {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".deb") {
+					logger("[CC] The saved %s packages are incomplete — a download must have failed partway. Press the driver download on the Closed Captions page to fetch a fresh set.", g.Name)
+					break
+				}
+			}
 		}
 	}
 	if !saved {
