@@ -58,8 +58,6 @@ const (
 // implementation of NVIDIA's Parakeet models with a flat C entry point, about a
 // megabyte, opened at run time with purego. ah4c itself stays pure Go: there is
 // no cgo, no ONNX Runtime and nothing linked into the binary.
-const parakeetRelease = "v0.5.0"
-
 // transcribeRelease is the transcribe.cpp build, the second engine. It is the
 // same idea as parakeet.cpp — ggml, a flat C entry point, downloaded rather
 // than bundled — but it runs a much wider set of model families, which is what
@@ -72,10 +70,7 @@ const transcribeRelease = "0.1.3"
 // A model names the engine that can run it. Nothing else in the feature cares
 // which is which: the engines are downloaded the same way, kept in the same
 // directory, and hidden behind the same recognizer interface.
-const (
-	rtParakeet   = "parakeet"
-	rtTranscribe = "transcribe"
-)
+const rtTranscribe = "transcribe"
 
 // speechRuntime describes an engine for the page. Both are fetched on demand
 // and neither is in the image.
@@ -91,10 +86,6 @@ type speechRuntime struct {
 // though it were turns an implementation detail into homework. They are named
 // only so it is clear what is being downloaded.
 var speechRuntimes = []speechRuntime{
-	{
-		Key: rtParakeet, Name: "parakeet.cpp", Version: parakeetRelease,
-		Desc: "the helper program this model listens with",
-	},
 	{
 		Key: rtTranscribe, Name: "transcribe.cpp", Version: "v" + transcribeRelease,
 		Desc: "the helper program this model listens with",
@@ -166,21 +157,6 @@ var engineVariants = []engineVariant{
 		Needs:  "libcuda.so.1",
 		Why:    "Needs the NVIDIA container runtime, which injects the driver. Add the GPU to your compose file; nothing changes in the image.",
 	},
-	{
-		Key: "cuda12", Name: "GPU via CUDA 12", Suffix: "cuda12",
-		Desc:   "The same, built against CUDA 12 for older drivers. Try this if the CUDA build will not load.",
-		SizeMB: 722,
-		Needs:  "libcuda.so.1",
-		Why:    "Needs the NVIDIA container runtime, which injects the driver. Add the GPU to your compose file; nothing changes in the image.",
-	},
-}
-
-// variantSuffix maps a variant key to its archive suffix.
-func variantSuffix(key string) string {
-	if v, ok := findEngineVariant(key); ok {
-		return v.Suffix
-	}
-	return "cpu"
 }
 
 func findEngineVariant(key string) (engineVariant, bool) {
@@ -244,11 +220,7 @@ func engineAsset() (url, local string, ok bool) {
 // no engine is a Parakeet one, which is what the catalog held before there was
 // a second engine to name.
 func neededRuntime() string {
-	m, ok := findCaptionModel(currentCaptionConfig().Model)
-	if !ok || m.Runtime == "" {
-		return rtParakeet
-	}
-	return m.Runtime
+	return rtTranscribe
 }
 
 // runtimeAssetFor is the platform table for both engines. It returns where the
@@ -261,18 +233,11 @@ func neededRuntime() string {
 // puts the processor and Vulkan backends in a single archive and picks between
 // them when the model is loaded.
 func runtimeAssetFor(rt, goos, goarch, variant string) (url, dir, lib string, ok bool) {
-	if rt == rtTranscribe {
-		url, lane, ok := transcribeAssetFor(goos, goarch, variant)
-		if !ok {
-			return "", "", "", false
-		}
-		return url, filepath.Join(rtTranscribe, lane), transcribeLib(goos), true
-	}
-	url, lib, ok = engineAssetFor(goos, goarch, variantSuffix(variant))
+	url, lane, ok := transcribeAssetFor(goos, goarch, variant)
 	if !ok {
 		return "", "", "", false
 	}
-	return url, variant, lib, true
+	return url, filepath.Join(rtTranscribe, lane), transcribeLib(goos), true
 }
 
 // transcribeAssetFor names the transcribe.cpp archive and the build inside it.
@@ -360,18 +325,7 @@ func runtimeVariantOffered(rt, goos, goarch, variant string) bool {
 		}
 		return false
 	}
-	url, _, ok := engineAssetFor(goos, goarch, variantSuffix(variant))
-	if !ok {
-		return false
-	}
-	if variant == "cpu" {
-		return true
-	}
-	// A variant with no build of its own for this platform is not a choice.
-	// Apple silicon is the clear case: Metal is in the one build there, and
-	// arm64 Linux has no CUDA build at all.
-	cpuURL, _, _ := engineAssetFor(goos, goarch, "cpu")
-	return url != cpuURL
+	return false
 }
 
 // currentEngineVariant is the configured build, falling back to the processor
@@ -394,31 +348,6 @@ func currentEngineVariant() string {
 		return "cpu"
 	}
 	return v.Key
-}
-
-// engineAssetFor is the platform table, separated so every entry can be checked
-// rather than only the one this machine happens to be.
-func engineAssetFor(goos, goarch, variant string) (url, local string, ok bool) {
-	base := "https://github.com/mudler/parakeet.cpp/releases/download/" + parakeetRelease + "/parakeet-" + parakeetRelease + "-lib-"
-	if variant == "" {
-		variant = "cpu"
-	}
-	switch goos + "/" + goarch {
-	case "linux/amd64":
-		return base + "linux-" + variant + "-x64.tar.gz", "libparakeet.so", true
-	case "linux/arm64":
-		// Only the processor and Vulkan builds are published for arm64.
-		if variant != "cpu" && variant != "vulkan" {
-			variant = "cpu"
-		}
-		return base + "linux-" + variant + "-arm64.tar.gz", "libparakeet.so", true
-	case "darwin/arm64":
-		// Metal is built in on Apple silicon; there is no separate choice.
-		return base + "macos-metal-arm64.tar.gz", "libparakeet.dylib", true
-	case "darwin/amd64":
-		return base + "macos-cpu-x64.tar.gz", "libparakeet.dylib", true
-	}
-	return "", "", false
 }
 
 // engineLibPath is where the engine the selected model needs would land.
@@ -515,12 +444,6 @@ type captionModel struct {
 
 const captionModelRepo = "mudler/parakeet-cpp-gguf"
 
-// The 25 languages the multilingual checkpoints cover. The streaming
-// multilingual model advertises more, but these are the ones both agree on, and
-// pinning a locale a model does not know is an error rather than a fallback.
-var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu",
-	"it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"}
-
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
 //
@@ -530,57 +453,38 @@ var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "
 // three or four seconds behind.
 var captionModelCatalog = []captionModel{
 	{
-		Key:         "realtime-multilingual",
-		Name:        "Nemotron 3.5 Streaming 0.6B",
-		Role:        "The all-round choice",
-		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The one to use for anything other than English, and a little quicker than the Unified at some cost in accuracy.",
-		Latency:     "Under a second",
-		Accuracy:    "Good",
-		Benchmark:   "3.0% of words come out wrong",
-		Hardware:    "A modern multi-core CPU. Roughly five times the work of the 120M.",
-		Runtime:     rtParakeet,
-		File:        "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
-		SizeMB:      938,
-		Streaming:   true,
-		Punctuation: true,
-		Languages:   euroLanguages,
-	},
-	{
-		Key:       "realtime-120m",
-		Name:      "Parakeet Realtime 120M",
-		Role:      "The low-end choice",
-		Desc:      "Just as quick and a fifth of the size, for hardware that cannot spare the cores. Writes no punctuation at all: the model produces none, and no setting changes that.",
-		Latency:   "Under a second",
-		Accuracy:  "Basic",
-		Hardware:  "Runs on almost anything. A low-power NAS, a mini PC or a Raspberry Pi class board is plenty.",
-		Runtime:   rtParakeet,
-		File:      "realtime_eou_120m-v1-q8_0.gguf",
-		SizeMB:    168,
-		Streaming: true,
-		Languages: []string{"en"},
-	},
-	{
 		Key:  "cohere-transcribe",
 		Name: "Cohere Transcribe 03-2026",
-		Role: "The high-end choice",
-		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a whole phrase and writes it out rather than transcribing as the audio arrives, and what it writes does not read like machine transcription — it reads like the closed captions on a broadcast channel. It asks for more of a machine than anything else here, and repays it.",
-		// It is quick when it is given room. On a laptop APU over Vulkan it
-		// does eleven seconds of audio in about one and a half, eight times
-		// faster than real time — but that figure is for one long call, and
-		// almost all of its cost is paid at the start of a call rather than per
-		// second of audio. Fed two-second phrases it runs slower than real
-		// time. The delay setting is what governs that, and on anything but
-		// the lowest it is given phrases long enough to be worth its while.
+		Role: "For machines with a GPU",
+		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a phrase at a time and what it writes reads like the closed captions on a broadcast channel. One copy is shared by every tuner, and the delay setting below decides how closely it follows the picture.",
+		// It reads a whole phrase and then writes it, so the delay setting
+		// governs how far behind it runs; the batch service amortises its
+		// per-call cost across every tuner.
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "A high-end system. A GPU is strongly recommended — an integrated one is enough — along with the memory for a copy per captioned tuner. It is the heaviest model here by some way, and on a NAS or a low-power box it will not keep up.",
+		Hardware:    "Best with a GPU, and integrated graphics are plenty. This is guidance, not a gate: it runs on a processor too, and the log will tell you honestly whether it keeps up there.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
 		SizeMB:      1760,
 		Punctuation: true,
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
+	},
+	{
+		Key:         "parakeet-110m",
+		Name:        "Parakeet TDT-CTC 110M",
+		Role:        "For processor-only machines",
+		Desc:        "A tenth the size, with punctuation, and light enough for a Raspberry Pi class board or a low-power NAS. English only. Phrase at a time like the big one, so the delay setting below governs both the same way. Guidance, not a gate: it runs anywhere, including on a GPU.",
+		Latency:     "A few seconds, set by the delay setting below",
+		Accuracy:    "Good",
+		Hardware:    "Runs on almost anything.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/parakeet-tdt_ctc-110m-gguf",
+		File:        "parakeet-tdt_ctc-110m-Q8_0.gguf",
+		SizeMB:      170,
+		Punctuation: true,
+		Languages:   []string{"en"},
 	},
 }
 
@@ -2710,98 +2614,11 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 // Speech recognition
 // ---------------------------------------------------------------------------
 
-// Recognition runs in this process against parakeet.cpp, a ggml implementation
-// of NVIDIA's Parakeet models. Its flat C entry points are opened with purego,
-// so there is no cgo: ah4c still builds as pure Go, and the engine is a file the
-// user downloaded rather than anything linked into the binary or baked into the
-// image.
+// asrSampleRate is the one rate every model here listens at.
+const asrSampleRate = 16000
 
-const (
-	asrSampleRate = 16000
-	// decoder 0 lets the library pick by architecture: the transducer head for
-	// TDT and RNNT models, CTC for CTC models.
-	asrDecoderDefault = 0
-)
-
-var (
-	pkOnce sync.Once
-	pkErr  error
-
-	pkABIVersion func() int32
-	pkLoad       func(path string) uintptr
-	pkFreeCtx    func(ctx uintptr)
-	pkTranscribe func(ctx uintptr, samples unsafe.Pointer, n int32, rate int32, decoder int32, lang string) unsafe.Pointer
-	pkFreeString func(s unsafe.Pointer)
-	pkLastError  func(ctx uintptr) string
-
-	// Cache-aware streaming: the session buffers audio and returns text as
-	// encoder chunks complete, instead of waiting for a whole phrase.
-	pkStreamBegin    func(ctx uintptr, lang string) uintptr
-	pkStreamFeed     func(s uintptr, pcm unsafe.Pointer, n int32) unsafe.Pointer
-	pkStreamFinalize func(s uintptr) unsafe.Pointer
-	pkStreamFree     func(s uintptr)
-)
-
-// Event bits reported by a streaming feed.
-const (
-	pkEventEOU = 1 // the speaker finished an utterance
-	pkEventEOB = 2 // a backchannel, a short "uh-huh" while someone else talks
-)
-
-// initParakeet opens the downloaded engine exactly once per process.
-func initParakeet() error {
-	pkOnce.Do(func() {
-		lib := engineLibPath()
-		if lib == "" {
-			pkErr = fmt.Errorf("no speech engine is published for %s/%s", runtime.GOOS, runtime.GOARCH)
-			return
-		}
-		if !engineInstalled() {
-			pkErr = fmt.Errorf("the speech engine has not been downloaded yet")
-			return
-		}
-		abs, err := filepath.Abs(lib)
-		if err != nil {
-			pkErr = err
-			return
-		}
-		// Opened privately. libparakeet.so embeds its own ggml and exports eight
-		// hundred ggml_* symbols; transcribe.cpp imports the same names for its
-		// own build. Published process-wide, this one would capture the other's
-		// compute layer, which is a class of bug nobody should have to debug.
-		// It loses nothing by being private: it is a single self-contained
-		// library with no modules to load afterwards, which is precisely what
-		// transcribe.cpp is not.
-		handle, err := purego.Dlopen(abs, purego.RTLD_NOW)
-		if err != nil {
-			pkErr = fmt.Errorf("opening %s: %w", abs, err)
-			return
-		}
-		defer func() {
-			// A missing symbol panics inside purego; report it as an error
-			// rather than taking the process down mid-tune.
-			if r := recover(); r != nil {
-				pkErr = fmt.Errorf("speech engine is missing an entry point: %v", r)
-			}
-		}()
-		purego.RegisterLibFunc(&pkABIVersion, handle, "parakeet_capi_abi_version")
-		purego.RegisterLibFunc(&pkLoad, handle, "parakeet_capi_load")
-		purego.RegisterLibFunc(&pkFreeCtx, handle, "parakeet_capi_free")
-		purego.RegisterLibFunc(&pkTranscribe, handle, "parakeet_capi_transcribe_pcm_lang")
-		purego.RegisterLibFunc(&pkFreeString, handle, "parakeet_capi_free_string")
-		purego.RegisterLibFunc(&pkLastError, handle, "parakeet_capi_last_error")
-		purego.RegisterLibFunc(&pkStreamBegin, handle, "parakeet_capi_stream_begin_lang")
-		purego.RegisterLibFunc(&pkStreamFeed, handle, "parakeet_capi_stream_feed_json")
-		purego.RegisterLibFunc(&pkStreamFinalize, handle, "parakeet_capi_stream_finalize_json")
-		purego.RegisterLibFunc(&pkStreamFree, handle, "parakeet_capi_stream_free")
-		logger("[CC] Speech engine loaded, ABI %d", pkABIVersion())
-	})
-	return pkErr
-}
-
-// recognizer is a loaded speech model. There are two implementations, one per
-// engine, and nothing downstream of this knows which it has: the phrase
-// segmenter, the CEA-608 encoder and the injector are the same either way.
+// recognizer is a loaded speech model. The phrase segmenter, the CEA-608
+// encoder and the injector talk to this and nothing below it.
 //
 // beginStream returns an error on a model that cannot transcribe continuously,
 // which is the caller's cue to fall back to a phrase at a time.
@@ -2810,142 +2627,19 @@ type recognizer interface {
 	beginStream(language string) error
 	feedStream(pcm []float32) *streamResult
 	finishStream() *streamResult
-	// idleFlush releases the tail of a sentence after the talking stops.
-	//
-	// A streaming engine holds the last few words back until more audio arrives
-	// to confirm them, which is right in the middle of speech and wrong at the
-	// end of it: the closing words of a sentence would sit unsaid until the next
-	// person started talking, so a pause left the caption hanging mid-sentence
-	// for as long as the room was quiet. A model that reports the end of an
-	// utterance itself has nothing to do here.
 	idleFlush() *streamResult
 	Close()
 }
 
-// parakeet is a loaded model, reused across utterances.
-type parakeet struct {
-	ctx  uintptr
-	lang string
-	// stream is the continuous session, opened by beginStream and non-zero
-	// only for a model that supports one.
-	stream uintptr
-	// eou is the out-parameter the streaming feed writes its event mask into.
-	// It lives on the heap for the life of the model: handing C a pointer into
-	// a goroutine stack is not safe, because the stack can move.
-	eou []int32
-	mu  sync.Mutex // the context holds decoder state, so one utterance at a time
-}
-
-// loadParakeet opens the weights the user downloaded.
-func loadParakeet(gguf, language string) (*parakeet, error) {
-	if err := initParakeet(); err != nil {
-		return nil, err
-	}
-	abs, err := filepath.Abs(gguf)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := os.Stat(abs); err != nil {
-		return nil, err
-	}
-	ctx := pkLoad(abs)
-	if ctx == 0 {
-		return nil, fmt.Errorf("could not load %s", filepath.Base(gguf))
-	}
-	if language == "" {
-		language = "auto"
-	}
-	return &parakeet{ctx: ctx, lang: language, eou: make([]int32, 1)}, nil
-}
-
-func (p *parakeet) Close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.stream != 0 {
-		pkStreamFree(p.stream)
-		p.stream = 0
-	}
-	if p.ctx != 0 {
-		pkFreeCtx(p.ctx)
-		p.ctx = 0
-	}
-}
-
-// transcribe runs one utterance of 16 kHz mono audio through the model.
-func (p *parakeet) transcribe(pcm []float32) (string, error) {
-	if len(pcm) < asrSampleRate/4 {
-		return "", nil
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.ctx == 0 {
-		return "", fmt.Errorf("model is closed")
-	}
-
-	out := pkTranscribe(p.ctx, unsafe.Pointer(&pcm[0]), int32(len(pcm)), asrSampleRate, asrDecoderDefault, p.lang)
-	// The engine reads the samples during the call, so keep them reachable for
-	// its duration rather than trusting the argument alone to pin them.
-	runtime.KeepAlive(pcm)
-	if out == nil {
-		if msg := pkLastError(p.ctx); msg != "" {
-			return "", fmt.Errorf("%s", msg)
-		}
-		return "", fmt.Errorf("recognition failed")
-	}
-	return cleanRecognized(cStringFree(out)), nil
-}
-
-// beginStream opens a cache-aware streaming session. Only a streaming
-// checkpoint supports one; anything else returns an error and the caller falls
-// back to recognizing a phrase at a time.
-func (p *parakeet) beginStream(language string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.ctx == 0 {
-		return fmt.Errorf("model is closed")
-	}
-	s := pkStreamBegin(p.ctx, language)
-	if s == 0 && language != "auto" && language != "" {
-		// A prompt-conditioned model rejects a locale it does not know rather
-		// than falling back, so try again letting it detect.
-		if msg := pkLastError(p.ctx); msg != "" {
-			logger("[CC] streaming rejected language %q (%s), letting the model detect", language, msg)
-		}
-		s = pkStreamBegin(p.ctx, "auto")
-	}
-	if s == 0 {
-		if msg := pkLastError(p.ctx); msg != "" {
-			return fmt.Errorf("%s", msg)
-		}
-		return fmt.Errorf("this model does not support streaming")
-	}
-	if p.stream != 0 {
-		// A session can be opened more than once now that the decoder is
-		// restarted after a failure, and each one owns an encoder cache. Losing
-		// the handle would leak that cache on every restart of a long capture.
-		pkStreamFree(p.stream)
-	}
-	p.stream = s
-	return nil
-}
-
-// streamResult is what a streaming feed reports.
-//
-// The plain text entry point hands back whatever tokens finalized in that call,
-// which is sub-word: "broadcast" arrives as "broad" then "cast" with nothing to
-// say whether the two join or are separate words. The JSON entry point groups
-// them properly and timestamps each word, which is both what the display needs
-// and what makes a decent subtitle cue.
+// streamResult is what a streaming feed reports: finalized words, grouped and
+// cleaned, plus whether the speaker finished an utterance.
 type streamResult struct {
 	Text  string       `json:"text"`
 	EOU   int          `json:"eou"`
 	Words []streamWord `json:"words"`
 }
 
-// streamWord is one finalized word and where it fell in the audio. It is named
-// rather than anonymous because both engines build these: parakeet.cpp hands
-// them over as JSON, transcribe.cpp through an accessor, and the caption side
-// should not be able to tell which it is looking at.
+// streamWord is one finalized word and where it fell in the audio.
 type streamWord struct {
 	W     string  `json:"w"`
 	Start float64 `json:"start"`
@@ -2953,15 +2647,10 @@ type streamWord struct {
 }
 
 // words joins the grouped words of this result.
-//
-// Only the grouped words are used. The text field carries the same speech as
-// the raw sub-word tokens it finalized, so taking both would print every word
-// twice: once in pieces and once whole.
 func (r *streamResult) words() string {
 	if len(r.Words) == 0 {
 		return ""
 	}
-	_ = r.Text
 	parts := make([]string, 0, len(r.Words))
 	for _, w := range r.Words {
 		if t := cleanRecognized(w.W); t != "" {
@@ -2969,41 +2658,6 @@ func (r *streamResult) words() string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// feedStream hands the session more audio and returns whatever it just
-// finalized.
-func (p *parakeet) feedStream(pcm []float32) *streamResult {
-	if p.stream == 0 || len(pcm) == 0 {
-		return nil
-	}
-	out := pkStreamFeed(p.stream, unsafe.Pointer(&pcm[0]), int32(len(pcm)))
-	runtime.KeepAlive(pcm)
-	return parseStreamResult(cStringFree(out))
-}
-
-// idleFlush does nothing here. These models mark the end of an utterance
-// themselves and the feed carries that flag out, so a pause already closes the
-// sentence without being asked.
-func (p *parakeet) idleFlush() *streamResult { return nil }
-
-// finishStream flushes the tail when the stream ends.
-func (p *parakeet) finishStream() *streamResult {
-	if p.stream == 0 {
-		return nil
-	}
-	return parseStreamResult(cStringFree(pkStreamFinalize(p.stream)))
-}
-
-func parseStreamResult(doc string) *streamResult {
-	if doc == "" {
-		return nil
-	}
-	var r streamResult
-	if err := json.Unmarshal([]byte(doc), &r); err != nil {
-		return nil
-	}
-	return &r
 }
 
 // specialToken matches the control tokens a model emits alongside the words:
@@ -3019,23 +2673,6 @@ func cleanRecognized(text string) string {
 	}
 	text = specialToken.ReplaceAllString(text, " ")
 	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
-}
-
-// cStringFree copies a NUL-terminated string out of engine memory and releases
-// the original, which the C API hands over to the caller.
-func cStringFree(p unsafe.Pointer) string {
-	if p == nil {
-		return ""
-	}
-	defer pkFreeString(p)
-	n := 0
-	for *(*byte)(unsafe.Add(p, n)) != 0 {
-		n++
-	}
-	if n == 0 {
-		return ""
-	}
-	return strings.TrimSpace(string(unsafe.Slice((*byte)(p), n)))
 }
 
 // ---------------------------------------------------------------------------
@@ -3501,6 +3138,14 @@ var (
 // is the right tool for a device that really does run things in parallel.
 var gpuGate = make(chan struct{}, 2)
 
+// maxBatchAudioSec bounds how much audio one dispatch may carry. Compute time
+// follows audio length, and the run deadline is fixed: a batch allowed to grow
+// without limit under backlog was the one path left where a single call could
+// outgrow its deadline, fail wholesale, and spike the processor long enough to
+// trouble the streams. Anything past the cap simply waits for the next
+// dispatch, which leaves immediately.
+const maxBatchAudioSec = 20.0
+
 func (t *transcribeModel) enterGPU() bool {
 	if !t.onGPU {
 		return false
@@ -3541,29 +3186,48 @@ type txBatchReply struct {
 	err  error
 }
 
+// txBatchService is the shared recognizer for a phrase-at-a-time model: one
+// request queue, served by one or two workers. A worker owns one copy of the
+// weights and one session, because the engine permits one run in flight per
+// copy — so concurrency is bought the only way it can be, with another copy.
+// The second worker is spawned only under demonstrated pressure: dispatches
+// repeatedly finishing with a backlog still waiting. Memory pays for keeping
+// pace, which is this project's standing trade, and the log says when and why.
 type txBatchService struct {
-	shared  *sharedTxModel
-	key     string
-	session uintptr
+	path    string
+	backend int32
 	// lang mirrors transcribeModel.lang: NUL-terminated, heap-resident.
 	lang     []byte
-	abort    *txAbortHandle
 	onGPU    bool
 	requests chan txBatchRequest
 	refs     int
-	// Telemetry, touched only by the run goroutine: how big the batches really
-	// are and what they really cost, so tuning is done on measurements rather
-	// than on another benchmark from someone else's machine.
-	tDispatches int64
-	tPhrases    int64
-	tCompute    time.Duration
-	tAudio      time.Duration
-	closed      chan struct{}
+	closed   chan struct{}
 	// ready is closed once the service is usable (or failed, with err set).
 	// Streams that arrive while the weights are still loading wait on it
 	// rather than loading their own copy, which is the entire point.
 	ready chan struct{}
 	err   error
+
+	workerLock sync.Mutex
+	workers    int
+	pressure   int
+
+	// Telemetry, shared by the workers.
+	telMu        sync.Mutex
+	tDispatches  int64
+	tPhrases     int64
+	tCompute     time.Duration
+	tAudio       time.Duration
+	tSoloN       int64
+	tSoloCompute time.Duration
+	tSoloAudio   time.Duration
+}
+
+// txWorker is one copy of the weights and the session that runs it.
+type txWorker struct {
+	shared  *sharedTxModel
+	session uintptr
+	abort   *txAbortHandle
 }
 
 var (
@@ -3571,8 +3235,29 @@ var (
 	txServices    = map[string]*txBatchService{}
 )
 
-// acquireTxBatchService returns the shared service for a model, starting it on
-// first use.
+// makeWorker loads a copy of the weights and opens a session on it.
+func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
+	shared, key, err := acquireTxModel(svc.path, svc.backend, alive)
+	if err != nil {
+		return nil, err
+	}
+	_ = key
+	sp := txSessionParams{}
+	txSessionParamsInit(unsafe.Pointer(&sp))
+	// Split the compute allowance between the workers that may exist, so two
+	// of them together still respect the machine's reserve.
+	sp.nThreads = int32(max(2, captionComputeThreads()/2))
+	sp.nCtx = captionDecoderCtx
+	var session uintptr
+	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
+		releaseTxModel(svc.path+"|"+fmt.Sprint(svc.backend), shared)
+		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
+	}
+	w := &txWorker{shared: shared, session: session, abort: &txAbortHandle{}}
+	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
+	return w, nil
+}
+
 func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive func() bool) (*txBatchService, error) {
 	key := fmt.Sprintf("%s|%d", path, backend)
 	txServiceLock.Lock()
@@ -3594,83 +3279,97 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		logger("[CC] Sharing the copy of %s already in memory (%d streams on it)", filepath.Base(path), n)
 		return svc, nil
 	}
-	// Claim the key before the slow work, so every stream that arrives during
-	// the load waits for this copy instead of starting another.
 	svc := &txBatchService{
-		abort:    &txAbortHandle{},
+		path:     path,
+		backend:  backend,
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
 		refs:     1,
 		closed:   make(chan struct{}),
 		ready:    make(chan struct{}),
 	}
-	txServices[key] = svc
-	txServiceLock.Unlock()
-
-	fail := func(err error) (*txBatchService, error) {
-		txServiceLock.Lock()
-		delete(txServices, key)
-		txServiceLock.Unlock()
-		svc.err = err
-		close(svc.ready)
-		return nil, err
-	}
-	shared, mkey, err := acquireTxModel(path, backend, alive)
-	if err != nil {
-		return fail(err)
-	}
-	sp := txSessionParams{}
-	txSessionParamsInit(unsafe.Pointer(&sp))
-	// The shared session does every stream's recognition, so it gets most of
-	// the machine — and never all of it. One-tuner's-share starved it (three
-	// threads feeding a GPU for five streams); the whole machine strangled
-	// everything else, because ggml worker threads busy-wait through a
-	// dispatch, and a full complement of spinning cores left nothing for the
-	// ffmpeg decoders and the proxy itself. The stream is the product; a
-	// quarter of the machine is held back for it, always at least two threads.
-	sp.nThreads = int32(captionComputeThreads())
-	sp.nCtx = captionDecoderCtx
-	var session uintptr
-	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
-		releaseTxModel(mkey, shared)
-		return fail(fmt.Errorf("opening the shared session: %s", txStatusString(st)))
-	}
-	svc.shared, svc.key, svc.session = shared, mkey, session
 	if l := cfg.Language; l != "" && l != "auto" {
 		svc.lang = append([]byte(l), 0)
 	}
-	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&svc.abort.deadlineUnixNano))
-	close(svc.ready)
-	go svc.run()
+	txServices[key] = svc
+	txServiceLock.Unlock()
+
+	go func() {
+		defer close(svc.ready)
+		w, err := svc.makeWorker(alive)
+		if err != nil {
+			svc.err = err
+			txServiceLock.Lock()
+			delete(txServices, key)
+			txServiceLock.Unlock()
+			return
+		}
+		txServiceLock.Lock()
+		svc.workers = 1
+		txServiceLock.Unlock()
+		go svc.run(w)
+	}()
+
+	select {
+	case <-svc.ready:
+	case <-time.After(150 * time.Second):
+		txServiceLock.Lock()
+		svc.refs--
+		txServiceLock.Unlock()
+		return nil, fmt.Errorf("the shared model did not finish loading in time")
+	}
+	if svc.err != nil {
+		return nil, svc.err
+	}
 	return svc, nil
 }
 
+// release drops one stream's claim; the last closes the service and its workers.
 func (svc *txBatchService) release() {
 	txServiceLock.Lock()
-	svc.refs--
-	if svc.refs > 0 {
-		txServiceLock.Unlock()
+	defer txServiceLock.Unlock()
+	if svc.refs--; svc.refs > 0 {
 		return
 	}
-	delete(txServices, svc.key)
-	txServiceLock.Unlock()
+	delete(txServices, svc.path+"|"+fmt.Sprint(svc.backend))
 	close(svc.closed)
 }
 
-// run is the service loop: wait for one phrase, sweep up everything else that
-// arrived meanwhile, run the lot as one batch, answer everyone.
-//
-// The sweep is what makes the latency work. Nothing waits to fill a batch: a
-// lone phrase runs alone, immediately. Batching happens by itself exactly when
-// it is needed — while one batch runs, the other tuners' phrases queue, and
-// the next dispatch takes them all at once.
-func (svc *txBatchService) run() {
-	defer func() {
-		if svc.session != 0 {
-			txSessionFree(svc.session)
+// notePressure spawns the second worker when dispatches keep ending with a
+// backlog still queued: one copy is provably not keeping up.
+func (svc *txBatchService) notePressure(queued int) {
+	svc.workerLock.Lock()
+	defer svc.workerLock.Unlock()
+	if queued == 0 {
+		svc.pressure = 0
+		return
+	}
+	svc.pressure++
+	if svc.pressure < 3 || svc.workers >= 2 {
+		return
+	}
+	svc.workers = 2
+	logger("[CC] The shared recognizer is not keeping up with its streams; loading a second copy of %s to run them in parallel — this costs its memory again", filepath.Base(svc.path))
+	go func() {
+		w, err := svc.makeWorker(nil)
+		if err != nil {
+			logger("[CC] Could not load the second copy: %v", err)
+			svc.workerLock.Lock()
+			svc.workers = 1
+			svc.workerLock.Unlock()
+			return
 		}
-		releaseTxModel(svc.key, svc.shared)
-		logger("[CC] Shared model released")
+		go svc.run(w)
+	}()
+}
+
+func (svc *txBatchService) run(w *txWorker) {
+	defer func() {
+		if w.session != 0 {
+			txSessionFree(w.session)
+		}
+		releaseTxModel(svc.path+"|"+fmt.Sprint(svc.backend), w.shared)
+		logger("[CC] Shared model worker released")
 	}()
 	for {
 		var first txBatchRequest
@@ -3680,22 +3379,23 @@ func (svc *txBatchService) run() {
 		case first = <-svc.requests:
 		}
 		batch := []txBatchRequest{first}
+		audioSec := float64(len(first.pcm)) / asrSampleRate
 		// Streams cut phrases on their own clocks, so at any instant usually
 		// one request is waiting — and a batch of one pays the per-call cost
-		// per phrase, which is the exact economics batching exists to fix. A
-		// short gather holds the door for the other active streams: with four
-		// tuners it turns four dispatches into one, and when only one stream
-		// exists there is nobody to wait for and no wait happens.
+		// per phrase, which is exactly the economics batching exists to fix. A
+		// short gather holds the door for the other active streams; a lone
+		// stream waits for nobody.
 		txServiceLock.Lock()
 		active := svc.refs
 		txServiceLock.Unlock()
 		if active > 1 {
 			gather := time.NewTimer(150 * time.Millisecond)
 		gathering:
-			for len(batch) < active && len(batch) < 16 {
+			for len(batch) < active && len(batch) < 16 && audioSec < maxBatchAudioSec {
 				select {
 				case r := <-svc.requests:
 					batch = append(batch, r)
+					audioSec += float64(len(r.pcm)) / asrSampleRate
 				case <-gather.C:
 					break gathering
 				case <-svc.closed:
@@ -3704,20 +3404,22 @@ func (svc *txBatchService) run() {
 			}
 			gather.Stop()
 		}
-		for len(batch) < 16 {
+		for len(batch) < 16 && audioSec < maxBatchAudioSec {
 			select {
 			case r := <-svc.requests:
 				batch = append(batch, r)
+				audioSec += float64(len(r.pcm)) / asrSampleRate
 			default:
 				goto ready
 			}
 		}
 	ready:
-		svc.dispatch(batch)
+		svc.dispatch(w, batch)
+		svc.notePressure(len(svc.requests))
 	}
 }
 
-func (svc *txBatchService) dispatch(batch []txBatchRequest) {
+func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	ptrs := make([]unsafe.Pointer, len(batch))
 	lens := make([]int32, len(batch))
 	for i, r := range batch {
@@ -3731,45 +3433,26 @@ func (svc *txBatchService) dispatch(batch []txBatchRequest) {
 		p.language = &svc.lang[0]
 	}
 
-	if svc.shared != nil {
-		svc.shared.compute.Lock()
-	}
+	w.shared.compute.Lock()
 	held := false
 	if svc.onGPU {
 		gpuGate <- struct{}{}
 		held = true
 	}
-	atomic.StoreInt64(&svc.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
+	atomic.StoreInt64(&w.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
 	began := time.Now()
-	st := txRunBatch(svc.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
+	st := txRunBatch(w.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
 	compute := time.Since(began)
-	atomic.StoreInt64(&svc.abort.deadlineUnixNano, 0)
+	atomic.StoreInt64(&w.abort.deadlineUnixNano, 0)
 	if held {
 		<-gpuGate
 	}
-	if svc.shared != nil {
-		svc.shared.compute.Unlock()
-	}
+	w.shared.compute.Unlock()
 	for _, r := range batch {
 		runtime.KeepAlive(r.pcm)
 	}
 	runtime.KeepAlive(svc.lang)
-	runtime.KeepAlive(svc.abort)
-
-	var audio time.Duration
-	for _, l := range lens {
-		audio += time.Duration(float64(l) / asrSampleRate * float64(time.Second))
-	}
-	svc.tDispatches++
-	svc.tPhrases += int64(len(batch))
-	svc.tCompute += compute
-	svc.tAudio += audio
-	if svc.tDispatches%25 == 0 {
-		speed := float64(svc.tAudio) / float64(svc.tCompute)
-		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, %.1fx real time, over the last 25 dispatches",
-			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed)
-		svc.tPhrases, svc.tCompute, svc.tAudio = 0, 0, 0
-	}
+	runtime.KeepAlive(w.abort)
 
 	if st != txOK {
 		err := fmt.Errorf("%s", txStatusString(st))
@@ -3778,18 +3461,55 @@ func (svc *txBatchService) dispatch(batch []txBatchRequest) {
 		}
 		return
 	}
-	nres := int(txBatchNResults(svc.session))
+	nres := int(txBatchNResults(w.session))
 	for i, r := range batch {
 		if i >= nres {
 			r.reply <- txBatchReply{err: fmt.Errorf("no result for this phrase")}
 			continue
 		}
-		if pst := txBatchStatus(svc.session, int32(i)); pst != txOK {
+		if pst := txBatchStatus(w.session, int32(i)); pst != txOK {
 			r.reply <- txBatchReply{err: fmt.Errorf("%s", txStatusString(pst))}
 			continue
 		}
-		r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(svc.session, int32(i)))}
+		r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(w.session, int32(i)))}
 	}
+
+	var audio time.Duration
+	for _, l := range lens {
+		audio += time.Duration(float64(l) / asrSampleRate * float64(time.Second))
+	}
+	svc.telMu.Lock()
+	svc.tDispatches++
+	svc.tPhrases += int64(len(batch))
+	svc.tCompute += compute
+	svc.tAudio += audio
+	if len(batch) == 1 {
+		svc.tSoloN++
+		svc.tSoloCompute += compute
+		svc.tSoloAudio += audio
+	}
+	if svc.tDispatches%25 == 0 {
+		speed := float64(svc.tAudio) / float64(svc.tCompute)
+		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, %.1fx real time, over the last 25 dispatches",
+			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed)
+		// Split by batch size, because the two tell different stories: solo
+		// dispatches slow means the backend itself is slow here; solo quick
+		// but batches barely quicker means batching is not parallelising on
+		// this backend and a second worker is the better spend.
+		if svc.tSoloN > 0 && svc.tSoloN < 25 {
+			solo := float64(svc.tSoloAudio) / float64(svc.tSoloCompute)
+			batchN := 25 - svc.tSoloN
+			bAudio := svc.tAudio - svc.tSoloAudio
+			bCompute := svc.tCompute - svc.tSoloCompute
+			if bCompute > 0 {
+				logger("[CC] recognizer split: %d solo dispatches at %.1fx real time, %d batched at %.1fx",
+					svc.tSoloN, solo, batchN, float64(bAudio)/float64(bCompute))
+			}
+		}
+		svc.tPhrases, svc.tCompute, svc.tAudio = 0, 0, 0
+		svc.tSoloN, svc.tSoloCompute, svc.tSoloAudio = 0, 0, 0
+	}
+	svc.telMu.Unlock()
 }
 
 // batchClient is the per-stream face of the shared service. It satisfies
@@ -4079,7 +3799,7 @@ var captionLatencies = []captionLatency{
 	{
 		Key: "fast", Name: "Lowest delay",
 		Desc:    "Captions follow speech as closely as they can: phrases are cut within two and a half seconds, so even the first word of a sentence lands about three seconds behind at worst. Slightly less accurate — short phrases give the model less to work with, and mistakes cluster at the cuts.",
-		chunkMS: 80, rightMS: 80, cacheRight: 1, phraseSec: 2.5,
+		chunkMS: 80, rightMS: 80, cacheRight: 3, phraseSec: 2.5,
 	},
 	{
 		Key: "balanced", Name: "Balanced (recommended)",
@@ -4763,38 +4483,32 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 
 // loadRecognizer opens a model on whichever engine can run it.
 func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
-	if runtimeOf(m) == rtTranscribe {
-		if !m.Streaming {
-			// One shared copy serves every tuner; see txBatchService.
-			variant, err := captionVariantFor(m)
-			if err != nil {
-				return nil, err
-			}
-			if err := initTranscribeDeadline(variant); err != nil {
-				return nil, err
-			}
-			weights, err := filepath.Abs(modelPath(m))
-			if err != nil {
-				return nil, err
-			}
-			svc, err := acquireTxBatchService(weights, txBackend(variant), cfg, alive)
-			if err != nil {
-				return nil, err
-			}
-			return &batchClient{svc: svc}, nil
+	if !m.Streaming {
+		// One shared copy serves every tuner; see txBatchService.
+		variant, err := captionVariantFor(m)
+		if err != nil {
+			return nil, err
 		}
-		return loadTranscribe(modelPath(m), cfg, alive)
+		if err := initTranscribeDeadline(variant); err != nil {
+			return nil, err
+		}
+		weights, err := filepath.Abs(modelPath(m))
+		if err != nil {
+			return nil, err
+		}
+		svc, err := acquireTxBatchService(weights, txBackend(variant), cfg, alive)
+		if err != nil {
+			return nil, err
+		}
+		return &batchClient{svc: svc}, nil
 	}
-	return loadParakeet(modelPath(m), cfg.Language)
+	return loadTranscribe(modelPath(m), cfg, alive)
 }
 
 // runtimeOf is the engine a model needs. A catalog entry that names none is a
 // Parakeet one, which is what every entry was before there was a second engine.
 func runtimeOf(m captionModel) string {
-	if m.Runtime == "" {
-		return rtParakeet
-	}
-	return m.Runtime
+	return rtTranscribe
 }
 
 // startDecoder launches ffmpeg and returns the pipe its audio comes out of.
@@ -5858,12 +5572,12 @@ func memoryWarning(cfg captionConfig) string {
 // the Nemotron is the better answer — it is quicker off the mark and it is the
 // only recommendation that works in a language other than English.
 func recommendedModel() (key, why string) {
-	// One recommendation, the same on every machine: the model that keeps pace
-	// with live speech on a processor or a GPU alike and handles every
-	// supported language. The heavier models are for people who already know
-	// they want them; a recommendation that changes with the hardware reads as
-	// authority the page does not have.
-	return "realtime-multilingual", "Recommended: keeps pace with live speech on a processor or a GPU alike, writes punctuation and sentence case, and handles every supported language."
+	// The pick follows the hardware as guidance, never as a gate: both models
+	// run anywhere, and the page only says which one this machine would enjoy.
+	if gpuAvailable() {
+		return "cohere-transcribe", "Recommended for this machine: it has a usable GPU, and this is the most accurate captioning available — one copy shared by every tuner."
+	}
+	return "parakeet-110m", "Recommended for this machine: no GPU is available, and this one is light enough to caption on any processor. The big model still works here if you want to try it."
 }
 
 // memoryNote describes what a model costs to run.

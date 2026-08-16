@@ -71,8 +71,7 @@ leaving the box.
   unchanged, and streams that already carry captions are left alone.
 - **Nothing is added to the Docker image.** No new packages, no Python, no model.
 - **ah4c stays pure Go.** Recognition runs against
-  [parakeet.cpp](https://github.com/mudler/parakeet.cpp) or
-  [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), ggml engines opened
+  [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a ggml engine opened
   at run time with purego. There is no cgo and nothing linked into the binary —
   `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
@@ -87,37 +86,17 @@ The page offers an engine plus your choice of model. Nothing is bundled and noth
 fetched until you ask for it. Every download URL is shown on the page next to the button,
 so it is always clear what is being fetched and from where.
 
-**Speech engine** (required) — there are two, and the model you pick decides which one is
-used, so there is nothing to choose. Both are downloaded from their own GitHub releases
-into the same directory, and neither is in the image.
-
-| Engine | Runs | Size on Linux x64 |
-| --- | --- | --- |
-| [parakeet.cpp](https://github.com/mudler/parakeet.cpp) | NVIDIA's Parakeet and Nemotron models | ~1 MB CPU, 59 MB Vulkan, 537–722 MB CUDA |
-| [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) | A much wider set of families | 28 MB CPU and Vulkan together, 216 MB CUDA |
-
-parakeet.cpp implements NVIDIA's Parakeet architectures and only those, which is why the
-second one is here: everything at the top of the open speech leaderboard is a different
-shape. transcribe.cpp is larger because it ships its ggml backends as separate libraries
-rather than compiling them in. Switching between models that use different engines means
-one more download, once, and the page says which engine a model needs before you save the
-choice.
-
-Each engine is built per platform, and the page offers whichever builds this container can
-actually load:
+**Speech engine** (required) — one program, [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp),
+runs every model. It is downloaded once from that project's GitHub releases — about 28 MB
+for the build that covers both the processor and Vulkan, 216 MB for CUDA — and every model
+uses the same copy. The backend is picked automatically (the best one this container can
+load), a picker exists if you want to pin it, and the log states which backend each model
+actually runs on.
 
 | Build | Needs |
 | --- | --- |
-| CPU | Nothing. Fast enough for several tuners at once |
-| GPU via Vulkan | A Vulkan driver in the container and `/dev/dri` passed through |
-| GPU via CUDA | The NVIDIA container runtime; the download carries its own CUDA runtime |
-| GPU via CUDA 12 | The same, for older drivers. parakeet.cpp only — transcribe.cpp has a single CUDA build |
-
-None of them change the image, and the page tells you at a glance whether acceleration is
-actually working or which piece is missing. One difference worth knowing: transcribe.cpp
-puts its processor and Vulkan backends in the same archive and picks between them when the
-model is loaded, so those two are one download rather than two, and a machine with no
-graphics card runs the same file on its processor instead of failing to open it.
+| CPU + Vulkan (one download) | Nothing for the processor; a Vulkan driver and `/dev/dri` for the GPU |
+| CUDA | The NVIDIA container runtime; the download carries its own CUDA runtime |
 
 **Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
 downloads it the same way it downloads a model: the packages and everything they depend on
@@ -154,65 +133,33 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — three, one per job. Each card on the page names the slot it fills, the engine
-that runs it, and what it costs; picking a model fetches the right engine automatically.
+**Models** — two. The page recommends one for your machine; the recommendation is
+guidance, never a gate, and both run anywhere.
 
-| Model | Role | Accuracy | Delay | Download | Languages | Engine |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Nemotron 3.5 Streaming 0.6B** *(default, recommended)* — continuous, punctuated, sentence case | All-round | Good — 3.0% | Under a second | 938 MB | 25 | parakeet.cpp |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | High-end | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 | transcribe.cpp |
-| **Parakeet Realtime 120M** — quick and tiny, no punctuation | Low-end | Basic | Under a second | 168 MB | English | parakeet.cpp |
+| Model | For | Accuracy | Delay | Download | Languages |
+| --- | --- | --- | --- | --- | --- |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Machines with a GPU (integrated is plenty) | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 |
+| **Parakeet TDT-CTC 110M** — a tenth the size, punctuated | Processor-only machines, down to a Pi | Good | Set by the delay setting | 170 MB | English |
 
-Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
-publish. Read it as a ranking rather than a promise: it is clean read speech, and live
-television is harder than that for every model here. An entry without a figure has no
-published number on that benchmark, and carries a rating rather than a guess.
+Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
+television is harder than clean read speech for every model.
 
-**Memory.** Two arrangements, and the page states which applies on every card.
+**Memory.** One copy of a model is shared by every tuner captioning at once — about 2.2 GB
+resident for Cohere Transcribe, about 300 MB for the 110M, however many streams run — and
+it is freed when the last of them ends. If the shared copy provably cannot keep pace with
+the streams feeding it, a second copy is loaded to run them in parallel, the log says so,
+and that doubles the figure while the pressure lasts. The page works the numbers out for
+your own setup.
 
-Most models load one copy **per captioning stream**, freed the moment that stream ends.
-Copies are not shared, because a copy decodes one thing at a time: sharing would make
-concurrent streams take turns and fall behind live audio.
+Nothing is loaded until a tune is already playing, so captions can delay themselves but
+never a tune; a start that fails says why in the log and retries while the stream plays.
 
-**Cohere Transcribe is the exception: one copy, shared.** Every tuner hands its phrases to
-the same copy through the engine's batch interface, which decodes them together in a single
-dispatch. It is loaded when the first stream needs it and freed when the last one ends —
-about 2.2 GB total however many tuners caption, which at several tuners makes the heaviest
-model the cheapest one in memory.
-
-| Model | Per stream | 5 tuners at once |
-| --- | --- | --- |
-| Nemotron 3.5 Streaming 0.6B | ~1.2 GB | ~6.0 GB |
-| **Cohere Transcribe 03-2026** | shared | **~2.2 GB total** |
-| Parakeet Realtime 120M | ~300 MB | ~1.5 GB |
-
-These are estimates: the model repositories publish file sizes, not runtime memory, and a
-loaded model needs its weights plus the decoder cache and the engine's working buffers —
-reckon on a quarter or so more than the download. The page computes the total for your own
-tuner count and warns when it gets large. If memory is tight, caption fewer tuners (there
-is a per-tuner setting) or pick a smaller model.
-
-Nothing is loaded until a tune is already playing: model loading starts when the first
-bytes of video arrive, never before, so captions can delay themselves but never a tune. A
-start that fails says why in the log and keeps retrying while the stream plays.
-
-**Delay against work.** Streaming models are trained on a menu of context windows and
-phrase-at-a-time models pay a fixed cost per call, and the same setting on the page governs
-both. It is not only a delay control: a phrase-at-a-time model handed two seconds of speech
-pays its start-up cost for two seconds of work, and handed eight pays it once for eight.
-Cohere Transcribe transcribes eleven seconds of audio in about 1.4 seconds on a laptop APU,
-eight times faster than real time, and the same model fed two-second phrases runs slower
-than real time. If captions fall behind with several tuners captioned, this setting is the
-first thing to move.
-
-**Which one to pick.** The **Nemotron**: it is the recommendation on every machine, because
-it keeps pace with live speech on a processor or a GPU alike, writes punctuation and
-sentence case, and handles every supported language. The others are for when you know what
-you want instead: **Cohere Transcribe** for the best captioning available on a machine with
-the muscle for it — a GPU is strongly recommended, and its shared memory means many tuners
-cost no more than one; the **120M** for a NAS or a Pi, accepting that it writes no
-punctuation. There is no separate multilingual pick, because the all-round one is it: the
-Nemotron covers every supported language.
+**The delay setting** governs how closely captions follow the picture: both models read a
+phrase at a time, and the setting decides how long a phrase may run — shorter follows
+closer, longer is a little more accurate and cheaper per minute. The default lands two to
+four seconds behind, which is what live broadcast captioning runs. The recognizer reports
+its own throughput in the log every twenty-five dispatches, so whether your hardware is
+keeping up is a measurement, not a guess.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That
