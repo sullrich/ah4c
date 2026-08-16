@@ -77,9 +77,9 @@ leaving the box.
   `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
-- **No GPU, no /dev/dri, no hardware encoder.** Every model except one runs several times
-  faster than real time on an ordinary CPU. The exception is Cohere Transcribe, the most
-  accurate of them, which needs a graphics card and is not offered without one.
+- **No GPU, no /dev/dri, no hardware encoder.** Every model runs faster than real time on
+  an ordinary CPU. A GPU build is offered if you have one and buys headroom for captioning
+  several tuners at once, but nothing here requires it.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
 The page offers an engine plus your choice of model. Nothing is bundled and nothing is
@@ -93,7 +93,7 @@ into the same directory, and neither is in the image.
 | Engine | Runs | Size on Linux x64 |
 | --- | --- | --- |
 | [parakeet.cpp](https://github.com/mudler/parakeet.cpp) | NVIDIA's Parakeet and Nemotron models | ~1 MB CPU, 59 MB Vulkan, 537–722 MB CUDA |
-| [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) | A much wider set of families, Cohere Transcribe among them | 28 MB CPU and Vulkan together, 216 MB CUDA |
+| [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) | A much wider set of families | 28 MB CPU and Vulkan together, 216 MB CUDA |
 
 parakeet.cpp implements NVIDIA's Parakeet architectures and only those, which is why the
 second one is here: everything at the top of the open speech leaderboard is a different
@@ -164,16 +164,14 @@ engine that runs it, and the page downloads that engine when you pick the model:
 | **Parakeet Unified 0.6B** — continuous and punctuated, twice as accurate on English | Excellent — 1.4% | About two seconds | 731 MB | English | transcribe.cpp |
 | **Multitalker Parakeet Streaming 0.6B** — trained on people talking over each other | Very good — 2.2% | About a second | 734 MB | English | transcribe.cpp |
 | **Parakeet Realtime 120M** — just as quick, no punctuation | Basic | Under a second | 168 MB | English | parakeet.cpp |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is, GPU only | Best — 1.3% | About a second | 2.4 GB | 8 | transcribe.cpp |
 | **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
 > **Watch the memory.** Every stream captioned at the same time loads its own copy of the
-> model, so this can use a lot of memory. Roughly a gigabyte per stream for most of them and
-> **about 3 GB per stream for Cohere Transcribe — three tuners captioned at once is around
-> 9 GB** on top of whatever else the machine is doing. It is released as soon as a stream
-> ends, so this is a ceiling reached while streams are actually running, not a permanent
-> cost. The Closed Captions page works the figure out for your own tuner count.
+> model, so captioning several tuners at once uses several copies — roughly a gigabyte per
+> stream for most of these. It is released as soon as a stream ends, so this is a ceiling
+> reached while streams are actually running, not a permanent cost. The Closed Captions
+> page works the figure out for your own tuner count.
 
 **Memory.** Every stream being captioned at the same time loads its own copy of the model.
 Copies are not shared between streams: the engines decode one thing at a time per copy, so
@@ -187,19 +185,18 @@ running.
 | Parakeet Unified 0.6B | ~0.9 GB | ~1.9 GB | ~2.8 GB |
 | Multitalker Parakeet Streaming 0.6B | ~1.0 GB | ~1.9 GB | ~2.9 GB |
 | Parakeet Realtime 120M | ~300 MB | ~600 MB | ~900 MB |
-| **Cohere Transcribe 03-2026** | **~3.0 GB** | **~5.9 GB** | **~8.9 GB** |
 | Parakeet TDT 0.6B v3 | ~1.1 GB | ~2.2 GB | ~3.4 GB |
 | Parakeet TDT-CTC 110M | ~300 MB | ~600 MB | ~900 MB |
 
 These are estimates, not measurements: the model repositories publish file sizes but not
 runtime memory, and a loaded model needs its weights plus the decoder cache, the encoder's
 activations and the engine's working buffers. Reckon on rather more than the download size —
-a second Cohere Transcribe stream was measured at about 3 GB against a 2.4 GB file. On a GPU
-build the weights sit in video memory, which on integrated graphics is the same pool.
+a second stream of a 2.4 GB model was measured at about 3 GB resident. On a GPU build the
+weights sit in video memory, which on integrated graphics is the same pool.
 
 If memory is tight: caption fewer tuners (there is a per-tuner setting on the page), or
-choose a smaller model. Captioning one tuner with Cohere Transcribe and leaving the rest
-uncaptioned is a perfectly reasonable setup.
+choose a smaller model. Captioning one or two tuners and leaving the rest uncaptioned is a
+perfectly reasonable setup.
 
 Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
 publish. Read it as a ranking rather than a promise: it is clean read speech, and live
@@ -216,25 +213,18 @@ continuous, punctuated, multilingual and quick, which no other single entry mana
 neither punctuation nor capitalisation, and no setting changes that — so it is there for
 hardware that cannot spare the cores.
 
-**Cohere Transcribe needs a GPU, and is worth one.** It is the most accurate model here and
-the top of the public open-ASR leaderboard. It does not transcribe continuously — it reads a
-whole phrase and then writes it — but that costs less than it sounds: with graphics
-acceleration the captions land about a second behind the picture, as close as the streaming
-models and more accurate than any of them. The output does not read like machine
-transcription. It reads like the closed captions on a broadcast channel, which is the whole
-reason for putting the most accurate model on the list.
+**Which one to pick.** The page marks a recommendation based on what your machine can
+actually do, so it is worth reading there rather than here. In short: with a usable GPU,
+**Parakeet Unified** is the pick — roughly twice as accurate as anything else that still
+captions as people speak, at the cost of about a second more delay, English only. Without
+one, or for any language other than English, the **Nemotron** is the better answer and is
+the default. **Multitalker** is worth trying on panel shows and news desks, where models
+trained on one voice at a time tend to run two speakers into a single sentence.
 
-The bar for "a GPU" is low. Integrated graphics clear it: a 12th-generation Intel desktop
-chip driving it over Vulkan keeps it about a second behind. What it cannot do is run on a
-processor, where a 2B model decoded a word at a time loses ground against live audio
-continuously until most of the speech is missed. So this one is **gated rather than
-labelled**: with no usable GPU build it cannot be selected or downloaded, the page says why,
-and it appears the moment Vulkan or CUDA is working. Discovering the problem after a 2.4 GB
-download would be a poor way to learn it.
-
-It is offered in eight languages rather than the fourteen it knows, because CEA-608 cannot
-carry Japanese, Chinese, Korean, Arabic or Greek — those would come out blank rather than
-wrong.
+Captioning several tuners at once is the thing that costs, and it costs in both memory and
+speed: each stream loads its own copy of the model and needs its own share of the processor
+or graphics card. If captions start arriving late, or the log reports dropped phrases,
+caption fewer tuners or move to a lighter model.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That

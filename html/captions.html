@@ -177,7 +177,7 @@
             <p class="footnote">
                 <strong>Memory.</strong> A model uses roughly its download size in RAM while a stream is
                 being captioned, and <strong>every stream captioning at once loads its own copy</strong>.
-                Two streams on Cohere Transcribe is about 5&nbsp;GB, three is about 7&nbsp;GB. They are
+                Two streams of a 0.6B model is roughly 2.5&nbsp;GB, three about 3.7&nbsp;GB. They are
                 not shared because the engine can only decode one thing at a time per copy, so sharing
                 would make the streams wait for each other and fall behind the picture. A copy stays in
                 memory after its stream ends so the next tune starts instantly. If RAM is tight, caption
@@ -414,7 +414,8 @@ function render() {
             <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''}
                    ${m.runnable ? '' : 'disabled'} onchange="pickModel('${esc(m.key)}')">
             <div>
-                <div class="model-name">${esc(m.name)}</div>
+                <div class="model-name">${esc(m.name)}${m.recommended ? ' <span class="badge badge-active">Recommended</span>' : ''}</div>
+                ${m.why ? `<div class="model-meta" style="margin-top:0.2rem;">${esc(m.why)}</div>` : ''}
                 <div class="model-meta">${esc(m.desc)}</div>
                 ${m.runnable ? '' : `<div class="warn" style="margin:0.5rem 0 0;">
                     <span class="dot"></span>

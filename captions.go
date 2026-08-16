@@ -63,7 +63,7 @@ const parakeetRelease = "v0.5.0"
 // transcribeRelease is the transcribe.cpp build, the second engine. It is the
 // same idea as parakeet.cpp — ggml, a flat C entry point, downloaded rather
 // than bundled — but it runs a much wider set of model families, which is what
-// makes Cohere Transcribe and the newer streaming checkpoints reachable at all.
+// makes the newer streaming checkpoints reachable at all.
 // parakeet.cpp only ever implements NVIDIA's Parakeet architectures.
 //
 // The tag is v0.1.3; the asset file names carry the version without the v.
@@ -497,38 +497,11 @@ var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "
 // want: they transcribe as the audio arrives instead of waiting for a phrase to
 // finish, which is the difference between captions a second behind and captions
 // three or four seconds behind.
-// cohereLanguages is the Latin-script part of what Cohere Transcribe knows.
-//
-// The model reads fourteen languages, including Japanese, Chinese, Korean,
-// Arabic and Greek. Those are not offered here because CEA-608 cannot carry
-// them: the caption character set is essentially ASCII plus a handful of
-// accented letters, and everything outside it is folded to the nearest letter
-// or dropped. Offering Japanese would produce a stream of blank captions, which
-// is a worse answer than not offering it. Vietnamese is left out for the same
-// reason in milder form: it is Latin script, but folding away its tone marks
-// changes the words.
-var cohereLanguages = []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"}
-
 var captionModelCatalog = []captionModel{
-	{
-		Key:         "realtime-multilingual",
-		Name:        "Nemotron 3.5 Streaming 0.6B (recommended)",
-		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The best balance of the four things that matter here, and the one to start with.",
-		Latency:     "Under a second",
-		Accuracy:    "Good",
-		Benchmark:   "3.0% of words come out wrong",
-		Hardware:    "A modern multi-core CPU. Roughly five times the work of the 120M.",
-		Runtime:     rtParakeet,
-		File:        "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
-		SizeMB:      938,
-		Streaming:   true,
-		Punctuation: true,
-		Languages:   euroLanguages,
-	},
 	{
 		Key:         "parakeet-unified-en",
 		Name:        "Parakeet Unified 0.6B",
-		Desc:        "The most accurate model that still transcribes continuously, and about twice as accurate as the Nemotron on English. It buys that by looking a little further ahead before committing a word, so captions sit a second or so further behind the picture.",
+		Desc:        "The most accurate model that still transcribes continuously, and about twice as accurate as the Nemotron on English. It buys that by looking a little further ahead before committing a word, so captions sit a second or so further behind the picture. English only: if you need another language, use the Nemotron below.",
 		Latency:     "About two seconds",
 		Accuracy:    "Excellent",
 		Benchmark:   "1.4% of words come out wrong",
@@ -540,6 +513,21 @@ var captionModelCatalog = []captionModel{
 		Streaming:   true,
 		Punctuation: true,
 		Languages:   []string{"en"},
+	},
+	{
+		Key:         "realtime-multilingual",
+		Name:        "Nemotron 3.5 Streaming 0.6B",
+		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The one to use for anything other than English, and a little quicker than the Unified at some cost in accuracy.",
+		Latency:     "Under a second",
+		Accuracy:    "Good",
+		Benchmark:   "3.0% of words come out wrong",
+		Hardware:    "A modern multi-core CPU. Roughly five times the work of the 120M.",
+		Runtime:     rtParakeet,
+		File:        "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
+		SizeMB:      938,
+		Streaming:   true,
+		Punctuation: true,
+		Languages:   euroLanguages,
 	},
 	{
 		Key:         "multitalker-en",
@@ -569,28 +557,6 @@ var captionModelCatalog = []captionModel{
 		SizeMB:    168,
 		Streaming: true,
 		Languages: []string{"en"},
-	},
-	{
-		Key:  "cohere-transcribe",
-		Name: "Cohere Transcribe 03-2026",
-		Desc: "The most accurate open speech model there is, and top of the public leaderboard. It reads a whole phrase and then writes it rather than transcribing as the audio arrives, so it trails the picture by about the length of a phrase. With a GPU behind it that is around a second, which is as good as the streaming models and more accurate than any of them. The result does not read like machine transcription: it reads like the closed captions on a broadcast channel, which is the point of putting the most accurate model on the list.",
-		// This is the one model here that is not merely slower on a processor
-		// but unusable on one: 2B parameters decoded a word at a time loses
-		// ground against live audio continuously until most of the speech is
-		// missed. It is gated on a working GPU build for that reason. The bar
-		// is low, though — integrated graphics clear it comfortably — so the
-		// gate is about having a GPU at all rather than having a good one.
-		Latency:     "About a second, with a GPU",
-		Accuracy:    "Best available",
-		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
-		File:        "cohere-transcribe-03-2026-Q8_0.gguf",
-		SizeMB:      2410,
-		Punctuation: true,
-		NeedsGPU:    true,
-		Languages:   cohereLanguages,
 	},
 	{
 		Key:         "parakeet-v3",
@@ -708,6 +674,25 @@ func loadCaptionConfig() {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		logger("[CC] Ignoring malformed %s: %v", captionCfgFile, err)
 		return
+	}
+	// A model can leave the catalog between versions, and the setting naming it
+	// outlives it. Falling back is the difference between captions carrying on
+	// and captions silently not happening after an update.
+	if _, ok := findCaptionModel(cfg.Model); !ok {
+		def := defaultCaptionConfig()
+		logger("[CC] Model %q is no longer available; using %s instead", cfg.Model, def.Model)
+		cfg.Model = def.Model
+		if m, ok := findCaptionModel(cfg.Model); ok {
+			supported := false
+			for _, l := range m.Languages {
+				if l == cfg.Language {
+					supported = true
+				}
+			}
+			if !supported {
+				cfg.Language = m.Languages[0]
+			}
+		}
 	}
 	captionCfgLock.Lock()
 	captionCfg = cfg
@@ -901,7 +886,7 @@ func streamToFile(client *http.Client, url, dst string) error {
 // pulled on demand rather than shipped in the image.
 //
 // Which engine that is follows from the model rather than from a separate
-// choice on the page: picking Cohere Transcribe and then being asked which of
+// choice on the page: picking a model and then being asked which of
 // two C++ libraries should run it is not a question anyone wants.
 // modelKey may name a model that has not been saved yet, so the page can fetch
 // the engine for something it is only considering.
@@ -3075,7 +3060,7 @@ func cStringFree(p unsafe.Pointer) string {
 // The second engine, bound the same way as the first: purego, no cgo, nothing
 // linked in. What it adds is reach. parakeet.cpp implements NVIDIA's Parakeet
 // architectures and only those; transcribe.cpp implements a couple of dozen
-// families, which is the only reason Cohere Transcribe can run here at all.
+// families, which is what lets this catalog reach past the Parakeet ones.
 //
 // Three things differ from parakeet.cpp and all three are handled below.
 // It is a library plus sibling ggml backends rather than a single file, so it
@@ -3729,7 +3714,7 @@ func (t *transcribeModel) disarm() {
 }
 
 // transcribe runs one utterance of 16 kHz mono audio through the model. This is
-// the path Cohere Transcribe takes: it reads a whole phrase and writes it out,
+// the path an offline model takes: it reads a whole phrase and writes it out,
 // which is why it cannot be as immediate as a streaming model however fast the
 // hardware is.
 func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
@@ -4006,7 +3991,7 @@ type captionEngine struct {
 // newCaptionEngine returns immediately and finishes starting in the background.
 //
 // It must return immediately. This is called on the tune path, so anything slow
-// here is time the viewer spends looking at nothing: loading Cohere Transcribe
+// here is time the viewer spends looking at nothing: loading a large model
 // takes longer than the tune is allowed to take, and doing it here meant the
 // tune timed out before a single frame of video was delivered. Captions are a
 // convenience and the picture is not, so the stream is never held up for them.
@@ -4991,8 +4976,13 @@ type captionStatusModel struct {
 	EngineReady bool   `json:"engineReady"`
 	// Runnable is false when this machine cannot give the model what it needs.
 	// Blocked says what is missing, in the words the page shows.
-	Runnable bool   `json:"runnable"`
-	Blocked  string `json:"blocked"`
+	// Recommended is worked out for this machine rather than fixed in the
+	// catalog: what to use depends on whether there is a graphics card to use
+	// it with, and a label that ignores that is advice for somebody else.
+	Recommended bool   `json:"recommended"`
+	Why         string `json:"why"`
+	Runnable    bool   `json:"runnable"`
+	Blocked     string `json:"blocked"`
 	// Memory is what one simultaneous stream costs in RAM, and Reuse says what
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
@@ -5026,8 +5016,8 @@ func memoryWarning(cfg captionConfig) string {
 	per := streamMemoryMB(m)
 	totalMB := per * n
 	// Two gigabytes is the point at which this stops being a detail. A single
-	// Cohere stream is above it on its own, which is deliberate: 2.4 GB for one
-	// tuner is worth knowing before you turn it on, not after.
+	// large model on one tuner is above it on its own, which is deliberate: it
+	// is worth knowing before you turn it on, not after.
 	if totalMB < 2000 {
 		return ""
 	}
@@ -5046,6 +5036,21 @@ func memoryWarning(cfg captionConfig) string {
 
 	warn += " If this is more than you have, caption fewer tuners below or pick a smaller model."
 	return warn
+}
+
+// recommendedModel is the one to use on this machine.
+//
+// With a graphics card to run it on, the Unified is the pick: it is roughly
+// twice as accurate as anything else that still transcribes as the audio
+// arrives, and the extra second it spends looking ahead is the only thing it
+// costs. Without one, that accuracy is not reachable at a sensible speed and
+// the Nemotron is the better answer — it is quicker off the mark and it is the
+// only recommendation that works in a language other than English.
+func recommendedModel() (key, why string) {
+	if gpuAvailable() {
+		return "parakeet-unified-en", "Recommended for this machine: it has a usable GPU, and this is the most accurate model that still captions as people speak. English only."
+	}
+	return "realtime-multilingual", "Recommended for this machine: no GPU is available, and this one keeps pace on a processor and handles every supported language."
 }
 
 // memoryNote describes what a model costs to run.
@@ -5072,8 +5077,8 @@ func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 // It is not the size of the file. The weights are the bulk of it, but a stream
 // also needs its decoder cache, the encoder's activations and ggml's own
 // working buffers, and those scale with the model rather than being a fixed
-// cost — which is why a second Cohere Transcribe stream was measured at about
-// three gigabytes against a 2.4 GB file, not at 2.4. Reporting the file size
+// cost — a second stream of a 2.4 GB model was measured at about three
+// gigabytes resident, not 2.4. Reporting the file size
 // as the memory cost understates it by roughly a quarter, and understating
 // memory is how a machine gets pushed into swap by a setting that looked safe.
 //
@@ -5085,7 +5090,7 @@ const (
 	// streamOverhead covers buffers that grow with the model.
 	streamOverhead = 1.2
 	// streamWorkingMB covers the decoder cache and the fixed per-session cost.
-	// A Cohere run allocates about 33 MB of key/value cache alone.
+	// A 0.6B run allocates tens of megabytes of key/value cache alone.
 	streamWorkingMB = 100
 )
 
@@ -5216,6 +5221,7 @@ func captionStatusPayload() captionStatus {
 	cfg := currentCaptionConfig()
 	cur := currentEngineVariant()
 	hasGPU := gpuAvailable()
+	pick, why := recommendedModel()
 	streams := captionedStreams(cfg)
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
@@ -5243,6 +5249,8 @@ func captionStatusPayload() captionStatus {
 			Engine:        rt,
 			EngineName:    findSpeechRuntime(rt).Name,
 			EngineReady:   runtimeInstalled(rt, cur),
+			Recommended:   m.Key == pick,
+			Why:           map[bool]string{true: why}[m.Key == pick],
 			Runnable:      blocked == "",
 			Blocked:       blocked,
 			Memory:        mem,
