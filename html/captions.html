@@ -409,7 +409,9 @@ function render() {
         `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'balanced') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
     const chosen = lats.find(l => l.key === (cfg.latency || 'balanced'));
     document.getElementById('latencyNote').textContent = chosen
-        ? chosen.desc + (model && !model.streaming ? ' This model reads a whole phrase at a time, so this setting does not affect it.' : '')
+        ? chosen.desc + (model && !model.streaming
+            ? ' For this model the setting decides how long a phrase may run before it is cut, which is most of the delay you see.'
+            : ' For this model the setting picks how far ahead it listens before committing a word.')
         : '';
 
     const off = document.getElementById('offset');
