@@ -433,9 +433,9 @@ type captionModel struct {
 	// a wall of unpunctuated capitals is worth knowing about in advance.
 	Streaming   bool `json:"streaming"`
 	Punctuation bool `json:"punctuation"`
-	// NoLanguage marks a model whose engine takes no language parameter at
-	// all: single-language, and passing even the right code is rejected
-	// rather than ignored.
+	// NoLanguage marks a single-language model that wants no language
+	// parameter: the engine treats none-given as that language, and passing
+	// nothing is the documented path.
 	NoLanguage bool `json:"-"`
 	// NeedsGPU marks a model that is not usable without graphics acceleration.
 	// It is not a preference: these are offered only where a GPU build can
@@ -489,8 +489,8 @@ var captionModelCatalog = []captionModel{
 		SizeMB:      48,
 		Streaming:   true,
 		Punctuation: true,
-		// The engine takes no language parameter for this family and rejects
-		// one rather than ignoring it; the list is for the page only.
+		// English is this family's only language and the engine's default;
+		// no parameter is passed. The list is for the page only.
 		NoLanguage: true,
 		Languages:  []string{"en"},
 	},
@@ -4008,20 +4008,20 @@ func (svc *txBatchService) run(w *txWorker) {
 			return
 		case first = <-svc.requests:
 		}
-		// Inference yields to tunes like every other heavy thing here. A
-		// decode occupies the GPU in long submissions and spin-waits its CPU
-		// threads while it runs, and a tune's playback confirmation needs
-		// both; recognizing speech through somebody's channel change was the
-		// last way captions could still cost a recording. Held phrases age,
-		// the freshness rules thin them, and captions catch up on live audio
-		// the moment every tune is delivering video — dispatches are short,
-		// so unlike the un-pausable load they skip the settled grace and
-		// resume at the first byte.
-		for tunesPending() {
+		// Inference yields to tunes — at reduced power, not a dead stop. A
+		// full freeze during every channel change put running streams
+		// seconds behind, and at high utilization a backlog never drains, so
+		// one zap turned into permanent lag. While any tune is pending,
+		// dispatches shrink to about a second of compute with a breather
+		// between them: the tune's confirmation gets the machine's attention
+		// many times a second, and captions merely slow instead of stopping.
+		audioCap := maxBatchAudioSec
+		if tunesPending() {
+			audioCap = 4.0
 			select {
 			case <-svc.closed:
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(400 * time.Millisecond):
 			}
 		}
 		batch := []txBatchRequest{first}
@@ -4037,7 +4037,7 @@ func (svc *txBatchService) run(w *txWorker) {
 		if active > 1 {
 			gather := time.NewTimer(150 * time.Millisecond)
 		gathering:
-			for len(batch) < active && len(batch) < 16 && audioSec < maxBatchAudioSec {
+			for len(batch) < active && len(batch) < 16 && audioSec < audioCap {
 				select {
 				case r := <-svc.requests:
 					batch = append(batch, r)
@@ -4495,7 +4495,11 @@ func txGoString(p *byte) string {
 const (
 	txExtKindParakeetStream   = 0x54534B50 // 'PKST', cache-aware
 	txExtKindParakeetBuffered = 0x53424B50 // 'PKBS', chunked attention
-	txExtSlotStream           = 0
+	// The header numbers the slots RUN=0, STREAM=1 and says outright not to
+	// renumber them. This sat at 0 for a while, which asked every model
+	// about run-slot extensions and silently never applied a streaming
+	// latency window to any model that takes one.
+	txExtSlotStream           = 1
 )
 
 type (
@@ -5675,10 +5679,18 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		// Continuous recognition yields to tunes like every other compute
 		// here: while any tune has yet to deliver its video, this chunk is
-		// read (so the decoder never blocks) and simply not recognized. A
-		// channel change costs this stream a few seconds of captions, never
-		// the other viewer's recording.
+		// read (so the decoder never blocks) and not recognized. The open
+		// utterance is closed off first — this family re-attends over its
+		// whole accumulated audio, so feeding it audio with a hole spliced
+		// in corrupts everything after the hole, and the committed text a
+		// bad splice provokes cannot be taken back off the screen. A channel
+		// change costs this stream a sentence, never a corrupted one, and
+		// never the other viewer's recording.
 		if tunesPending() {
+			if !settled {
+				take(e.model.idleFlush())
+				quiet, settled = 0, true
+			}
 			continue
 		}
 		take(e.model.feedStream(buf))
@@ -5870,8 +5882,11 @@ type phraseItem struct {
 // phraseStaleAfter is how old a phrase may be before it is abandoned. Normal
 // passage through the pipeline is a second or two; anything past this is a
 // backlog, and transcribing a backlog in order is how captions end up narrating
-// television from minutes ago.
-const phraseStaleAfter = 10 * time.Second
+// television from the past. Six seconds is the re-sync guarantee: after a
+// channel change shoves the queue behind, the ceiling trims the backlog
+// within a phrase or two and the stream is current again, at the cost of a
+// dropped sentence instead of permanent lag.
+const phraseStaleAfter = 6 * time.Second
 
 // queue hands a phrase to the recognizer, and never waits for it.
 func (e *captionEngine) queue(audio []float32) {
