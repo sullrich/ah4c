@@ -606,7 +606,7 @@ func defaultCaptionConfig() captionConfig {
 		Style:     "rollup3",
 		Uppercase: true,
 		Engine:    "auto",
-		Latency:   "balanced",
+		Latency:   "fast",
 		OffsetSec: 0,
 	}
 }
@@ -4462,12 +4462,12 @@ type captionLatency struct {
 
 var captionLatencies = []captionLatency{
 	{
-		Key: "fast", Name: "Lowest delay",
-		Desc:    "Captions follow speech as closely as they can: phrases are cut within two and a half seconds, so even the first word of a sentence lands about three seconds behind at worst. Slightly less accurate — short phrases give the model less to work with, and mistakes cluster at the cuts.",
-		chunkMS: 80, rightMS: 80, cacheRight: 3, phraseSec: 2.5,
+		Key: "fast", Name: "Lowest delay (recommended)",
+		Desc:    "Captions follow speech as closely as a phrase model can: phrases are cut within two seconds, so even the first word of a sentence lands about three seconds behind at worst, and most words sooner. Slightly less accurate — short phrases give the model less to work with, and mistakes cluster at the cuts.",
+		chunkMS: 80, rightMS: 80, cacheRight: 3, phraseSec: 2,
 	},
 	{
-		Key: "balanced", Name: "Balanced (recommended)",
+		Key: "balanced", Name: "Balanced",
 		Desc:    "Phrases are cut within four seconds, which puts captions two to four seconds behind the picture — about what live broadcast captioning runs. The right answer for most setups.",
 		chunkMS: 480, rightMS: 480, cacheRight: 6, phraseSec: 4,
 	},
@@ -4484,7 +4484,7 @@ func findCaptionLatency(key string) captionLatency {
 			return l
 		}
 	}
-	return captionLatencies[1]
+	return captionLatencies[0]
 }
 
 // transcribeModel is a loaded model and the session that runs it.
