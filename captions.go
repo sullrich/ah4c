@@ -3221,6 +3221,12 @@ type txBatchService struct {
 	tSoloN       int64
 	tSoloCompute time.Duration
 	tSoloAudio   time.Duration
+	// advise-once bookkeeping: the first dispatches decide whether this
+	// backend is pulling its weight.
+	advN       int64
+	advCompute time.Duration
+	advAudio   time.Duration
+	advised    bool
 }
 
 // txWorker is one copy of the weights and the session that runs it.
@@ -3492,6 +3498,20 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		audio += time.Duration(float64(l) / asrSampleRate * float64(time.Second))
 	}
 	svc.telMu.Lock()
+	if !svc.advised && svc.backend != txBackendCPU {
+		svc.advN++
+		svc.advCompute += compute
+		svc.advAudio += audio
+		if svc.advN == 15 {
+			svc.advised = true
+			if speed := float64(svc.advAudio) / float64(svc.advCompute); speed < 1.5 {
+				logger("[CC] The %s backend is managing only %.1fx real time on this machine after %d dispatches. "+
+					"Some integrated GPUs are slower than their own processor for this model — pin the CPU build "+
+					"on the Closed Captions page and compare this line. Whichever reads higher is the right setting here.",
+					txBackendName(svc.backend), speed, svc.advN)
+			}
+		}
+	}
 	svc.tDispatches++
 	svc.tPhrases += int64(len(batch))
 	svc.tCompute += compute
