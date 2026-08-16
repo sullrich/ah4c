@@ -1564,6 +1564,14 @@ func accelStatus() accelReport {
 	case !engineInstalled():
 		r.Headline = "Not accelerated: the engine build is not downloaded"
 		r.Detail = fmt.Sprintf("Download the %s build above.", v.Name)
+	case txStarted() && !txBackendAvailable(txBackend(v.Key)):
+		// Every piece above is in place, so without this the page would go
+		// green while the work carried on running on the processor — which is
+		// worse than saying nothing. The engine looks for its backends once, as
+		// it loads, and if it did that before the driver was back it cannot be
+		// told about it afterwards.
+		r.Headline = "Not accelerated: the engine started before " + v.Name + " was ready"
+		r.Detail = "Everything it needs is here now, but the engine looks for its backends once, when it first loads, and that had already happened. Restart the container to caption on the GPU."
 	default:
 		r.Active = true
 		r.Headline = "Hardware acceleration is active: " + v.Name
@@ -1668,7 +1676,7 @@ func restoreGPURuntimeQuietly() {
 	// scan while the driver was broken, this repair cannot reach it until the
 	// process restarts — which deserves saying plainly, because from outside
 	// it looks like a fixed driver being ignored.
-	if txInited() && len(brokenVulkanDrivers()) == 0 {
+	if txStarted() && len(brokenVulkanDrivers()) == 0 {
 		if v := currentEngineVariant(); strings.Contains(v, "vulkan") && !txBackendAvailable(txBackendVulkan) {
 			logger("[CC] The graphics driver is repaired, but the engine had already started without it. Restart the container to caption on the GPU.")
 		}
@@ -1688,12 +1696,42 @@ func txInited() bool {
 // txInitedCh closes when initTranscribe's Once has completed.
 var txInitedCh = make(chan struct{})
 
+// txStarted reports whether the engine is up and can be asked questions.
+//
+// txInited is not enough on its own: initialization that gives up early — no
+// build published here, nothing downloaded yet — still closes the channel on
+// its way out, having registered none of the entry points. Calling one of them
+// on that path is a nil call, which takes the process down.
+func txStarted() bool {
+	return txInited() && txErr == nil && txBackendAvailable != nil
+}
+
 // warmEngineCache primes the which-builds-can-load cache off the tune path.
 // The first tune otherwise pays those dlopens itself — under the tuner lock,
 // where one slow driver chain delays every tuner's tune.
 func warmEngineCache() {
 	for !waitTuneQuiet(30 * time.Second) {
 	}
+	// Throw away whatever was learned before this point first.
+	//
+	// The driver restore waits for the machine to go quiet, so on a fresh
+	// container there is a stretch — a minute, sometimes several — where the
+	// Vulkan loader genuinely is not installed yet. Anything that asks during
+	// that stretch gets a truthful "no" and the cache keeps it for the life of
+	// the process, so the driver arriving a moment later changes nothing: the
+	// page still says the loader will not load, the engine picker still refuses
+	// to offer a GPU build, and everything runs on the processor until somebody
+	// recreates the container.
+	//
+	// This is why it showed up on Intel and nowhere else. An NVIDIA card gets
+	// its loader injected by the container runtime before ah4c starts, so the
+	// answer is the same whenever it is asked. An Intel or AMD chip depends on
+	// exactly the packages this restore puts back, which is the only case where
+	// the answer changes underneath the cache.
+	//
+	// So the moment the restore is done is the moment to forget, and priming
+	// straight afterwards means nothing is left to ask a stale question of.
+	forgetEngineUsable()
 	for _, v := range engineVariants {
 		if v.Key != "auto" {
 			engineUsable(v)
@@ -1776,6 +1814,16 @@ var (
 // engine still downloading, a machine that would not go quiet — is retried on
 // its own until it does.
 func residentModelKeeper() {
+	// Not a step before the driver is back. The first reconcile is what asks
+	// which build this container can run, and that question has one answer
+	// before the restore and another after it. Asked early it settles on the
+	// processor, opens the engine there, and the backend scan that follows is
+	// the only one the process ever gets.
+	//
+	// Waiting costs nothing: the restore always finishes — its close is
+	// deferred and it is started unconditionally at boot — and the worst case
+	// is the standing copy loads a little later than it might have.
+	<-driverRestoreDone
 	kickResidentModel()
 	for {
 		if residentSaid != "" {
