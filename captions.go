@@ -1181,6 +1181,17 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		log.Write(b)
 		return e
 	}
+	// apt-get download writes into the working directory and has no option
+	// that moves it, so the working directory is where the staging set is.
+	runIn := func(dir string, args ...string) error {
+		logger("[CC] %v", args)
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, e := cmd.CombinedOutput()
+		log.Write(b)
+		return e
+	}
 	// The download lands in a staging directory and replaces the saved set
 	// only once it is complete. Clearing first and downloading after was
 	// tried, and a fetch that failed partway left a set with the loader and
@@ -1200,46 +1211,101 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	// paths were optimized, and a modern engine on a museum driver runs at a
 	// fraction of the hardware's speed while looking perfectly healthy. The
 	// distribution's backports suite carries the current driver for exactly
-	// this reason, so it is preferred and stable is the fallback.
-	suite := ensureBackports(&log)
-	if err := run("apt-get", "update"); err != nil {
-		return log.String(), fmt.Errorf("apt-get update: %w", err)
+	// this reason, and it is the only place this fetches from.
+	//
+	// There is no fallback to the base image's own driver, deliberately. A
+	// 2022 driver installs, loads and captions, and does it several times
+	// slower on the same chip while every check passes — which is a worse
+	// outcome than no driver and a sentence saying why. If the live suite
+	// cannot be reached the second attempt is the archive of the same suite,
+	// which can only ever hold the same era of driver.
+	suite := backportsSuite()
+	if suite == "" {
+		return log.String(), fmt.Errorf("this image's distribution could not be identified, so the current graphics driver cannot be located")
 	}
-	base := []string{"apt-get", "install", "-y", "--no-install-recommends",
-		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + stagingAbs}
-	args := base
-	if suite != "" {
-		args = append(append([]string{}, base...), "-t", suite)
-	}
-	args = append(args, g.Packages...)
-	aptErr := run(args...)
-	if aptErr != nil && suite != "" {
-		logger("[CC] The backports fetch failed; falling back to the stable packages")
-		aptErr = run(append(append([]string{}, base...), g.Packages...)...)
-	}
-	// Completeness is judged before anything is replaced: every named
-	// package must be in the staging set.
-	complete := true
-	for _, pkg := range g.Packages {
-		found := false
-		if ents, e := os.ReadDir(staging); e == nil {
-			for _, f := range ents {
-				if strings.HasPrefix(f.Name(), pkg+"_") && strings.HasSuffix(f.Name(), ".deb") {
-					found = true
-					break
-				}
+	// What has to be saved is everything a *fresh* container will need, and
+	// that is not what apt would download here.
+	//
+	// "apt-get install --download-only" fetches what has to change in this
+	// container. Run it once in a container where the driver already works and
+	// it fetches the two named packages and nothing else, because everything
+	// underneath them is already installed — and that two-package set is what
+	// then replaced a complete one and got saved as the thing to restore. The
+	// next rebuild installed a driver on top of an empty space where a dozen
+	// libraries used to be, and the loader skipped every one of them.
+	//
+	// Worse, that state is self-sealing. The driver goes in with dpkg and
+	// --force-depends, so the package sits there installed with its
+	// dependencies unmet, and every apt run afterwards inherits the mess:
+	// asked to fetch the package again it tries to satisfy the version already
+	// installed, cannot, and exits without downloading anything. The only way
+	// out was to delete the directory by hand.
+	//
+	// So the set is worked out from the packaging rather than from this
+	// container's state: the full recursive dependency closure, fetched
+	// one-by-one with a command that has no solver in it to be confused. It
+	// downloads a package because it is in the closure, not because this
+	// container happens to lack it, which makes the saved set the same whether
+	// it is built on a clean container or a broken one.
+	var (
+		closure []string
+		aptErr  error
+	)
+	for i, src := range backportsSources(suite) {
+		if i > 0 {
+			logger("[CC] The driver could not be fetched from %s (%v); trying %s", backportsSources(suite)[i-1].name, aptErr, src.name)
+			os.RemoveAll(staging)
+			if err := os.MkdirAll(filepath.Join(staging, "partial"), 0o755); err != nil {
+				return log.String(), err
 			}
 		}
-		if !found {
-			complete = false
+		if err := writeAptSource(src, &log); err != nil {
+			aptErr = err
+			continue
+		}
+		if err := run(append([]string{"apt-get", "update"}, src.opts...)...); err != nil {
+			aptErr = fmt.Errorf("apt-get update: %w", err)
+			continue
+		}
+		c, cerr := driverClosure(g.Packages, suite, src.opts, &log)
+		if len(c) == 0 {
+			aptErr = fmt.Errorf("could not work out what %s depends on: %w", strings.Join(g.Packages, " "), cerr)
+			continue
+		}
+		logger("[CC] %s needs %d packages in all; fetching them from %s", g.Name, len(c), src.name)
+		closure = c
+		if aptErr = runIn(stagingAbs, downloadArgs(suite, src.opts, c)...); aptErr == nil {
+			break
 		}
 	}
-	if !complete {
+	if len(closure) == 0 {
+		os.RemoveAll(staging)
+		return log.String(), fmt.Errorf("the current graphics driver could not be fetched: %w", aptErr)
+	}
+	// Completeness is judged before anything is replaced, and against the
+	// whole closure rather than the two packages that were asked for by name.
+	// Checking only those is what let a set with no libraries under it pass.
+	var missing []string
+	have := map[string]bool{}
+	if ents, e := os.ReadDir(staging); e == nil {
+		for _, f := range ents {
+			if n, _, ok := strings.Cut(f.Name(), "_"); ok && strings.HasSuffix(f.Name(), ".deb") {
+				have[n] = true
+			}
+		}
+	}
+	for _, pkg := range closure {
+		if !have[pkg] {
+			missing = append(missing, pkg)
+		}
+	}
+	if len(missing) > 0 {
 		os.RemoveAll(staging)
 		if aptErr != nil {
 			return log.String(), fmt.Errorf("downloading %s: %w — the previously saved packages were left untouched", strings.Join(g.Packages, " "), aptErr)
 		}
-		return log.String(), fmt.Errorf("the download finished without every package; the previously saved packages were left untouched")
+		return log.String(), fmt.Errorf("the download finished without %d of the %d packages needed (%s); the previously saved packages were left untouched",
+			len(missing), len(closure), strings.Join(missing, " "))
 	}
 	if old, _ := savedDebs(g); len(old) > 0 {
 		for _, p := range old {
@@ -1280,10 +1346,10 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	return log.String(), nil
 }
 
-// ensureBackports makes the base image's backports suite available and
-// returns its name, or "" when it cannot be arranged. Backports is where the
-// distribution keeps current graphics drivers for a stable release.
-func ensureBackports(log *strings.Builder) string {
+// backportsSuite names the backports suite for whatever distribution this
+// image is built on, or "" if that cannot be worked out. Backports is where
+// the distribution keeps current graphics drivers for a stable release.
+func backportsSuite() string {
 	b, err := os.ReadFile("/etc/os-release")
 	if err != nil {
 		return ""
@@ -1297,20 +1363,171 @@ func ensureBackports(log *strings.Builder) string {
 	if codename == "" {
 		return ""
 	}
-	suite := codename + "-backports"
-	// Already configured, by the image or an earlier run?
-	for _, f := range []string{"/etc/apt/sources.list", "/etc/apt/sources.list.d/backports.list", "/etc/apt/sources.list.d/debian.sources"} {
-		if c, err := os.ReadFile(f); err == nil && strings.Contains(string(c), suite) {
-			return suite
+	return codename + "-backports"
+}
+
+// backportsSnapshot is the date the archive is read at when the live suite
+// cannot be reached. Any timestamp is accepted and resolves to the archive as
+// it stood then, so this only has to be a date the driver was known good.
+const backportsSnapshot = "20260601T000000Z"
+
+// aptSource is one place to fetch from: the line that names it, a name for the
+// log, and any options apt needs to read it.
+type aptSource struct {
+	name string
+	line string
+	opts []string
+}
+
+// backportsSources is where the driver may be fetched from, in order.
+//
+// Both are the same suite of the same distribution, and that is the point.
+// The second is the archive of the first, read at a fixed date, for the day
+// the live index has moved on or the mirror will not answer. Neither can hand
+// back the base image's own driver, which is the one outcome worth refusing:
+// it installs, it loads, it captions, and it does all of it several times
+// slower than the driver being asked for while every check passes.
+func backportsSources(suite string) []aptSource {
+	return []aptSource{
+		{
+			name: suite,
+			line: fmt.Sprintf("deb http://deb.debian.org/debian %s main\n", suite),
+		},
+		{
+			name: "the " + suite + " archive at " + backportsSnapshot,
+			line: fmt.Sprintf("deb https://snapshot.debian.org/archive/debian/%s/ %s main\n", backportsSnapshot, suite),
+			// The archive serves the Release file exactly as it was, so its
+			// valid-until date is in the past by design. Refusing it on those
+			// grounds would refuse the archive entirely.
+			opts: []string{"-o", "Acquire::Check-Valid-Until=false"},
+		},
+	}
+}
+
+// writeAptSource puts one source in place, replacing whatever the last attempt
+// left behind. One file, rewritten, so a fallback never ends up listed beside
+// the source it was falling back from.
+func writeAptSource(s aptSource, log *strings.Builder) error {
+	if err := os.WriteFile("/etc/apt/sources.list.d/backports.list", []byte(s.line), 0o644); err != nil {
+		fmt.Fprintf(log, "could not add %s: %v\n", s.name, err)
+		return fmt.Errorf("could not add the %s package source: %w", s.name, err)
+	}
+	logger("[CC] Using %s for a current graphics driver", s.name)
+	return nil
+}
+
+// downloadArgs fetches packages by name and nothing else. apt-get download
+// takes the candidate version of each package it is given and writes the file
+// out; it does not consult what is installed, plan an installation, or have an
+// opinion about dependencies, which is exactly why it is used here. The set to
+// fetch has already been decided by driverClosure.
+func downloadArgs(suite string, opts, pkgs []string) []string {
+	args := append([]string{"apt-get", "download"}, opts...)
+	if suite != "" {
+		// One knob, applied to the closure and the fetch alike, so both answer
+		// about the same versions of the same packages.
+		args = append(args, "-o", "APT::Default-Release="+suite)
+	}
+	return append(args, pkgs...)
+}
+
+// driverClosure is every package the named ones need, worked out from the
+// packaging rather than from what this container has installed.
+//
+// The base system is left out: anything the distribution marks essential, or
+// required, or important, is in every Debian image there is and will be in the
+// rebuilt container too. Saving a copy of the C library to restore over the top
+// of itself is at best wasted and at worst the way a container breaks.
+// Everything below that line is fair game, because a slim image carries none of
+// it and a driver needs a dozen of them.
+func driverClosure(pkgs []string, suite string, opts []string, log *strings.Builder) ([]string, error) {
+	args := append([]string{"apt-cache"}, opts...)
+	if suite != "" {
+		args = append(args, "-o", "APT::Default-Release="+suite)
+	}
+	args = append(args, "depends", "--recurse", "--no-recommends", "--no-suggests",
+		"--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances")
+	args = append(args, pkgs...)
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	log.Write(out)
+	if err != nil {
+		return nil, err
+	}
+	// Package names sit at the left margin. Everything indented is a
+	// relationship, and a name in angle brackets is a virtual package, which
+	// nothing can download — the real package providing it is listed under it.
+	seen := map[string]bool{}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" || line[0] == ' ' || line[0] == '\t' || line[0] == '|' || line[0] == '<' {
+			continue
+		}
+		name := strings.TrimSpace(line)
+		// An architecture qualifier is how apt disambiguates a name, not part
+		// of it; the file it downloads is named without one, and the check that
+		// every package arrived compares the two.
+		if n, _, ok := strings.Cut(name, ":"); ok {
+			name = n
+		}
+		if name == "" || strings.ContainsAny(name, " \t") || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("apt-cache named no packages")
+	}
+
+	keep := map[string]bool{}
+	for _, p := range pkgs {
+		// The packages actually asked for stay in whatever their priority.
+		keep[p] = true
+	}
+	shown := append([]string{"apt-cache"}, opts...)
+	if suite != "" {
+		shown = append(shown, "-o", "APT::Default-Release="+suite)
+	}
+	shown = append(shown, "show", "--no-all-versions")
+	shown = append(shown, names...)
+	info, err := exec.Command(shown[0], shown[1:]...).Output()
+	if err != nil {
+		// Without priorities there is no safe way to leave anything out, and
+		// too many packages restores correctly while too few does not.
+		logger("[CC] Could not read the package priorities; saving the whole dependency set")
+		return names, nil
+	}
+	base := map[string]bool{}
+	pkg, prio, essential := "", "", false
+	flush := func() {
+		if pkg != "" && (essential || prio == "required" || prio == "important") {
+			base[pkg] = true
+		}
+		pkg, prio, essential = "", "", false
+	}
+	for _, line := range strings.Split(string(info), "\n") {
+		switch {
+		case strings.TrimSpace(line) == "":
+			flush()
+		case strings.HasPrefix(line, "Package: "):
+			flush()
+			pkg = strings.TrimSpace(strings.TrimPrefix(line, "Package: "))
+		case strings.HasPrefix(line, "Priority: "):
+			prio = strings.TrimSpace(strings.TrimPrefix(line, "Priority: "))
+		case strings.HasPrefix(line, "Essential: "):
+			essential = strings.TrimSpace(strings.TrimPrefix(line, "Essential: ")) == "yes"
 		}
 	}
-	line := fmt.Sprintf("deb http://deb.debian.org/debian %s main\n", suite)
-	if err := os.WriteFile("/etc/apt/sources.list.d/backports.list", []byte(line), 0o644); err != nil {
-		fmt.Fprintf(log, "could not add %s: %v\n", suite, err)
-		return ""
+	flush()
+
+	var out2 []string
+	for _, n := range names {
+		if base[n] && !keep[n] {
+			continue
+		}
+		out2 = append(out2, n)
 	}
-	logger("[CC] Added the %s package source for a current graphics driver", suite)
-	return suite
+	return out2, nil
 }
 
 // harvestDebs copies anything apt left in the default cache into the bind
@@ -1380,32 +1597,56 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// with the loader's own words, and if the network is still here apt is
 	// asked to complete what the forced install skipped.
 	if bad := brokenVulkanDrivers(); len(bad) > 0 {
-		if _, e := exec.LookPath("apt-get"); e == nil {
-			logger("[CC] %d graphics drivers cannot load; asking apt to finish their dependencies", len(bad))
-			// --no-remove, pointedly: apt's other way of "fixing" a broken
-			// dependency is uninstalling the package it belongs to, which
-			// turns a slow driver into a missing one.
-			fix := exec.Command("apt-get", "install", "-f", "-y", "--no-install-recommends", "--no-remove")
-			fix.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-			fo, _ := fix.CombinedOutput()
-			out = append(out, fo...)
-			bad = brokenVulkanDrivers()
-		}
+		// Asking apt to finish the job was tried here and it cannot: a forced
+		// install leaves the package present with its dependencies unmet, and
+		// the only repair apt will consider from there is removing it. It said
+		// so in as many words — "The following packages will be REMOVED" —
+		// and then refused, because removal is forbidden. Two dead ends, one
+		// after the other, printed into the log every restart.
+		//
+		// The honest answer is that the saved set is wrong and no amount of
+		// work in this container will make it right. That is a download, and
+		// the page is where the button is.
 		for _, b := range bad {
 			logger("[CC] Vulkan driver %s", b)
 		}
-		if len(bad) > 0 {
-			return string(out), fmt.Errorf("%d graphics drivers installed but cannot load; the log names the missing pieces", len(bad))
-		}
+		setDriverFault("The saved driver packages are missing libraries they depend on, so the loader skips every driver and offers no device. Press the driver download below to fetch a complete set; the log names each missing piece.")
+		return string(out), fmt.Errorf("%d graphics drivers installed but cannot load; the log names the missing pieces", len(bad))
 	}
 	// Zero broken drivers must mean drivers exist: an empty manifest
 	// directory verifies vacuously and captions nothing. This is the state a
 	// partial download installs into, and it is a failure with a next step,
 	// not a success.
 	if g.Key == "vulkan" && !anyVulkanManifests() {
+		setDriverFault("The driver packages installed but left no driver behind them, so there is nothing for the loader to offer. Press the driver download below to fetch a complete set.")
 		return string(out), fmt.Errorf("the packages installed but no Vulkan driver manifests exist; the saved set is incomplete — press the driver download to fetch it fresh")
 	}
+	setDriverFault("")
 	return string(out), nil
+}
+
+// driverFault is why the graphics driver cannot be used, in the words the page
+// shows, or empty when there is nothing wrong with it.
+//
+// It is recorded where the answer is found rather than asked for when needed.
+// Finding it means opening every driver library the manifests name, and the
+// page asks on every poll; the install is the one moment the answer can change,
+// so that is the moment it is written down.
+var (
+	driverFaultLock sync.Mutex
+	driverFaultWhy  string
+)
+
+func setDriverFault(why string) {
+	driverFaultLock.Lock()
+	driverFaultWhy = why
+	driverFaultLock.Unlock()
+}
+
+func driverFaultNow() string {
+	driverFaultLock.Lock()
+	defer driverFaultLock.Unlock()
+	return driverFaultWhy
 }
 
 // anyVulkanManifests reports whether any driver manifest exists at all,
@@ -1564,12 +1805,14 @@ func accelStatus() accelReport {
 	case !engineInstalled():
 		r.Headline = "Not accelerated: the engine build is not downloaded"
 		r.Detail = fmt.Sprintf("Download the %s build above.", v.Name)
+	case driverFaultNow() != "":
+		// The loader loading says nothing about the drivers behind it. This is
+		// the state a half-complete package set installs into: everything above
+		// passes, the loader offers no devices, and without this the page went
+		// green while every stream ran on the processor.
+		r.Headline = "Not accelerated: the graphics driver cannot load"
+		r.Detail = driverFaultNow()
 	case txStarted() && !txBackendAvailable(txBackend(v.Key)):
-		// Every piece above is in place, so without this the page would go
-		// green while the work carried on running on the processor — which is
-		// worse than saying nothing. The engine looks for its backends once, as
-		// it loads, and if it did that before the driver was back it cannot be
-		// told about it afterwards.
 		r.Headline = "Not accelerated: the engine started before " + v.Name + " was ready"
 		r.Detail = "Everything it needs is here now, but the engine looks for its backends once, when it first loads, and that had already happened. Restart the container to caption on the GPU."
 	default:
@@ -1835,6 +2078,14 @@ func residentModelKeeper() {
 			}
 		} else {
 			<-residentKick
+		}
+		// Never while a tune is in flight. A tune has thirty seconds before
+		// the DVR gives up on it, and reading a model of this size is the
+		// single heaviest thing this process ever does — it is not allowed to
+		// happen alongside one, at startup or at any other time. It waits for
+		// the machine to be doing nothing, the same as the driver install and
+		// the engine cache warm, and yields again for as long as that takes.
+		for !waitTuneQuiet(30 * time.Second) {
 		}
 		reconcileResidentModel()
 	}
