@@ -1552,12 +1552,27 @@ func restoreGPURuntimeQuietly() {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// Nothing saved, or everything genuinely loadable, means nothing heavy
-	// will happen — skip the wait so the common case is settled instantly.
-	// "Loadable" is judged on the drivers themselves, not just the loader in
-	// front of them: a previous session can leave the loader present and the
-	// driver behind it broken, and taking the loader's word for it was how a
-	// container started processor-only with a fixable driver on disk.
+	// Before the quiet gate, only the check that costs nothing: is anything
+	// saved at all. One directory read. The common case — no GPU driver in
+	// use — settles instantly and the engine init never waits.
+	saved := false
+	for _, g := range gpuRuntimes {
+		if driverDownloaded(g) {
+			saved = true
+		}
+	}
+	if !saved {
+		return
+	}
+	// Everything else waits for the machine to go quiet — including the
+	// probe that judges whether the drivers load. Judging means dlopening
+	// them, and a driver library drags in its whole dependency chain, which
+	// on a cold container is hundreds of megabytes of disk read; running
+	// that at time zero, beside the DVR re-tuning everything it was
+	// recording, blocked a real tune. The probe is heavy work and takes its
+	// turn like the rest.
+	for !waitTuneQuiet(30 * time.Second) {
+	}
 	need := false
 	for _, g := range gpuRuntimes {
 		if driverDownloaded(g) && (!driverActive(g) || len(brokenVulkanDrivers()) > 0) {
@@ -1566,8 +1581,6 @@ func restoreGPURuntimeQuietly() {
 	}
 	if !need {
 		return
-	}
-	for !waitTuneQuiet(30 * time.Second) {
 	}
 	restoreGPURuntime()
 	// The engine scans for backends once per process. If it already ran that
