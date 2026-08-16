@@ -5041,7 +5041,7 @@ func humanMB(mb int) string {
 // A share each, floored at one. The sum stays roughly the size of the machine
 // however many tuners are captioned.
 func captionThreads(cfg captionConfig) int {
-	cpus := runtime.NumCPU()
+	cpus := availableCPUs()
 	streams := captionedStreams(cfg)
 	// Rounded up, so the shares cover the machine rather than leaving cores
 	// idle, and floored at two so a stream is never reduced to a single thread
@@ -5059,6 +5059,64 @@ func captionThreads(cfg captionConfig) int {
 		per = cpus
 	}
 	return per
+}
+
+// availableCPUs is how much processor this container may actually use.
+//
+// runtime.NumCPU is not that number. It honours the affinity mask but knows
+// nothing about a cgroup quota, so ah4c in Docker with --cpus=4 on a twenty
+// thread host is told twenty, and would hand out threads on that basis while
+// the kernel throttles it to four. The quota is where the real answer is, and
+// it is worth reading rather than assuming: guessing high here is how a machine
+// ends up thrashing, which is the fault this whole function exists to fix.
+//
+// Both cgroup layouts are checked. Anything unreadable or unlimited falls back
+// to the affinity count, which is the best available answer on a bare host.
+func availableCPUs() int {
+	n := runtime.NumCPU()
+	if q := cgroupCPUQuota(); q > 0 && q < n {
+		return q
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// cgroupCPUQuota reads the quota as a whole number of processors, or 0 when
+// there is no limit.
+func cgroupCPUQuota() int {
+	// cgroup v2: "max 100000" or "400000 100000" in one file.
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		f := strings.Fields(string(b))
+		if len(f) == 2 && f[0] != "max" {
+			quota, err1 := strconv.Atoi(f[0])
+			period, err2 := strconv.Atoi(f[1])
+			if err1 == nil && err2 == nil && period > 0 && quota > 0 {
+				return atLeastOne(quota / period)
+			}
+		}
+		return 0
+	}
+	// cgroup v1: quota and period in separate files, -1 meaning unlimited.
+	qb, err1 := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+	pb, err2 := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+	if err1 != nil || err2 != nil {
+		return 0
+	}
+	quota, err1 := strconv.Atoi(strings.TrimSpace(string(qb)))
+	period, err2 := strconv.Atoi(strings.TrimSpace(string(pb)))
+	if err1 != nil || err2 != nil || quota <= 0 || period <= 0 {
+		return 0
+	}
+	return atLeastOne(quota / period)
+}
+
+func atLeastOne(n int) int {
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 // captionedStreams is how many tuners could be captioning at the same time.
