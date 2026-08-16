@@ -126,6 +126,14 @@
 
         <div class="card">
             <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled in the image; fetch only what you want</span></div>
+            <p class="footnote" style="margin-top:0;">
+                Captions need two downloads, and this page does both. The <strong>engine</strong> is a
+                small program that does the listening; the <strong>model</strong>, further down, is the
+                file that actually knows how to turn speech into words. Pick a model first &mdash; each
+                one names the engine it needs, and only that engine has to be fetched. Neither is in
+                the ah4c image, nothing is downloaded until you ask, and every button says exactly
+                which file it will fetch and from where.
+            </p>
             <div id="accel"></div>
             <div id="engineFor"></div>
             <div class="model-list" id="runtimeRow"></div>
@@ -158,12 +166,20 @@
                 Remove them any time to get the space back.
             </p>
             <p class="footnote">
-                Accuracy figures are word error rate on LibriSpeech test-clean, the one benchmark all
-                of these publish, so they can be compared with each other. Read it as a ranking rather
-                than a promise: it is clean read speech, and live television &mdash; music beds, crowd
-                noise, people talking over each other &mdash; is harder than that for every model here.
-                Models without a figure have no published number on that benchmark, so they carry a
-                rating and no measurement rather than a guess.
+                <strong>Reading the labels.</strong> The percentage is how many words come out wrong on
+                a standard test, so lower is better and 3% means roughly three words in every hundred.
+                <em>Types as it hears</em> means captions appear while the person is still talking;
+                <em>waits for each sentence</em> means it listens to the whole phrase first, which is
+                more accurate but arrives later. Bigger models are generally more accurate and ask more
+                of the machine.
+            </p>
+            <p class="footnote">
+                Those percentages come from LibriSpeech test-clean, the one test all of these publish,
+                so they can be compared with each other. Read them as a ranking rather than a promise:
+                it is clean, clearly-read speech, and live television &mdash; music beds, crowd noise,
+                people talking over each other &mdash; is harder than that for every model here. Models
+                without a figure have no published number on that test, so they carry a rating and no
+                measurement rather than a guess.
             </p>
         </div>
 
@@ -313,7 +329,9 @@ function render() {
             <div>
                 <div class="h">${esc(model ? model.name : 'No model selected')} runs on ${esc(engineName)}</div>
                 <div class="d">${esc((state.runtimes || {})[engineKey] || '')}
-                ${engineReady ? 'It is downloaded.' : 'It has not been downloaded yet &mdash; pick a build below.'}</div>
+                ${engineReady
+                    ? 'It is downloaded, so this model needs nothing further.'
+                    : 'It is not downloaded yet. Choosing this model means fetching it once, below &mdash; that is the engine only, and the model itself is a separate download further down.'}</div>
             </div>
         </div>`;
 
@@ -326,11 +344,14 @@ function render() {
                 <div class="model-name">${esc(e.name)}</div>
                 <div class="model-meta">${esc(e.desc)}</div>
                 <div class="model-tags">
-                    <span class="tag">${e.sizeMB} MB</span>
-                    ${e.usable ? '' : '<span class="tag">Not available in this container</span>'}
+                    <span class="tag tag-acc">Download: ${e.sizeMB >= 1024 ? (e.sizeMB / 1024).toFixed(1) + ' GB' : e.sizeMB + ' MB'}</span>
+                    ${e.installed ? '<span class="tag tag-live">Already downloaded</span>' : ''}
+                    ${e.usable ? '' : '<span class="tag tag-warn">Not available in this container</span>'}
                 </div>
+                ${e.shared ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.shared)}</div>` : ''}
                 ${e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : ''}
-                <span class="model-src">Downloads from: <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
+                <span class="model-src">Fetches <strong>${esc(e.file)}</strong> from
+                    <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
             </div>
             <div class="model-actions">
                 ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
@@ -357,7 +378,7 @@ function render() {
                 </div>`}
                 <div class="model-tags">
                     <span class="tag tag-acc">Accuracy: ${esc(m.accuracy || 'Unrated')}${m.benchmark ? ' &mdash; ' + esc(m.benchmark) : ''}</span>
-                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Continuous' : 'Phrase at a time'}</span>
+                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Types as it hears' : 'Waits for each sentence'}</span>
                     <span class="tag">Delay: ${esc(m.latency)}</span>
                     <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>

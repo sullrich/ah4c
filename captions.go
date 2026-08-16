@@ -511,7 +511,7 @@ var captionModelCatalog = []captionModel{
 		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The best balance of the four things that matter here, and the one to start with.",
 		Latency:     "Under a second",
 		Accuracy:    "Good",
-		Benchmark:   "3.0% word error rate",
+		Benchmark:   "3.0% of words come out wrong",
 		Hardware:    "A modern multi-core CPU. Roughly five times the work of the 120M.",
 		Runtime:     rtParakeet,
 		File:        "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
@@ -526,7 +526,7 @@ var captionModelCatalog = []captionModel{
 		Desc:        "The most accurate model that still transcribes continuously, and about twice as accurate as the Nemotron on English. It buys that by looking a little further ahead before committing a word, so captions sit a second or so further behind the picture.",
 		Latency:     "About two seconds",
 		Accuracy:    "Excellent",
-		Benchmark:   "1.4% word error rate",
+		Benchmark:   "1.4% of words come out wrong",
 		Hardware:    "A modern multi-core CPU.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/parakeet-unified-en-0.6b-gguf",
@@ -542,7 +542,7 @@ var captionModelCatalog = []captionModel{
 		Desc:        "Trained on people talking over each other, which is most of live television. Continuous, punctuated and cased. Worth trying on panel shows and news desks, where a model trained on one voice at a time tends to run two speakers into a single sentence.",
 		Latency:     "About a second",
 		Accuracy:    "Very good",
-		Benchmark:   "2.2% word error rate",
+		Benchmark:   "2.2% of words come out wrong",
 		Hardware:    "A modern multi-core CPU.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf",
@@ -577,7 +577,7 @@ var captionModelCatalog = []captionModel{
 		// gate is about having a GPU at all rather than having a good one.
 		Latency:     "About a second, with a GPU",
 		Accuracy:    "Best available",
-		Benchmark:   "1.3% word error rate",
+		Benchmark:   "1.3% of words come out wrong",
 		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
@@ -4295,6 +4295,12 @@ type captionStatusEngine struct {
 	Installed bool   `json:"installed"`
 	Selected  bool   `json:"selected"`
 	URL       string `json:"url"`
+	// File is the archive that will actually be fetched, and Shared says so
+	// when another build on the list fetches the very same one. Two rows both
+	// reading "28 MB" with no explanation is how someone ends up believing they
+	// have to download the engine twice.
+	File   string `json:"file"`
+	Shared string `json:"shared"`
 }
 
 type captionStatusModel struct {
@@ -4369,17 +4375,34 @@ func captionStatusPayload() captionStatus {
 				continue
 			}
 			v.SizeMB = runtimeSizeMB(eng.Key, v)
-			// Say which engine this build belongs to. "GPU via Vulkan" on its
-			// own does not tell you what is about to be downloaded when there
-			// are two engines that both have one.
-			v.Name = eng.Name + " · " + v.Name
+			// Say which engine and which version this build belongs to. "GPU
+			// via Vulkan" on its own does not tell you what is about to be
+			// downloaded when there are two engines that both have one.
+			v.Name = eng.Name + " " + eng.Version + " · " + v.Name
 			list = append(list, captionStatusEngine{
 				engineVariant: v,
 				Usable:        engineUsable(v),
 				Installed:     runtimeInstalled(eng.Key, v.Key),
 				Selected:      v.Key == cur,
 				URL:           url,
+				File:          path.Base(url),
 			})
+		}
+		// Some builds are the same archive under two names, because an engine
+		// can put more than one backend in one file. Say so on both rows: they
+		// otherwise read as two separate downloads of identical size, and
+		// downloading one silently marks the other installed, which looks like
+		// a bug rather than a convenience.
+		for i := range list {
+			for j := range list {
+				if i == j || list[i].URL != list[j].URL {
+					continue
+				}
+				list[i].Shared = fmt.Sprintf(
+					"The same download as %q — one archive carries both backends, so fetching either gives you both, and which one runs is decided when the model is loaded.",
+					list[j].Name)
+				break
+			}
 		}
 		engines[eng.Key] = list
 	}
