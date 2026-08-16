@@ -150,9 +150,8 @@
                 <div class="bar"><span id="dlBar"></span></div>
             </div>
             <p class="footnote">
-                Accuracy is the published word-error rate &mdash; lower is better, and live TV is harder
-                than the lab test for every model. Downloads land in <code>/opt/captions</code>, survive
-                rebuilds, and can be removed here any time.
+                Downloads land in <code>/opt/captions</code>, survive rebuilds, and can be removed here
+                any time.
             </p>
         </div>
 
@@ -357,7 +356,6 @@ function render() {
                     </div>
                 </div>`}
                 <div class="model-tags">
-                    <span class="tag tag-acc">Accuracy: ${esc(m.accuracy || 'Unrated')}${m.benchmark ? ' &mdash; ' + esc(m.benchmark) : ''}</span>
                     <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Types as it hears' : 'Waits for each sentence'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>

@@ -140,14 +140,12 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — three. Cohere Transcribe is the one to pick; the other two are for
-processor-only machines that need more. Every recommendation is guidance, never a gate,
-and all three run anywhere.
+**Models** — two. Cohere Transcribe is the one to pick; the tiny one is for hardware
+that cannot run it. Every recommendation is guidance, never a gate, and both run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. On a processor it keeps up with one or two streams; a GPU keeps it fast with many | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
-| **Nemotron 3.5 Streaming 0.6B** — transcribes live as the audio arrives, punctuated | Processor-only machines running several streams at once | Very good — 3.1% | Under a second | 716 MB | 32 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
 Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
@@ -157,9 +155,9 @@ television is harder than clean read speech for every model.
 resident — is shared by every tuner captioning at once, and freed when the last of them
 ends. One copy is all it ever loads: if it cannot keep pace with the streams feeding it,
 captions thin themselves to stay current and the log says which backend would do better —
-memory is never spent to cover for a slow setting. The streaming models hold their session
-open for the whole tune, so each tuner runs its own copy: about 960 MB per stream for
-Nemotron, about 160 MB for Moonshine. The page works the numbers out for your own setup.
+memory is never spent to cover for a slow setting. Moonshine holds its session open for
+the whole tune, so each tuner runs its own copy — about 160 MB per stream. The page works
+the numbers out for your own setup.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.
