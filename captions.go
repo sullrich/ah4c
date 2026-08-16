@@ -460,7 +460,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
+		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Streams share one copy taking turns, so each concurrent stream adds about a second of caption delay. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
