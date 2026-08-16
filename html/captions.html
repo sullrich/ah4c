@@ -177,11 +177,6 @@
                 </select>
             </div>
             <div class="field-row">
-                <label for="latency">Delay vs accuracy</label>
-                <select id="latency"></select>
-            </div>
-            <p class="footnote" id="latencyNote" style="margin-top:0;"></p>
-            <div class="field-row">
                 <label for="offset">Extra delay</label>
                 <select id="offset"></select>
             </div>
@@ -400,14 +395,6 @@ function render() {
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     // How far ahead a streaming model looks before committing a word. It costs
-    // work as well as time, so it matters most with several tuners captioned.
-    const lats = state.latencies || [];
-    const latSel = document.getElementById('latency');
-    latSel.innerHTML = lats.map(l =>
-        `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'balanced') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
-    const chosen = lats.find(l => l.key === (cfg.latency || 'balanced'));
-    document.getElementById('latencyNote').textContent = chosen ? chosen.desc : '';
-
     const off = document.getElementById('offset');
     off.innerHTML = Array.from({length: 16}, (_, i) =>
         `<option value="${i}" ${i === cfg.offsetSec ? 'selected' : ''}>${i === 0 ? 'None' : i + ' second' + (i > 1 ? 's' : '')}</option>`).join('');
@@ -434,7 +421,6 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         offsetSec: parseInt(document.getElementById('offset').value, 10),
-        latency: document.getElementById('latency').value,
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',
         gpuRuntime: state.config.gpuRuntime || '',

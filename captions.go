@@ -457,7 +457,7 @@ var captionModelCatalog = []captionModel{
 		// It reads a whole phrase and then writes it, so the delay setting
 		// governs how far behind it runs; the batch service amortizes its
 		// per-call cost across every tuner.
-		Latency:     "A few seconds, set by the delay setting below",
+		Latency:     "Two to four seconds behind the picture, like live broadcast captioning",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
 		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
@@ -569,11 +569,6 @@ type captionConfig struct {
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
-	// Latency picks how far ahead a streaming model looks before it commits a
-	// word. It is the difference between captions a fifth of a second behind
-	// and two seconds behind, and between one unit of work per chunk and
-	// several, so it matters most when more than one tuner is captioned.
-	Latency string `json:"latency"`
 	// Tuners restricts captioning to specific tuner indexes. Empty means all.
 	Tuners []int `json:"tuners"`
 }
@@ -586,7 +581,6 @@ func defaultCaptionConfig() captionConfig {
 		Style:     "rollup3",
 		Uppercase: true,
 		Engine:    "auto",
-		Latency:   "balanced",
 		OffsetSec: 0,
 	}
 }
@@ -1600,11 +1594,9 @@ func gpuAvailable() bool {
 var driverRestoreDone = make(chan struct{})
 
 // restoreGPURuntimeQuietly is the startup restore, off the startup path. It
-// used to run synchronously in main, which put a whole package installation
-// between the container starting and the server listening — and a container
-// that just restarted faces every recording the DVR wants back immediately.
-// Now the server comes up first, and the installation waits its turn behind
-// the tunes like every other heavy thing here.
+// A container that just restarted faces every recording the DVR wants back
+// immediately, so the server comes up first, and the installation waits its
+// turn behind the tunes like every other heavy thing here.
 func restoreGPURuntimeQuietly() {
 	defer close(driverRestoreDone)
 	if runtime.GOOS != "linux" {
@@ -1638,11 +1630,10 @@ func restoreGPURuntimeQuietly() {
 	}
 	// Everything else waits for the machine to go quiet — including the
 	// probe that judges whether the drivers load. Judging means dlopening
-	// them, and a driver library drags in its whole dependency chain, which
-	// on a cold container is hundreds of megabytes of disk read; running
-	// that at time zero, beside the DVR re-tuning everything it was
-	// recording, blocked a real tune. The probe is heavy work and takes its
-	// turn like the rest.
+	// them, and a driver library drags in its whole dependency chain — on a
+	// cold container, hundreds of megabytes of disk read, beside the DVR
+	// re-tuning everything it was recording. The probe is heavy work and
+	// takes its turn like the rest.
 	for !waitTuneQuiet(30 * time.Second) {
 	}
 	need := false
@@ -3198,15 +3189,12 @@ var (
 	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
 
 	txSetAbortCallback   func(session uintptr, cb uintptr, userData unsafe.Pointer)
-	txAcceptsExtKind     func(model uintptr, slot int32, kind uint32) bool
 	txBackendAvailable   func(kind int32) bool
 	txModelBackend       func(model uintptr) int32
 	txRunBatch           func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
 	txBatchNResults      func(session uintptr) int32
 	txBatchStatus        func(session uintptr, i int32) int32
 	txBatchFullText      func(session uintptr, i int32) string
-	txPkStreamExtInit    func(p unsafe.Pointer)
-	txPkBufStreamExtInit func(p unsafe.Pointer)
 	txLogSet             func(cb uintptr, userData unsafe.Pointer)
 	txWasAborted         func(session uintptr) bool
 	txLoadParamsInit     func(p unsafe.Pointer)
@@ -3298,15 +3286,12 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txFullText, handle, "transcribe_full_text")
 		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
 		purego.RegisterLibFunc(&txLogSet, handle, "transcribe_log_set")
-		purego.RegisterLibFunc(&txAcceptsExtKind, handle, "transcribe_model_accepts_ext_kind")
 		purego.RegisterLibFunc(&txBackendAvailable, handle, "transcribe_backend_available")
 		purego.RegisterLibFunc(&txModelBackend, handle, "transcribe_model_backend")
 		purego.RegisterLibFunc(&txRunBatch, handle, "transcribe_run_batch")
 		purego.RegisterLibFunc(&txBatchNResults, handle, "transcribe_batch_n_results")
 		purego.RegisterLibFunc(&txBatchStatus, handle, "transcribe_batch_status")
 		purego.RegisterLibFunc(&txBatchFullText, handle, "transcribe_batch_full_text")
-		purego.RegisterLibFunc(&txPkStreamExtInit, handle, "transcribe_parakeet_stream_ext_init")
-		purego.RegisterLibFunc(&txPkBufStreamExtInit, handle, "transcribe_parakeet_buffered_stream_ext_init")
 		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
 		purego.RegisterLibFunc(&txStreamBegin, handle, "transcribe_stream_begin")
 		purego.RegisterLibFunc(&txStreamFeed, handle, "transcribe_stream_feed")
@@ -3391,7 +3376,7 @@ func initTranscribe(variant string) error {
 }
 
 // explainMissingVulkan prints everything that decides whether Vulkan works,
-// at the moment it turned out not to. One block in the log instead of a day
+// at the moment it is found missing. One block in the log instead of a day
 // of comparing guesses: the device nodes, the loader, each driver manifest
 // and whether its library loads, and what the manifest pin was set to.
 func explainMissingVulkan() {
@@ -3454,9 +3439,9 @@ func explainMissingVulkan() {
 
 // logComputeDevices names every device the engine registered, so "which chip is
 // actually doing the work" is a line in the log instead of a day of guessing.
-// A whole afternoon went to a backend that reported itself as Vulkan and ran at
-// a third of the processor's speed, because the device behind it was llvmpipe
-// and nothing anywhere printed a device name.
+// A backend can report itself as Vulkan and run at a third of the processor's
+// speed because the device behind it is llvmpipe; without a printed device
+// name that is invisible.
 func logComputeDevices() {
 	n := txDeviceCount()
 	for i := int32(0); i < n; i++ {
@@ -3674,7 +3659,7 @@ func txBackend(variant string) int32 {
 	return txBackendCPU
 }
 
-// A recognition that never returns used to take the captions with it: the
+// A recognition that never returns would take the captions with it: the
 // recognizer goroutine is the only thing calling the model, so one call that
 // does not come back means no captions for the rest of the tune, with the
 // picture running on perfectly and nothing on screen changing. The engine
@@ -3757,9 +3742,8 @@ var gpuGate = make(chan struct{}, 2)
 // The abort watchdog is off unless asked for. Installing the callback has the
 // engine poll it between decode steps, and every poll re-enters Go from the
 // engine's compute thread — a tax paid per token, on every backend, for the
-// whole life of the process. The morning this recognizer was measured fast,
-// no callback was installed; the afternoon it measured a third of that, one
-// was. A wedged decode without the watchdog costs one worker until restart —
+// whole life of the process — a measurable fraction of the recognizer's
+// speed. A wedged decode without the watchdog costs one worker until restart —
 // the reply deadline keeps every stream alive and pressure brings up a second
 // copy — which is a fair price for full speed the rest of the time.
 // CC_WATCHDOG=1 turns the polling back on.
@@ -4012,9 +3996,9 @@ func (svc *txBatchService) run(w *txWorker) {
 		case first = <-svc.requests:
 		}
 		// Inference stops dead while any tune has yet to deliver video. A
-		// softer version — small dispatches with breathers — was tried and
-		// starved a real device's 40-second playback confirmation into a
-		// timed-out tune. Captions pause for the pending window and the
+		// softer version — small dispatches with breathers — starves a slow
+		// device's 40-second playback confirmation into a timed-out tune.
+		// Captions pause for the pending window and the
 		// freshness ceiling snaps them back to live afterward; a recording
 		// is never the thing that pays.
 		audioCap := maxBatchAudioSec
@@ -4317,9 +4301,8 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 	// step fights a tune, ever: a tune is a recording and captions are
 	// decoration, so when the machine will not go quiet this attempt fails
 	// fast instead — the stream runs on uncaptioned and the caller's retry
-	// loop tries again at the next lull. The alternative, forcing the load
-	// through on a timer, was tried; it put the load inside exactly the
-	// window it existed to avoid.
+	// loop tries again at the next lull. Forcing the load through on a timer
+	// would put it inside exactly the window this exists to avoid.
 	if !prewarmModelFile(path) {
 		return nil, "", fmt.Errorf("gave up warming %s while tunes kept starting; will retry at a quiet moment", filepath.Base(path))
 	}
@@ -4482,107 +4465,13 @@ func txGoString(p *byte) string {
 	return string(unsafe.Slice(p, n))
 }
 
-// Streaming models are trained on a menu of context windows and the caller
-// picks one when the stream opens. Left unasked, they use the first entry,
-// which is the most accurate and the slowest — and for the Unified that is
-// 5600 ms of left context, a 1040 ms chunk and 1040 ms of lookahead, so every
-// chunk re-runs the encoder over nearly eight seconds of audio and commits a
-// second behind. That is a fine default for transcribing a file and the wrong
-// one for live television, where it shows up as captions trailing the picture
-// and as work that multiplies by the number of tuners.
-//
-// Two families take two different knobs, and a model accepts exactly one of
-// them, so which to use is asked rather than assumed.
-const (
-	txExtKindParakeetStream   = 0x54534B50 // 'PKST', cache-aware
-	txExtKindParakeetBuffered = 0x53424B50 // 'PKBS', chunked attention
-	// The header numbers the slots RUN=0, STREAM=1 and says outright not to
-	// renumber them. This sat at 0 for a while, which asked every model
-	// about run-slot extensions and silently never applied a streaming
-	// latency window to any model that takes one.
-	txExtSlotStream           = 1
-)
-
-type (
-	txExt struct {
-		size uint64
-		kind uint32
-		_    uint32
-	}
-	txParakeetStreamExt struct {
-		ext             txExt
-		attContextRight int32
-		_               int32
-	}
-	txParakeetBufferedExt struct {
-		ext     txExt
-		leftMS  int32
-		chunkMS int32
-		rightMS int32
-		_       int32
-	}
-)
-
-// captionLatency is the setting on the page, and the windows each one asks for.
-// Everything is in milliseconds and must be a multiple of the 80 ms encoder
-// frame; a tuple outside the model's training menu is refused by the engine
-// rather than silently rounded, which is why an unusable choice falls back to
-// the model's own default instead of failing the stream.
-type captionLatency struct {
-	Key  string `json:"key"`
-	Name string `json:"name"`
-	Desc string `json:"desc"`
-	// chunk and right are the buffered family's window; right alone is the
-	// cache-aware family's lookahead. -1 means the model's default.
-	chunkMS, rightMS int32
-	cacheRight       int32
-	// phraseSec is the same trade for a model that reads a phrase at a time,
-	// and it is a latency ceiling more than a throughput knob.
-	//
-	// A phrase's first word waits the whole phrase before it can appear: cut at
-	// eight seconds, the opening words of a sentence reach the screen nine
-	// seconds after they were said, which reads as the captions ignoring the
-	// program. The number here is therefore roughly the worst-case caption
-	// lag, and it is kept near what live broadcast captioning runs.
-	//
-	// The throughput argument for long phrases died when batching arrived. Each
-	// call once paid its own start-up cost, so short phrases meant paying it
-	// many times a minute; now every tuner's phrases go through one shared
-	// dispatch, the cost is paid per batch, and when load rises the queue
-	// deepens and the batches grow on their own — efficiency now scales with
-	// demand instead of with phrase length. What longer phrases still buy is a
-	// little acoustic context and fewer phrase boundaries, which is where the
-	// mistakes cluster; that is why the accurate setting keeps a longer window,
-	// not speed.
-	phraseSec float64
-}
-
-var captionLatencies = []captionLatency{
-	{
-		Key: "fast", Name: "Lowest delay",
-		Desc:    "Phrases are cut within three seconds — about a second closer to the picture than Balanced, with slightly less context per phrase.",
-		chunkMS: 80, rightMS: 80, cacheRight: 3, phraseSec: 3,
-	},
-	{
-		Key: "balanced", Name: "Balanced (recommended)",
-		Desc:    "Phrases are cut within four seconds, which puts captions two to four seconds behind the picture — about what live broadcast captioning runs. The right answer for most setups.",
-		chunkMS: 480, rightMS: 480, cacheRight: 6, phraseSec: 4,
-	},
-	{
-		Key: "accurate", Name: "Most accurate",
-		Desc:    "Phrases run up to six seconds — the most context per phrase and the most accurate, arriving latest.",
-		chunkMS: -1, rightMS: -1, cacheRight: -1, phraseSec: 6,
-	},
-}
-
-func findCaptionLatency(key string) captionLatency {
-	for _, l := range captionLatencies {
-		if l.Key == key {
-			return l
-		}
-	}
-	return captionLatencies[1]
-}
+// captionPhraseWindow is how long a phrase may run before it is cut, on the
+// phrase-at-a-time path. Four seconds is the operating point the model
+// prefers — two to four seconds behind the picture, which is what live
+// broadcast captioning runs. Shorter starves the model of context and
+// multiplies per-phrase overhead; there is deliberately no knob. Streaming
+// models run their families' own trained defaults the same way.
+const captionPhraseWindow = 4.0
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
@@ -4610,8 +4499,6 @@ type transcribeModel struct {
 	// onGPU records that this copy decodes on the accelerator, which is shared
 	// between every stream and therefore rationed.
 	onGPU bool
-	// latency is the context window asked for when a stream opens.
-	latency string
 	// heldGPU is set between arm and disarm while this stream holds a place on
 	// the accelerator. Only the goroutine inside a call touches it.
 	heldGPU bool
@@ -4660,7 +4547,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 	}
 
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu", latency: cfg.Latency}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu"}
 	if withWatchdog {
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
@@ -4754,8 +4641,8 @@ func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
 	}
 	// The same yield the shared service gives: no decode while any tune has
 	// yet to deliver video. This path is the fallback when a streaming
-	// session will not open, and it was the one decode left that could run
-	// straight through a channel change.
+	// session will not open; without this it would decode straight through a
+	// channel change.
 	for tunesPending() {
 		time.Sleep(2 * time.Second)
 	}
@@ -4800,42 +4687,13 @@ func (t *transcribeModel) beginStreamLocked() error {
 	}
 	sp := txStreamParams{}
 	txStreamParamsInit(unsafe.Pointer(&sp))
-	// Ask for a window if this model takes one. Keeping the struct alive for
-	// the duration of the call is the caller's job: the engine reads through
-	// the pointer during stream_begin and does not retain it.
-	var pkExt txParakeetStreamExt
-	var bufExt txParakeetBufferedExt
-	lat := findCaptionLatency(t.latency)
-	switch {
-	case t.model != 0 && txAcceptsExtKind(t.model, txExtSlotStream, txExtKindParakeetBuffered):
-		txPkBufStreamExtInit(unsafe.Pointer(&bufExt))
-		bufExt.chunkMS, bufExt.rightMS = lat.chunkMS, lat.rightMS
-		sp.family = uintptr(unsafe.Pointer(&bufExt))
-	case t.model != 0 && txAcceptsExtKind(t.model, txExtSlotStream, txExtKindParakeetStream):
-		txPkStreamExtInit(unsafe.Pointer(&pkExt))
-		pkExt.attContextRight = lat.cacheRight
-		sp.family = uintptr(unsafe.Pointer(&pkExt))
-	}
-	// The run params carry the language into the stream as well, so a
-	// prompt-conditioned model is told which locale to expect rather than
-	// having to work it out from the first few seconds of audio.
+	// A null family extension selects the family's own trained defaults,
+	// which is the operating point each streaming model prefers.
 	rp := t.runParams()
 	t.armSetup()
 	st := txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
 	t.disarmSetup()
 	runtime.KeepAlive(t.lang)
-	runtime.KeepAlive(&pkExt)
-	runtime.KeepAlive(&bufExt)
-	if st != txOK && sp.family != 0 {
-		// The window has to be one the model was trained on, and the engine
-		// refuses anything else rather than rounding it. Fall back to the
-		// model's own rather than leaving the stream unopened.
-		logger("[CC] %s window not available on this model (%s); using its default", t.latency, txStatusString(st))
-		sp.family = 0
-		t.armSetup()
-		st = txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
-		t.disarmSetup()
-	}
 	if st != txOK {
 		return fmt.Errorf("%s", txStatusString(st))
 	}
@@ -4859,10 +4717,9 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 		// stream that cannot be reopened once may well open on the next try,
 		// and the alternative is captions that never come back.
 		//
-		// This used to sit behind a guard that returned on exactly this
-		// condition, so it never ran once in its life, and the watchdog then
-		// turned a single slow feed into permanent silence — the failure it
-		// exists to prevent.
+		// Unguarded on purpose: a reopen that only ran when nothing needed
+		// reopening would turn a single slow feed into permanent silence —
+		// the failure this exists to prevent.
 		if err := t.beginStreamLocked(); err != nil {
 			return nil
 		}
@@ -5754,7 +5611,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	peak := 0.0
 	decoderTries := 0
 	var frames, cutThisMinute int
-	maxPhrase := findCaptionLatency(e.cfg.Latency).phraseSec
+	maxPhrase := captionPhraseWindow
 	if maxPhrase <= 0 {
 		maxPhrase = vadMaxPhrase
 	}
@@ -6019,9 +5876,9 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	}
 	// What matters is what the viewer feels: how old this caption is as it
 	// reaches the screen, measured from the moment the phrase was cut. The
-	// old comparison — wall time against speech length — stopped meaning
-	// anything when phrases started waiting in a send window on purpose, and
-	// it read healthy streams as struggling ones. Two in flight means a
+	// alternative — wall time against speech length — reads healthy streams
+	// as struggling ones, because phrases wait in a send window on purpose.
+	// Two in flight means a
 	// couple of seconds of age is the design working; real trouble is age
 	// climbing past the freshness ceiling, or phrases being dropped, and
 	// those are what get said.
@@ -6495,9 +6352,9 @@ func (cs *captionStream) Read(p []byte) (int, error) { return cs.pr.Read(p) }
 func (cs *captionStream) Close() error {
 	// The encoder connection is released first and immediately: on a channel
 	// change the next tune needs this tuner's encoder, and holding it while
-	// the recognizer winds down was measured at up to ten seconds of the new
-	// tune's window — the engine teardown even waits on work that the new
-	// tune's own quiet gate is holding, a circle only this ordering breaks.
+	// the recognizer winds down costs up to ten seconds of the new tune's
+	// window — the engine teardown even waits on work that the new tune's
+	// own quiet gate is holding, a circle only this ordering breaks.
 	// The engine cleans itself up in the background; nothing about it can
 	// touch the stream that no longer exists.
 	err := cs.src.Close()
@@ -6532,7 +6389,6 @@ type captionStatus struct {
 	// separate programs they are rather than swapping one card's contents and
 	// leaving the reader to notice the name changed.
 	RuntimeList    []speechRuntime  `json:"runtimeList"`
-	Latencies      []captionLatency `json:"latencies"`
 	RuntimeVersion string           `json:"runtimeVersion"`
 	RuntimeURL     string           `json:"runtimeURL"`
 	// Engines carries the builds of both engines, keyed by engine, so the page
@@ -6826,7 +6682,7 @@ func atLeastOne(n int) int {
 // captionComputeThreads is the shared recognizer's allowance: the machine's
 // performance cores, one thread per physical core.
 //
-// More was tried and measured worse. ggml synchronizes its workers with spin
+// More measures worse. ggml synchronizes its workers with spin
 // barriers, so every thread waits for the slowest at every step: mix in
 // hyperthread siblings and the barriers pay for shared execution units; mix
 // in a hybrid chip's efficiency cores and every op finishes at E-core speed.
@@ -7034,7 +6890,6 @@ func captionStatusPayload() captionStatus {
 		RuntimeName:    needed.Name,
 		Runtimes:       runtimeDescriptions(),
 		RuntimeList:    speechRuntimes,
-		Latencies:      captionLatencies,
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Persistent:     persistent,
