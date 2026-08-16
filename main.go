@@ -1785,13 +1785,7 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
-	// Channels DVR abandons a tune at thirty seconds, so playback
-	// confirmation must give up well before that: a box whose app never
-	// reports its playback state burns whatever window this allows, and the
-	// motion fallback still needs a couple of seconds after it to find a
-	// moving keyframe. Twenty seconds puts fallback video on the wire around
-	// twenty-two, a real margin under the DVR's limit instead of a race.
-	playbackTimeout = 20 * time.Second
+	playbackTimeout = 40 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
 	riseFactor      = 4
