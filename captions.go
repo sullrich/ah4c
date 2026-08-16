@@ -1180,12 +1180,38 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		log.Write(b)
 		return e
 	}
+	// A fresh fetch replaces the saved set wholesale. Leaving the old
+	// packages beside the new ones would have the installer lay a 2022 driver
+	// over a 2026 one, or the reverse, depending on filename order — mixed
+	// versions are strictly worse than either.
+	if old, _ := savedDebs(g); len(old) > 0 {
+		for _, p := range old {
+			os.Remove(p)
+		}
+		logger("[CC] Cleared %d previously saved packages before fetching fresh ones", len(old))
+	}
+	// The stable suite of the base image freezes its graphics drivers for
+	// years — the driver it offers today shipped before this GPU's compute
+	// paths were optimised, and a modern engine on a museum driver runs at a
+	// fraction of the hardware's speed while looking perfectly healthy. The
+	// distribution's backports suite carries the current driver for exactly
+	// this reason, so it is preferred and stable is the fallback.
+	suite := ensureBackports(&log)
 	if err := run("apt-get", "update"); err != nil {
 		return log.String(), fmt.Errorf("apt-get update: %w", err)
 	}
-	args := append([]string{"apt-get", "install", "-y", "--no-install-recommends",
-		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}, g.Packages...)
+	base := []string{"apt-get", "install", "-y", "--no-install-recommends",
+		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}
+	args := base
+	if suite != "" {
+		args = append(append([]string{}, base...), "-t", suite)
+	}
+	args = append(args, g.Packages...)
 	aptErr := run(args...)
+	if aptErr != nil && suite != "" {
+		logger("[CC] The backports fetch failed; falling back to the stable packages")
+		aptErr = run(append(append([]string{}, base...), g.Packages...)...)
+	}
 
 	// Whether or not apt honoured the archive directory, the packages have to
 	// end up in the bind mount, because that is the only thing a rebuild does
@@ -1202,8 +1228,47 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return log.String(), fmt.Errorf("no packages ended up in %s", dir)
 	}
 	n, _ := savedDebs(g)
-	logger("[CC] Saved %d packages for %s in %s", len(n), g.Name, dir)
+	names := make([]string, len(n))
+	for i, p := range n {
+		names[i] = filepath.Base(p)
+	}
+	// The filenames carry the versions, and the versions are the whole story:
+	// a driver from the wrong era looks identical in every way but speed.
+	logger("[CC] Saved %d packages for %s in %s: %s", len(n), g.Name, dir, strings.Join(names, " "))
 	return log.String(), nil
+}
+
+// ensureBackports makes the base image's backports suite available and
+// returns its name, or "" when it cannot be arranged. Backports is where the
+// distribution keeps current graphics drivers for a stable release.
+func ensureBackports(log *strings.Builder) string {
+	b, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	codename := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "VERSION_CODENAME="); ok {
+			codename = strings.Trim(strings.TrimSpace(v), `"`)
+		}
+	}
+	if codename == "" {
+		return ""
+	}
+	suite := codename + "-backports"
+	// Already configured, by the image or an earlier run?
+	for _, f := range []string{"/etc/apt/sources.list", "/etc/apt/sources.list.d/backports.list", "/etc/apt/sources.list.d/debian.sources"} {
+		if c, err := os.ReadFile(f); err == nil && strings.Contains(string(c), suite) {
+			return suite
+		}
+	}
+	line := fmt.Sprintf("deb http://deb.debian.org/debian %s main\n", suite)
+	if err := os.WriteFile("/etc/apt/sources.list.d/backports.list", []byte(line), 0o644); err != nil {
+		fmt.Fprintf(log, "could not add %s: %v\n", suite, err)
+		return ""
+	}
+	logger("[CC] Added the %s package source for a current graphics driver", suite)
+	return suite
 }
 
 // harvestDebs copies anything apt left in the default cache into the bind
@@ -3337,10 +3402,16 @@ var (
 // is the right tool for a device that really does run things in parallel.
 var gpuGate = make(chan struct{}, 2)
 
-// Diagnostic toggle, read once. CC_NO_WATCHDOG=1 skips installing the abort
-// callback, which isolates its per-decode polling cost on a machine where the
-// recognizer measures slower than it should.
-var noWatchdog = os.Getenv("CC_NO_WATCHDOG") == "1"
+// The abort watchdog is off unless asked for. Installing the callback has the
+// engine poll it between decode steps, and every poll re-enters Go from the
+// engine's compute thread — a tax paid per token, on every backend, for the
+// whole life of the process. The morning this recognizer was measured fast,
+// no callback was installed; the afternoon it measured a third of that, one
+// was. A wedged decode without the watchdog costs one worker until restart —
+// the reply deadline keeps every stream alive and pressure brings up a second
+// copy — which is a fair price for full speed the rest of the time.
+// CC_WATCHDOG=1 turns the polling back on.
+var withWatchdog = os.Getenv("CC_WATCHDOG") == "1"
 
 // maxBatchAudioSec bounds how much audio one dispatch may carry. Compute time
 // follows audio length, and the run deadline is fixed: a batch allowed to grow
@@ -3475,16 +3546,10 @@ func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, 
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 	w := &txWorker{shared: shared, session: session, abort: &txAbortHandle{}}
-	// Diagnostic isolation: CC_NO_WATCHDOG=1 leaves the abort callback
-	// uninstalled, so a run cannot be interrupted but also pays no C-to-Go
-	// crossing during decode. If speed returns with this set, the watchdog
-	// polling is the tax.
-	if !noWatchdog {
-		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
-	}
 	flags := ""
-	if noWatchdog {
-		flags += ", watchdog off"
+	if withWatchdog {
+		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
+		flags = ", watchdog on"
 	}
 	logger("[CC] recognizer worker up: %s, %s backend, %d threads, decoder window at the model's own default%s",
 		filepath.Base(svc.path), txBackendName(svc.backend), threads, flags)
@@ -3873,6 +3938,21 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 
 	// Loaded outside the lock: this takes tens of seconds for a large model and
 	// holding the lock across it would stall an unrelated stream trying to stop.
+	//
+	// The file is warmed into the page cache first, in a loop that yields to
+	// tunes; then the short native load runs only on a quiet machine. Neither
+	// step fights a tune, ever: a tune is a recording and captions are
+	// decoration, so when the machine will not go quiet this attempt fails
+	// fast instead — the stream runs on uncaptioned and the caller's retry
+	// loop tries again at the next lull. The alternative, forcing the load
+	// through on a timer, was tried; it put the load inside exactly the
+	// window it existed to avoid.
+	if !prewarmModelFile(path) {
+		return nil, "", fmt.Errorf("gave up warming %s while tunes kept starting; will retry at a quiet moment", filepath.Base(path))
+	}
+	if !waitTuneQuiet(30 * time.Second) {
+		return nil, "", fmt.Errorf("a tune has been starting the whole wait; will retry at a quiet moment")
+	}
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
 	load.backend = backend
@@ -4162,7 +4242,9 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
 		abort: &txAbortHandle{}, onGPU: variant != "cpu", latency: cfg.Latency}
-	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
+	if withWatchdog {
+		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
+	}
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
 	if l := cfg.Language; l != "" && l != "auto" {
@@ -4546,6 +4628,9 @@ type captionEngine struct {
 	model2    captionModel
 	startOnce sync.Once
 	begun     int64
+	// firstFeed is when the first stream bytes arrived, as unix nanoseconds.
+	// The expensive start waits out captionSettle from that moment; see feed.
+	firstFeed int64
 	// doneOnce makes closing done idempotent. Three different paths finish an
 	// engine — a failed start, the recognizer returning, and a stream that
 	// closed before it ever began — and two of them could race: closing a
@@ -4611,11 +4696,11 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		done:    make(chan struct{}),
 	}
 	// Deliberately not started here. Loading weights moves gigabytes through
-	// memory, and doing that while the tuner is still negotiating slows the
+	// memory, and doing that while the tune is still proving itself slows the
 	// thing that actually matters — even on its own goroutine, the bandwidth is
-	// shared. The load waits until the stream is delivering video, which is the
-	// moment the tune is known to have worked and the point at which nothing is
-	// waiting on the machine any more.
+	// shared. The load waits until the stream has been flowing for a while
+	// (captionSettle in feed), which is when the tune has actually won rather
+	// than merely begun.
 	e.cfg2, e.model2 = cfg, m
 	return e, nil
 }
@@ -5481,11 +5566,120 @@ func (e *captionEngine) rememberTail(words []string) {
 	e.tail = append([]string(nil), words...)
 }
 
+// captionSettle is how long this stream must have been flowing before its
+// caption engine starts up. The first byte proves the tune worked; a few
+// seconds of flow proves it has settled. The genuinely heavy work is gated
+// separately and machine-wide — see tuneFresh — so this only needs to cover
+// the stream finding its feet.
+const captionSettle = 5 * time.Second
+
+// tuneFresh is how recently a tune may have started, anywhere on the
+// machine, for the un-pausable part of a model load to run. The load's disk
+// work is done beforehand by a warm-up loop that yields to tunes on its own;
+// what remains is a couple of seconds of native call, and holding that back
+// while any tune is this young keeps it off the window where the DVR is
+// judging the stream. Waiting 45 seconds here was tried and read as broken
+// captions: every channel change reset the clock and the model looked like
+// it never loaded.
+const tuneFresh = 12 * time.Second
+
+// lastTuneStart is when a tune last began anywhere on the machine, as unix
+// nanoseconds. Written on every tune, captioned or not; read by loads waiting
+// for the machine to go quiet.
+var lastTuneStart int64
+
+// captionTuneStarting marks that a tune is beginning somewhere on the
+// machine, which postpones any heavy caption work until it has settled.
+func captionTuneStarting() {
+	atomic.StoreInt64(&lastTuneStart, time.Now().UnixNano())
+}
+
+// prewarmModelFile reads the weights into the page cache, pausing whenever a
+// tune is young so the disk always belongs to the tune. It reports whether it
+// finished: under a steady run of channel changes it gives up rather than
+// carrying disk work into the indefinite future, and the caller retries at a
+// quieter time. An unreadable file is reported as done — the engine's own
+// load will say what is wrong with it.
+func prewarmModelFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	buf := make([]byte, 8<<20)
+	began := time.Now()
+	deadline := began.Add(3 * time.Minute)
+	paused := false
+	for {
+		if time.Now().After(deadline) {
+			logger("[CC] Gave up warming %s after %s of mostly yielding to tunes", filepath.Base(path), time.Since(began).Round(time.Second))
+			return false
+		}
+		if quiet, wait := tuneQuiet(); !quiet {
+			if !paused {
+				paused = true
+				logger("[CC] Pausing the model warm-up for a tune in progress")
+			}
+			time.Sleep(wait)
+			continue
+		}
+		paused = false
+		n, err := f.Read(buf)
+		if err != nil || n == 0 {
+			break
+		}
+	}
+	logger("[CC] Warmed %s into memory in %s", filepath.Base(path), time.Since(began).Round(time.Millisecond))
+	return true
+}
+
+// waitTuneQuiet waits for the newest tune on the machine to age past
+// tuneFresh, up to the bound. False means the machine never went quiet.
+func waitTuneQuiet(bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		quiet, wait := tuneQuiet()
+		if quiet {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(wait)
+	}
+}
+
+// tuneQuiet reports whether the newest tune on the machine is old enough for
+// heavy work, and if not, how long until it would be.
+func tuneQuiet() (bool, time.Duration) {
+	last := atomic.LoadInt64(&lastTuneStart)
+	if last == 0 {
+		return true, 0
+	}
+	age := time.Since(time.Unix(0, last))
+	if age >= tuneFresh {
+		return true, 0
+	}
+	return false, tuneFresh - age
+}
+
 // feed offers stream bytes to the recognizer without blocking.
 func (e *captionEngine) feed(b []byte) {
-	// The first bytes of video are the signal that the tune succeeded and the
-	// machine is free to do something expensive.
-	e.begin()
+	// The tune has to finish before anything expensive starts: bytes have to
+	// have been flowing for captionSettle, not merely have begun. Arrival of
+	// this call is itself the proof the stream is still alive at the deadline.
+	if atomic.LoadInt64(&e.begun) == 0 {
+		first := atomic.LoadInt64(&e.firstFeed)
+		now := time.Now().UnixNano()
+		switch {
+		case first == 0:
+			atomic.CompareAndSwapInt64(&e.firstFeed, 0, now)
+			return
+		case now-first < int64(captionSettle):
+			return
+		}
+		e.begin()
+	}
 
 	// Nothing is kept while the model loads. The decoder does not exist yet, so
 	// anything queued here would sit for several seconds and then be handed to
@@ -5993,20 +6187,64 @@ func atLeastOne(n int) int {
 	return n
 }
 
-// captionComputeThreads is the shared recognizer's allowance: most of the
-// machine, with a quarter (at least two threads) held back for the ffmpeg
-// decoders and the proxy — the things captions exist to decorate, not to cost.
+// captionComputeThreads is the shared recognizer's allowance: the machine's
+// performance cores, one thread per physical core.
+//
+// More was tried and measured worse. ggml synchronises its workers with spin
+// barriers, so every thread waits for the slowest at every step: mix in
+// hyperthread siblings and the barriers pay for shared execution units; mix
+// in a hybrid chip's efficiency cores and every op finishes at E-core speed.
+// The fast configuration was a handful of threads landing on performance
+// cores — which is also what leaves the efficiency cores free for the ffmpeg
+// decoders and the proxy, the things captions decorate rather than compete
+// with.
 func captionComputeThreads() int {
-	cpus := availableCPUs()
-	reserve := cpus / 4
-	if reserve < 2 {
-		reserve = 2
+	n := performanceCores()
+	if reserve := availableCPUs() / 4; n > availableCPUs()-reserve {
+		n = availableCPUs() - reserve
 	}
-	n := cpus - reserve
 	if n < 2 {
 		n = 2
 	}
 	return n
+}
+
+// performanceCores counts physical performance cores. On an Intel hybrid chip
+// the kernel lists the P-cores' logical CPUs under cpu_core; elsewhere every
+// core is a performance core and the count is physical rather than logical.
+// Both fall back conservatively: half the logical CPUs.
+func performanceCores() int {
+	if b, err := os.ReadFile("/sys/devices/cpu_core/cpus"); err == nil {
+		if n := countCPUList(strings.TrimSpace(string(b))); n > 0 {
+			// The list is logical CPUs; P-cores have two apiece.
+			return (n + 1) / 2
+		}
+	}
+	return (availableCPUs() + 1) / 2
+}
+
+// countCPUList counts entries in a kernel cpu list like "0-15" or "0-7,16-19".
+func countCPUList(s string) int {
+	total := 0
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if lo, hi, ok := strings.Cut(part, "-"); ok {
+			a, err1 := strconv.Atoi(lo)
+			b, err2 := strconv.Atoi(hi)
+			if err1 != nil || err2 != nil || b < a {
+				return 0
+			}
+			total += b - a + 1
+		} else if _, err := strconv.Atoi(part); err == nil {
+			total++
+		} else {
+			return 0
+		}
+	}
+	return total
 }
 
 // captionedStreams is how many tuners could be captioning at the same time.

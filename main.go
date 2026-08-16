@@ -676,6 +676,10 @@ func run() error {
 	r.GET("/play/tuner:tuner/:channel", func(c *gin.Context) {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
+		// The tune's clock starts here, not at the first stream byte: the
+		// device launch and playback confirmation ahead of the stream are the
+		// most fragile part, and heavy caption work yields to all of it.
+		captionTuneStarting()
 		reader, err := tune(tuner, channel)
 		if err != nil {
 			logger("[ERR] Failed to tune %s", err)
