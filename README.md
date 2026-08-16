@@ -162,15 +162,14 @@ the numbers out for your own setup.
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.
 
-**The delay setting** governs how closely captions follow the picture. For a
-phrase-at-a-time model it decides how long a phrase may run — shorter follows closer,
-longer is a little more accurate; the default lands two to four seconds behind, which is
-what live broadcast captioning runs. For a streaming model it picks how far ahead the
-model listens before committing a word. The recognizer reports its own throughput in the
-log, so whether your hardware is keeping up is a measurement, not a guess. The display
-itself is paced too: a finished caption line stays on screen a beat before the next one
-rolls it up, the way broadcast roll-up reads, instead of scrolling as fast as recognition
-can produce text.
+**Timing** is not a setting: each model runs at the operating point it prefers. Cohere
+Transcribe reads phrases of up to four seconds and lands captions two to four seconds
+behind the picture — what live broadcast captioning runs; Moonshine streams at its own
+trained cadence and lands under a second behind. The recognizer reports its throughput in
+the log, so whether your hardware is keeping up is a measurement, not a guess. The display
+is paced too: a finished caption line stays on screen a beat before the next one rolls it
+up, the way broadcast roll-up reads. If you want captions later — to match a delayed
+feed — the Extra delay setting pushes them back; nothing makes them earlier.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That
