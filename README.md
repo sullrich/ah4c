@@ -130,7 +130,7 @@ Both are ordinary env settings rather than edits to the compose file, and both d
 off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
 `NVIDIA_VISIBLE_DEVICES` exposes no GPU. Nobody without a card has to change anything.
 
-A GPU build is greyed out until the library it needs is loadable, which is settled by asking
+A GPU build is grayed out until the library it needs is loadable, which is settled by asking
 the dynamic loader rather than by guessing. If a GPU build is selected but cannot run, the
 engine falls back to the processor rather than failing, so captions keep working. Apple
 silicon gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA

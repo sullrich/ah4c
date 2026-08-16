@@ -455,7 +455,7 @@ var captionModelCatalog = []captionModel{
 		Role: "Best for one to three streams on CPU, or any number on a GPU",
 		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a phrase at a time and what it writes reads like the closed captions on a broadcast channel. One copy is shared by every tuner, and the delay setting below decides how closely it follows the picture.",
 		// It reads a whole phrase and then writes it, so the delay setting
-		// governs how far behind it runs; the batch service amortises its
+		// governs how far behind it runs; the batch service amortizes its
 		// per-call cost across every tuner.
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
@@ -1183,7 +1183,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	}
 	// The stable suite of the base image freezes its graphics drivers for
 	// years — the driver it offers today shipped before this GPU's compute
-	// paths were optimised, and a modern engine on a museum driver runs at a
+	// paths were optimized, and a modern engine on a museum driver runs at a
 	// fraction of the hardware's speed while looking perfectly healthy. The
 	// distribution's backports suite carries the current driver for exactly
 	// this reason, so it is preferred and stable is the fallback.
@@ -1241,7 +1241,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	}
 	os.RemoveAll(staging)
 
-	// Whether or not apt honoured the archive directory, the packages have to
+	// Whether or not apt honored the archive directory, the packages have to
 	// end up in the bind mount, because that is the only thing a rebuild does
 	// not erase. If they went to the default cache instead, move them.
 	if !driverDownloaded(g) {
@@ -1586,7 +1586,7 @@ func gpuAvailable() bool {
 }
 
 // driverRestoreDone closes when the startup driver restore has finished (or
-// found nothing to do). The engine's first initialisation waits on it, so a
+// found nothing to do). The engine's first initialization waits on it, so a
 // fresh container does not open the Vulkan library half-installed and settle
 // on the processor for the life of the process.
 var driverRestoreDone = make(chan struct{})
@@ -1657,7 +1657,7 @@ func restoreGPURuntimeQuietly() {
 	}
 }
 
-// txInited reports whether the engine's one-time initialisation has run.
+// txInited reports whether the engine's one-time initialization has run.
 func txInited() bool {
 	select {
 	case <-txInitedCh:
@@ -1744,7 +1744,7 @@ func odd608(b byte) byte {
 // of Europe's letters have no code point here, and dropping one leaves a hole
 // in the middle of a word — "café" arrived as "caf ", which reads as a typo
 // rather than as a missing glyph — so those are folded to the nearest letter a
-// viewer would recognise.
+// viewer would recognize.
 //
 // The ASCII characters occupying the accented positions have to be blanked
 // rather than passed through, or an asterisk would be shown as an á.
@@ -1776,7 +1776,7 @@ var cc608Native = map[rune]byte{
 
 // cc608Fold folds the letters the European languages need onto the basic set.
 // It is not a transliteration scheme, just the nearest letter a viewer would
-// recognise, which is what a caption needs.
+// recognize, which is what a caption needs.
 var cc608Fold = map[rune]byte{
 	'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'ā': 'a', 'ă': 'a', 'ą': 'a',
 	'Á': 'A', 'À': 'A', 'Â': 'A', 'Ä': 'A', 'Ã': 'A', 'Å': 'A', 'Ā': 'A', 'Ă': 'A', 'Ą': 'A',
@@ -2279,7 +2279,7 @@ type captionInjector struct {
 	ccSeeded bool // whether videoCC has picked up the source's count
 
 	carry []byte // bytes of a packet split across two Write calls
-	// pmtPatch is the programme table rewritten to announce the caption
+	// pmtPatch is the program table rewritten to announce the caption
 	// service; pmtDone records that the attempt has been made.
 	pmtPatch []byte
 	pmtDone  bool
@@ -2385,13 +2385,13 @@ func (ci *captionInjector) packet(p []byte) error {
 		ci.parsePMT(p)
 	}
 
-	// Announce the caption service in the programme table, so a player that
+	// Announce the caption service in the program table, so a player that
 	// does not decode the video to look for caption messages still knows they
 	// are there.
 	if pid == ci.pmtPID && ci.videoPID >= 0 && !ci.pmtDone {
 		if q := addCaptionDescriptor(p, ci.videoPID); q != nil {
 			ci.pmtPatch = q
-			logger("[CC] %s announced the caption service in the programme table", ci.log)
+			logger("[CC] %s announced the caption service in the program table", ci.log)
 		}
 		ci.pmtDone = true
 	}
@@ -2872,7 +2872,7 @@ func (ci *captionInjector) packetize(pes []byte) [][tsPacketSize]byte {
 }
 
 // meaningfulAF returns a packet's adaptation field only when it carries
-// something the receiver needs: the programme clock, or a flag marking a
+// something the receiver needs: the program clock, or a flag marking a
 // discontinuity, a random access point or a splice. An adaptation field that is
 // nothing but stuffing is dropped, since the repacketizer adds its own where it
 // needs to pad.
@@ -2933,7 +2933,7 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 	n := 0
 	for i := range ci.window {
 		if ci.window[i].video {
-			// A video packet with no payload carries the programme clock, not
+			// A video packet with no payload carries the program clock, not
 			// the picture. Overwriting it with rebuilt payload, or skipping it
 			// once the rebuilt packets run out, deletes a PCR the receiver
 			// needs; on a constant rate mux that is most of them.
@@ -3310,7 +3310,7 @@ func initTranscribe(variant string) error {
 		// on a busy channel is a line a second, for ever.
 		txLogSet(txLogCallback(), nil)
 		// Point the graphics driver's compiled-shader cache at the bind
-		// mount. The first Vulkan initialisation compiles every compute
+		// mount. The first Vulkan initialization compiles every compute
 		// shader the engine uses — seconds of every core, and un-pausable.
 		// In the container's own filesystem that cache dies with every
 		// rebuild and the storm repeats on the first captioned tune of each
@@ -3453,7 +3453,7 @@ func softwareRenderer(desc string) bool {
 
 // persistShaderCache points the graphics driver's compiled-shader cache into
 // the caption directory, which is a bind mount, so shaders compiled on the
-// first Vulkan initialisation survive the container being rebuilt. A cache
+// first Vulkan initialization survive the container being rebuilt. A cache
 // location already set by hand is respected.
 func persistShaderCache() {
 	if os.Getenv("MESA_SHADER_CACHE_DIR") != "" {
@@ -4425,7 +4425,7 @@ type captionLatency struct {
 	// A phrase's first word waits the whole phrase before it can appear: cut at
 	// eight seconds, the opening words of a sentence reach the screen nine
 	// seconds after they were said, which reads as the captions ignoring the
-	// programme. The number here is therefore roughly the worst-case caption
+	// program. The number here is therefore roughly the worst-case caption
 	// lag, and it is kept near what live broadcast captioning runs.
 	//
 	// The throughput argument for long phrases died when batching arrived. Each
@@ -5133,7 +5133,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 // loadRecognizer opens a model on whichever engine can run it.
 func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
 	// Nothing below may fight a tune — and "below" includes more than the
-	// weights: the engine's first initialisation compiles the GPU backend's
+	// weights: the engine's first initialization compiles the GPU backend's
 	// shaders, an all-cores burst that is just as capable of starving a
 	// young tune as the load is, and it runs before any load. So the quiet
 	// gate stands in front of everything, and a machine that will not go
@@ -5435,7 +5435,7 @@ const (
 	// wall-to-wall speech.
 	//
 	// It fails towards hearing. A noisy channel gets its noise transcribed,
-	// which is untidy and was the behaviour before any of this; the alternative
+	// which is untidy and was the behavior before any of this; the alternative
 	// is captions that stop, which is the bug.
 	vadFloorMax = 0.01
 	vadBarMax   = 0.018
@@ -5576,7 +5576,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	}
 }
 
-// show puts recognized text on screen, honouring the configured offset.
+// show puts recognized text on screen, honoring the configured offset.
 func (e *captionEngine) show(text string, breakAfter bool) {
 	if d := e.cfg.OffsetSec; d > 0 {
 		time.AfterFunc(time.Duration(d)*time.Second, func() { e.enc.pushText(text, breakAfter) })
@@ -6520,7 +6520,7 @@ func captionThreads(cfg captionConfig) int {
 
 // availableCPUs is how much processor this container may actually use.
 //
-// runtime.NumCPU is not that number. It honours the affinity mask but knows
+// runtime.NumCPU is not that number. It honors the affinity mask but knows
 // nothing about a cgroup quota, so ah4c in Docker with --cpus=4 on a twenty
 // thread host is told twenty, and would hand out threads on that basis while
 // the kernel throttles it to four. The quota is where the real answer is, and
@@ -6579,7 +6579,7 @@ func atLeastOne(n int) int {
 // captionComputeThreads is the shared recognizer's allowance: the machine's
 // performance cores, one thread per physical core.
 //
-// More was tried and measured worse. ggml synchronises its workers with spin
+// More was tried and measured worse. ggml synchronizes its workers with spin
 // barriers, so every thread waits for the slowest at every step: mix in
 // hyperthread siblings and the barriers pay for shared execution units; mix
 // in a hybrid chip's efficiency cores and every op finishes at E-core speed.
