@@ -640,6 +640,9 @@ func saveCaptionConfig(cfg captionConfig) error {
 	captionCfgLock.Lock()
 	captionCfg = cfg
 	captionCfgLock.Unlock()
+	// What should be in memory follows from the config; let the keeper square
+	// the two. Non-blocking, so callers holding locks lose nothing.
+	kickResidentModel()
 	return nil
 }
 
@@ -724,6 +727,9 @@ func startModelDownload(m captionModel) error {
 			logger("[CC] Model download failed: %v", err)
 		} else {
 			logger("[CC] Model %s is ready", m.Key)
+			// If this is the selected model, load it now rather than on the
+			// first tune that wants it.
+			kickResidentModel()
 		}
 		dlLock.Unlock()
 	}()
@@ -846,6 +852,9 @@ func startRuntimeDownload(variant, modelKey string) error {
 			logger("[CC] %s download failed: %v", eng.Name, err)
 		} else {
 			logger("[CC] %s %s is ready", eng.Name, eng.Version)
+			// The engine may have been the missing piece between the selected
+			// model and a startup load.
+			kickResidentModel()
 		}
 		dlLock.Unlock()
 	}()
@@ -993,6 +1002,8 @@ func removeCaptionModel(m captionModel) error {
 		return err
 	}
 	logger("[CC] Removed model %s", m.Key)
+	// If this was the standing copy, its file is gone; let go of the memory too.
+	kickResidentModel()
 	return nil
 }
 
@@ -1132,6 +1143,7 @@ func startDriverDownload(kind string) error {
 			// Whether a GPU build can load is cached, and installing a
 			// driver is the one moment that answer changes.
 			forgetEngineUsable()
+			kickResidentModel()
 			// Record that this driver is wanted. Downloading it is the only
 			// point at which the intent is expressed: the engine picker will
 			// not offer a GPU build until the driver already loads, so waiting
@@ -1600,6 +1612,7 @@ var driverRestoreDone = make(chan struct{})
 // other heavy thing here.
 func restoreGPURuntime() {
 	go restoreGPURuntimeQuietly()
+	go residentModelKeeper()
 }
 
 func restoreGPURuntimeQuietly() {
@@ -1713,6 +1726,154 @@ func reinstallSavedDriver() {
 			cfg.GPURuntime = g.Key
 			saveCaptionConfig(cfg)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Resident model
+// ---------------------------------------------------------------------------
+
+// A fresh container's first tune used to be the thing that triggered
+// everything expensive at once: the engine's dlopen and backend scan, the
+// shader compile on a GPU, gigabytes of weights read off a cold disk and
+// pushed through memory — all of it beginning a second after the tune's video
+// started to flow, which is the most fragile moment the machine has. The
+// first tune after a container start failed; the second worked, because the
+// first had paid. So the bill is paid at startup instead — the quietest
+// moment the container ever sees — and the loaded copy stays in memory, so no
+// tune ever finds the model anywhere but ready.
+
+// residentKick asks the keeper to bring what is in memory back in line with
+// the configuration. Buffered by one: a kick during a reconcile queues
+// exactly one more, and each reconcile re-reads the config, so the last word
+// always wins.
+var residentKick = make(chan struct{}, 1)
+
+func kickResidentModel() {
+	select {
+	case residentKick <- struct{}{}:
+	default:
+	}
+}
+
+// Owned by residentModelKeeper's goroutine alone; nothing else may touch them.
+var (
+	// residentSvc is the standing claim on the shared recognizer service, or
+	// nil when nothing is held. Its one reference is what keeps the weights in
+	// memory between streams.
+	residentSvc *txBatchService
+	// residentKey names what is held (or warmed), so a kick that changes
+	// nothing does nothing.
+	residentKey string
+	// residentSaid is the last failure already logged, so a setup that is
+	// missing a piece reads as one line, not one a minute.
+	residentSaid string
+)
+
+// residentModelKeeper owns the standing copy of the selected model for the
+// life of the process, reconciling it whenever settings change, a download
+// finishes, or a model is removed. A reconcile that could not finish — an
+// engine still downloading, a machine that would not go quiet — is retried on
+// its own until it does.
+func residentModelKeeper() {
+	kickResidentModel()
+	for {
+		if residentSaid != "" {
+			// Something was missing last time; look again in a minute even if
+			// nobody kicks.
+			select {
+			case <-residentKick:
+			case <-time.After(time.Minute):
+			}
+		} else {
+			<-residentKick
+		}
+		reconcileResidentModel()
+	}
+}
+
+// reconcileResidentModel loads or releases the standing copy so memory
+// matches the configuration.
+func reconcileResidentModel() {
+	cfg := currentCaptionConfig()
+	var (
+		m     captionModel
+		found bool
+	)
+	if cfg.Enabled {
+		m, found = findCaptionModel(cfg.Model)
+	}
+	// The same questions maybeWrapCaptions asks before captioning a tune; a
+	// selection that a tune would decline is nothing to hold in memory.
+	if !found || !modelInstalled(m) || !engineInstalled() || (m.NeedsGPU && !gpuAvailable()) {
+		releaseResidentModel()
+		residentSaid = ""
+		return
+	}
+	variant, err := captionVariantFor(m)
+	if err != nil {
+		sayResidentOnce("[CC] The model could not be readied at startup: %v", err)
+		return
+	}
+	if err := initTranscribeDeadline(variant); err != nil {
+		sayResidentOnce("[CC] The model could not be readied at startup, the engine did not initialize: %v", err)
+		return
+	}
+	weights, err := filepath.Abs(modelPath(m))
+	if err != nil {
+		sayResidentOnce("[CC] The model could not be readied at startup: %v", err)
+		return
+	}
+	if m.Streaming {
+		// A streaming model opens a private copy per stream, so there is no
+		// shared service to hold. What survives to help the first tune is
+		// still worth doing now: the engine's one-time initialization above,
+		// and the weights warmed into the page cache here.
+		key := "warmed|" + weights
+		if residentKey == key {
+			residentSaid = ""
+			return
+		}
+		releaseResidentModel()
+		if !prewarmModelFile(weights) {
+			sayResidentOnce("[CC] Could not warm %s at startup; tunes kept starting", filepath.Base(weights))
+			return
+		}
+		residentKey, residentSaid = key, ""
+		return
+	}
+	key := weights + "|" + fmt.Sprint(txBackend(variant))
+	if residentSvc != nil && residentKey == key {
+		residentSaid = ""
+		return
+	}
+	releaseResidentModel()
+	svc, err := acquireTxBatchService(weights, txBackend(variant), cfg, nil)
+	if err != nil {
+		sayResidentOnce("[CC] The startup load of %s did not finish: %v", filepath.Base(weights), err)
+		return
+	}
+	residentSvc, residentKey, residentSaid = svc, key, ""
+	logger("[CC] %s stays loaded in memory from here on, so a tune never waits on it", filepath.Base(weights))
+}
+
+// releaseResidentModel drops the standing claim. Streams still on the service
+// keep it alive through their own references; the weights leave memory when
+// the last of them ends.
+func releaseResidentModel() {
+	if residentSvc != nil {
+		residentSvc.release()
+		logger("[CC] Released the standing copy of the model; the selection changed")
+	}
+	residentSvc, residentKey = nil, ""
+}
+
+// sayResidentOnce logs a reconcile failure once per distinct reason.
+func sayResidentOnce(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if msg != residentSaid {
+		residentSaid = msg
+		logger("%s — retrying in the background", msg)
 	}
 }
 
