@@ -583,7 +583,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "About a second, with a GPU",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said. Budget about 2.4 GB of memory for every stream captioned at once.",
+		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q8_0.gguf",
@@ -4812,7 +4812,13 @@ type captionStatusModel struct {
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
 	Reuse  string `json:"reuse"`
-	URL    string `json:"url"`
+	// MemoryMB is one stream's cost and MemoryTotalMB the ceiling across the
+	// tuners actually being captioned, worked out here so the page never asks
+	// anyone to multiply anything.
+	MemoryMB      int    `json:"memoryMB"`
+	MemoryTotalMB int    `json:"memoryTotalMB"`
+	MemoryTotal   string `json:"memoryTotal"`
+	URL           string `json:"url"`
 }
 
 // memoryWarning says, in gigabytes, what the current settings could use, when
@@ -4831,13 +4837,7 @@ func memoryWarning(cfg captionConfig) string {
 	if !ok {
 		return ""
 	}
-	n := len(cfg.Tuners)
-	if n == 0 {
-		n = len(tuners)
-	}
-	if n == 0 {
-		n = 1
-	}
+	n := captionedStreams(cfg)
 	totalMB := m.SizeMB * n
 	// Two gigabytes is the point at which this stops being a detail. A single
 	// Cohere stream is above it on its own, which is deliberate: 2.4 GB for one
@@ -4876,28 +4876,50 @@ func memoryWarning(cfg captionConfig) string {
 // reused, so those models are loaded per stream and freed with it. They are
 // also a fraction of the size, which is why that costs about a second rather
 // than half a minute.
-func memoryNote(m captionModel) (memory, reuse string) {
-	size := fmt.Sprintf("%d MB", m.SizeMB)
-	if m.SizeMB >= 1024 {
-		size = fmt.Sprintf("%.1f GB", float64(m.SizeMB)/1024)
+func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
+	memory = "About " + humanMB(m.SizeMB) + " of RAM for each stream captioned at once"
+	if streams > 1 {
+		total = fmt.Sprintf("up to %s across %d tuners", humanMB(m.SizeMB*streams), streams)
+	} else {
+		total = fmt.Sprintf("about %s for the one tuner being captioned", humanMB(m.SizeMB))
 	}
-	memory = "About " + size + " of RAM for each stream captioned at once"
 	if runtimeOf(m) == rtTranscribe {
 		reuse = "Stays in memory when a stream ends, so the next tune starts straight away. Loaded once at startup as well."
-		return memory, reuse
+		return memory, reuse, total
 	}
 	reuse = "Loaded when a stream starts and freed when it ends, which takes about a second at this size."
-	return memory, reuse
+	return memory, reuse, total
+}
+
+// humanMB writes a size the way a person would say it.
+func humanMB(mb int) string {
+	if mb >= 1024 {
+		return fmt.Sprintf("%.1f GB", float64(mb)/1024)
+	}
+	return fmt.Sprintf("%d MB", mb)
+}
+
+// captionedStreams is how many tuners could be captioning at the same time.
+func captionedStreams(cfg captionConfig) int {
+	n := len(cfg.Tuners)
+	if n == 0 {
+		n = len(tuners)
+	}
+	if n == 0 {
+		n = 1
+	}
+	return n
 }
 
 func captionStatusPayload() captionStatus {
 	cfg := currentCaptionConfig()
 	cur := currentEngineVariant()
 	hasGPU := gpuAvailable()
+	streams := captionedStreams(cfg)
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
-		mem, reuse := memoryNote(m)
+		mem, reuse, total := memoryNote(m, streams)
 		blocked := ""
 		if m.NeedsGPU && !hasGPU {
 			blocked = "This model needs a GPU and no GPU build can run in this container yet. " +
@@ -4907,16 +4929,19 @@ func captionStatusPayload() captionStatus {
 				"clear it comfortably — so set up Vulkan or CUDA above and this appears."
 		}
 		models = append(models, captionStatusModel{
-			captionModel: m,
-			Installed:    modelInstalled(m),
-			Engine:       rt,
-			EngineName:   findSpeechRuntime(rt).Name,
-			EngineReady:  runtimeInstalled(rt, cur),
-			Runnable:     blocked == "",
-			Blocked:      blocked,
-			Memory:       mem,
-			Reuse:        reuse,
-			URL:          modelURL(m),
+			captionModel:  m,
+			Installed:     modelInstalled(m),
+			Engine:        rt,
+			EngineName:    findSpeechRuntime(rt).Name,
+			EngineReady:   runtimeInstalled(rt, cur),
+			Runnable:      blocked == "",
+			Blocked:       blocked,
+			Memory:        mem,
+			Reuse:         reuse,
+			MemoryMB:      m.SizeMB,
+			MemoryTotalMB: m.SizeMB * streams,
+			MemoryTotal:   total,
+			URL:           modelURL(m),
 		})
 	}
 	engineURL, _, _ := engineAsset()

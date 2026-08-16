@@ -430,12 +430,12 @@ function render() {
                     <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
-                    <span class="tag ${m.sizeMB >= 2000 ? 'tag-warn' : ''}">RAM: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'} per stream</span>
+                    <span class="tag ${m.memoryTotalMB >= 2000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
                     ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
                     <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
-                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)}. ${esc(m.reuse)}</div>
+                <div class="model-meta" style="margin-top:0.2rem;">Memory: ${esc(m.memory)}, so ${esc(m.memoryTotal)}. ${esc(m.reuse)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
             </div>
             <div class="model-actions">
