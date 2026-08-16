@@ -5901,11 +5901,11 @@ func (e *captionEngine) rememberTail(words []string) {
 }
 
 // captionSettle is how long this stream must have been flowing before its
-// caption engine starts up. The first byte proves the tune worked; a few
-// seconds of flow proves it has settled. The genuinely heavy work is gated
-// separately and machine-wide — see tuneFresh — so this only needs to cover
-// the stream finding its feet.
-const captionSettle = 5 * time.Second
+// caption engine starts up. One second of flow is proof, not a cushion: the
+// protecting is done machine-wide by the state gate, which holds heavy work
+// while any tune has yet to deliver video, so padding here only delays the
+// first caption.
+const captionSettle = 1 * time.Second
 
 // The quiet gate holds heavy caption work while any tune is in its fragile
 // stretch — and fragile is a state, not an age. A tune is fragile from the
@@ -5916,8 +5916,10 @@ const captionSettle = 5 * time.Second
 // video flows, a short grace covers the DVR settling onto the fresh stream.
 const (
 	// tuneSettledGrace: how old the newest tune must be once every pending
-	// tune has its video flowing.
-	tuneSettledGrace = 8 * time.Second
+	// tune has its video flowing. A few seconds for the DVR to buffer the
+	// fresh stream; the fragile stretch itself is covered by the pending
+	// state, not by this number.
+	tuneSettledGrace = 5 * time.Second
 	// tunePendingCap: a tune that never reports its video is done holding
 	// things up after this long. The safety valve for a /play that died
 	// without saying so; without it, one lost tune would starve captions
@@ -5977,12 +5979,12 @@ func prewarmModelFile(path string) bool {
 			logger("[CC] Gave up warming %s after %s of mostly yielding to tunes", filepath.Base(path), time.Since(began).Round(time.Second))
 			return false
 		}
-		if quiet, wait := tuneQuiet(); !quiet {
+		if tunesPending() {
 			if !paused {
 				paused = true
 				logger("[CC] Pausing the model warm-up for a tune in progress")
 			}
-			time.Sleep(wait)
+			time.Sleep(2 * time.Second)
 			continue
 		}
 		paused = false
@@ -6054,6 +6056,25 @@ func tuneQuiet() (bool, time.Duration) {
 		return true, 0
 	}
 	return false, tuneSettledGrace - age
+}
+
+// tunesPending reports whether any tune has yet to deliver its first video,
+// with the same expiry as tuneQuiet. The gentle work — page-cache reading —
+// yields on this alone: it need not sit out the settled grace, which exists
+// for the heavy, un-pausable steps.
+func tunesPending() bool {
+	now := time.Now()
+	tuneMu.Lock()
+	live := tunePending[:0]
+	for _, t0 := range tunePending {
+		if now.Sub(t0) < tunePendingCap {
+			live = append(live, t0)
+		}
+	}
+	tunePending = live
+	pending := len(live) > 0
+	tuneMu.Unlock()
+	return pending
 }
 
 // feed offers stream bytes to the recognizer without blocking.
