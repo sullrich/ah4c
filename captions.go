@@ -3236,7 +3236,7 @@ var (
 )
 
 // makeWorker loads a copy of the weights and opens a session on it.
-func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
+func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, error) {
 	shared, key, err := acquireTxModel(svc.path, svc.backend, alive)
 	if err != nil {
 		return nil, err
@@ -3244,10 +3244,21 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	_ = key
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	// Split the compute allowance between the workers that may exist, so two
-	// of them together still respect the machine's reserve.
-	sp.nThreads = int32(max(2, captionComputeThreads()/2))
-	sp.nCtx = captionDecoderCtx
+	// The first worker gets the full compute allowance, because most of the
+	// time it is the only one; a second, spawned under pressure, takes a half
+	// share so the pair still respects the machine's reserve. Halving the
+	// first worker in anticipation of a second that mostly never exists was
+	// measured at a fraction of the model's known speed — a guard against a
+	// possible problem that manufactured a real one.
+	threads := captionComputeThreads() / share
+	if threads < 2 {
+		threads = 2
+	}
+	sp.nThreads = int32(threads)
+	// The decoder window stays at the model's own maximum. The engine's header
+	// warns that for families where audio tokens share the decoder window,
+	// capping it constrains the run — and capping it was another unmeasured
+	// guard on the model's throat.
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(svc.path+"|"+fmt.Sprint(svc.backend), shared)
@@ -3255,6 +3266,8 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	}
 	w := &txWorker{shared: shared, session: session, abort: &txAbortHandle{}}
 	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
+	logger("[CC] recognizer worker up: %s, %s backend, %d threads, decoder window at the model's own default",
+		filepath.Base(svc.path), txBackendName(svc.backend), threads)
 	return w, nil
 }
 
@@ -3296,7 +3309,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 
 	go func() {
 		defer close(svc.ready)
-		w, err := svc.makeWorker(alive)
+		w, err := svc.makeWorker(alive, 1)
 		if err != nil {
 			svc.err = err
 			txServiceLock.Lock()
@@ -3351,7 +3364,7 @@ func (svc *txBatchService) notePressure(queued int) {
 	svc.workers = 2
 	logger("[CC] The shared recognizer is not keeping up with its streams; loading a second copy of %s to run them in parallel — this costs its memory again", filepath.Base(svc.path))
 	go func() {
-		w, err := svc.makeWorker(nil)
+		w, err := svc.makeWorker(nil, 2)
 		if err != nil {
 			logger("[CC] Could not load the second copy: %v", err)
 			svc.workerLock.Lock()
@@ -3881,12 +3894,6 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
 	sp.nThreads = int32(captionThreads(cfg))
-	// The decoder window is sized for long-form transcription by default — the
-	// log shows a thousand-token cache allocated for every run — and a caption
-	// phrase is a sentence or two. Capping it bounds that allocation without
-	// coming near what a phrase actually generates. It only narrows: a model
-	// whose own maximum is lower keeps its own.
-	sp.nCtx = captionDecoderCtx
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(key, shared)
@@ -5621,10 +5628,6 @@ func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 // not generous in the other direction: it is better to over-warn about memory
 // than to have somebody discover the truth when the box stops responding.
 const (
-	// captionDecoderCtx bounds the decoder's key/value cache. Generous next to
-	// a spoken phrase — a couple of hundred words — and a fraction of the
-	// default sized for hours of audio.
-	captionDecoderCtx = 512
 	// streamOverhead covers buffers that grow with the model.
 	streamOverhead = 1.2
 	// streamWorkingMB covers the decoder cache and the fixed per-session cost.
