@@ -3621,13 +3621,14 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 	}
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	// The shared session does every stream's recognition, so it gets the whole
-	// thread allowance. Dividing by the tuner count is for per-stream copies
-	// running side by side; applied here it starved the one session carrying
-	// the aggregate — a twenty-thread machine was running everyone's phrases
-	// on three, which is why adding tuners fell behind long before the
-	// hardware did.
-	sp.nThreads = int32(availableCPUs())
+	// The shared session does every stream's recognition, so it gets most of
+	// the machine — and never all of it. One-tuner's-share starved it (three
+	// threads feeding a GPU for five streams); the whole machine strangled
+	// everything else, because ggml worker threads busy-wait through a
+	// dispatch, and a full complement of spinning cores left nothing for the
+	// ffmpeg decoders and the proxy itself. The stream is the product; a
+	// quarter of the machine is held back for it, always at least two threads.
+	sp.nThreads = int32(captionComputeThreads())
 	sp.nCtx = captionDecoderCtx
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
@@ -6021,6 +6022,22 @@ func cgroupCPUQuota() int {
 func atLeastOne(n int) int {
 	if n < 1 {
 		return 1
+	}
+	return n
+}
+
+// captionComputeThreads is the shared recognizer's allowance: most of the
+// machine, with a quarter (at least two threads) held back for the ffmpeg
+// decoders and the proxy — the things captions exist to decorate, not to cost.
+func captionComputeThreads() int {
+	cpus := availableCPUs()
+	reserve := cpus / 4
+	if reserve < 2 {
+		reserve = 2
+	}
+	n := cpus - reserve
+	if n < 2 {
+		n = 2
 	}
 	return n
 }
