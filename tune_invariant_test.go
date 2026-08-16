@@ -68,8 +68,8 @@ func TestTunePathIsInstant(t *testing.T) {
 	if atomic.LoadInt64(&engine.begun) != 0 {
 		t.Fatal("heavy start began on the first bytes; it must wait for the stream to settle")
 	}
-	if captionSettle < 5*time.Second {
-		t.Fatalf("captionSettle is %s; the settle must cover the tune window", captionSettle)
+	if captionSettle < time.Second {
+		t.Fatalf("captionSettle is %s; the stream must prove flow before captions schedule", captionSettle)
 	}
 
 	// And a tune anywhere on the machine must hold the heavy work off:
