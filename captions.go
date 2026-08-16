@@ -4546,6 +4546,9 @@ type captionEngine struct {
 	model2    captionModel
 	startOnce sync.Once
 	begun     int64
+	// firstFeed is when the first stream bytes arrived, as unix nanoseconds.
+	// The expensive start waits out captionSettle from that moment; see feed.
+	firstFeed int64
 	// doneOnce makes closing done idempotent. Three different paths finish an
 	// engine — a failed start, the recognizer returning, and a stream that
 	// closed before it ever began — and two of them could race: closing a
@@ -4611,11 +4614,11 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		done:    make(chan struct{}),
 	}
 	// Deliberately not started here. Loading weights moves gigabytes through
-	// memory, and doing that while the tuner is still negotiating slows the
+	// memory, and doing that while the tune is still proving itself slows the
 	// thing that actually matters — even on its own goroutine, the bandwidth is
-	// shared. The load waits until the stream is delivering video, which is the
-	// moment the tune is known to have worked and the point at which nothing is
-	// waiting on the machine any more.
+	// shared. The load waits until the stream has been flowing for a while
+	// (captionSettle in feed), which is when the tune has actually won rather
+	// than merely begun.
 	e.cfg2, e.model2 = cfg, m
 	return e, nil
 }
@@ -5481,11 +5484,36 @@ func (e *captionEngine) rememberTail(words []string) {
 	e.tail = append([]string(nil), words...)
 }
 
+// captionSettle is how long the stream must have been flowing before the
+// expensive part of starting captions is allowed to begin.
+//
+// The first byte is not that signal, and treating it as one failed a real
+// tune: the DVR probes the stream for its first several seconds before it
+// calls the tune good, and loading gigabytes of weights competes for the
+// disk and memory bandwidth the probe window is measuring. Ten seconds of
+// continuous flow is past any probe and comfortably inside the tune timeout,
+// so the load lands on a stream that has already won. It costs ten more
+// seconds before the first caption on a cold start, and nothing on a warm
+// one where the model is already resident.
+const captionSettle = 10 * time.Second
+
 // feed offers stream bytes to the recognizer without blocking.
 func (e *captionEngine) feed(b []byte) {
-	// The first bytes of video are the signal that the tune succeeded and the
-	// machine is free to do something expensive.
-	e.begin()
+	// The tune has to finish before anything expensive starts: bytes have to
+	// have been flowing for captionSettle, not merely have begun. Arrival of
+	// this call is itself the proof the stream is still alive at the deadline.
+	if atomic.LoadInt64(&e.begun) == 0 {
+		first := atomic.LoadInt64(&e.firstFeed)
+		now := time.Now().UnixNano()
+		switch {
+		case first == 0:
+			atomic.CompareAndSwapInt64(&e.firstFeed, 0, now)
+			return
+		case now-first < int64(captionSettle):
+			return
+		}
+		e.begin()
+	}
 
 	// Nothing is kept while the model loads. The decoder does not exist yet, so
 	// anything queued here would sit for several seconds and then be handed to
