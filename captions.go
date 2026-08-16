@@ -693,25 +693,6 @@ func loadCaptionConfig() {
 		logger("[CC] Ignoring malformed %s: %v", captionCfgFile, err)
 		return
 	}
-	// A model can leave the catalog between versions, and the setting naming it
-	// outlives it. Falling back is the difference between captions carrying on
-	// and captions silently not happening after an update.
-	if _, ok := findCaptionModel(cfg.Model); !ok {
-		def := defaultCaptionConfig()
-		logger("[CC] Model %q is no longer available; using %s instead", cfg.Model, def.Model)
-		cfg.Model = def.Model
-		if m, ok := findCaptionModel(cfg.Model); ok {
-			supported := false
-			for _, l := range m.Languages {
-				if l == cfg.Language {
-					supported = true
-				}
-			}
-			if !supported {
-				cfg.Language = m.Languages[0]
-			}
-		}
-	}
 	captionCfgLock.Lock()
 	captionCfg = cfg
 	captionCfgLock.Unlock()
