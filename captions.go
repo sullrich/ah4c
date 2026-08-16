@@ -3052,7 +3052,7 @@ func initTranscribe(variant string) error {
 		}
 		logger("[CC] transcribe.cpp backends available here: %s", strings.Join(have, ", "))
 		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
-		logComputeDevices()
+		logComputeDevices(variant)
 	})
 	return txErr
 }
@@ -3062,7 +3062,8 @@ func initTranscribe(variant string) error {
 // A whole afternoon went to a backend that reported itself as Vulkan and ran at
 // a third of the processor's speed, because the device behind it was llvmpipe
 // and nothing anywhere printed a device name.
-func logComputeDevices() {
+func logComputeDevices(variant string) {
+	var gpuDescs []string
 	n := txDeviceCount()
 	for i := int32(0); i < n; i++ {
 		var d txBackendDevice
@@ -3071,10 +3072,41 @@ func logComputeDevices() {
 			continue
 		}
 		desc := txGoString(d.description)
+		kind := txGoString(d.kind)
 		logger("[CC] compute device %d: %s (%s, %d MB free of %d)",
-			i, desc, txGoString(d.kind), d.memoryFree>>20, d.memoryTotal>>20)
+			i, desc, kind, d.memoryFree>>20, d.memoryTotal>>20)
 		if softwareRenderer(desc) {
 			logger("[CC] WARNING: %q is a software renderer, not a graphics card. Transcription on it is slower than the plain processor backend. Check that the compose file passes /dev/dri through and that the Vulkan driver install finished cleanly.", desc)
+		}
+		if kind != "cpu" {
+			gpuDescs = append(gpuDescs, desc)
+		}
+	}
+	if strings.Contains(variant, "vulkan") {
+		tuneFlashFor(gpuDescs)
+	}
+}
+
+// tuneFlashFor turns the engine's flash attention off on graphics chips where
+// it is a de-optimisation.
+//
+// Flash attention is on by default and earns its name on hardware with matrix
+// cores. Intel's integrated GPUs before Arc have none, so the same code runs
+// as a scalar shader and loses badly to the plain path it replaced — the
+// difference between an iGPU that keeps up and one that crawls at a fraction
+// of the processor's speed while looking perfectly healthy. Nobody should
+// have to know any of this: the device says what it is, and the setting
+// follows. A hand-set TRANSCRIBE_NO_FLASH or TRANSCRIBE_FORCE_FLASH wins.
+func tuneFlashFor(gpuDescs []string) {
+	if os.Getenv("TRANSCRIBE_NO_FLASH") != "" || os.Getenv("TRANSCRIBE_FORCE_FLASH") != "" {
+		return
+	}
+	for _, d := range gpuDescs {
+		l := strings.ToLower(d)
+		if strings.Contains(l, "intel") && !strings.Contains(l, "arc") {
+			os.Setenv("TRANSCRIBE_NO_FLASH", "1")
+			logger("[CC] Flash attention off: %s has no matrix cores, and the plain path is faster there.", d)
+			return
 		}
 	}
 }
