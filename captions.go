@@ -3940,24 +3940,18 @@ func acquireTxModel(path string, backend int32, alive func() bool) (*sharedTxMod
 	// holding the lock across it would stall an unrelated stream trying to stop.
 	//
 	// The file is warmed into the page cache first, in a loop that yields to
-	// tunes. The engine's own load is one native call that cannot be paused,
-	// and cold from disk it is half a minute of I/O that can land on top of a
-	// fresh tune and starve it; warmed, the same call finishes in about a
-	// second. The warm-up itself pauses whenever a tune is young, so the disk
-	// belongs to the tune whenever there is one.
-	prewarmModelFile(path)
-	// Hold the short native load off any tune younger than tuneFresh — but
-	// bounded. Under a run of channel changes an unbounded wait stacks into
-	// minutes of captions that look like they never loaded; past the cap the
-	// load simply goes, because by then it is a couple of seconds against a
-	// warmed file.
-	holdUntil := time.Now().Add(60 * time.Second)
-	for {
-		quiet, wait := tuneQuiet()
-		if quiet || time.Now().After(holdUntil) {
-			break
-		}
-		time.Sleep(wait)
+	// tunes; then the short native load runs only on a quiet machine. Neither
+	// step fights a tune, ever: a tune is a recording and captions are
+	// decoration, so when the machine will not go quiet this attempt fails
+	// fast instead — the stream runs on uncaptioned and the caller's retry
+	// loop tries again at the next lull. The alternative, forcing the load
+	// through on a timer, was tried; it put the load inside exactly the
+	// window it existed to avoid.
+	if !prewarmModelFile(path) {
+		return nil, "", fmt.Errorf("gave up warming %s while tunes kept starting; will retry at a quiet moment", filepath.Base(path))
+	}
+	if !waitTuneQuiet(30 * time.Second) {
+		return nil, "", fmt.Errorf("a tune has been starting the whole wait; will retry at a quiet moment")
 	}
 	load := txLoadParams{}
 	txLoadParamsInit(unsafe.Pointer(&load))
@@ -5601,18 +5595,26 @@ func captionTuneStarting() {
 }
 
 // prewarmModelFile reads the weights into the page cache, pausing whenever a
-// tune is young so the disk always belongs to the tune. Best effort: any
-// error just means the engine's own load reads from disk instead.
-func prewarmModelFile(path string) {
+// tune is young so the disk always belongs to the tune. It reports whether it
+// finished: under a steady run of channel changes it gives up rather than
+// carrying disk work into the indefinite future, and the caller retries at a
+// quieter time. An unreadable file is reported as done — the engine's own
+// load will say what is wrong with it.
+func prewarmModelFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
-		return
+		return true
 	}
 	defer f.Close()
 	buf := make([]byte, 8<<20)
 	began := time.Now()
+	deadline := began.Add(3 * time.Minute)
 	paused := false
 	for {
+		if time.Now().After(deadline) {
+			logger("[CC] Gave up warming %s after %s of mostly yielding to tunes", filepath.Base(path), time.Since(began).Round(time.Second))
+			return false
+		}
 		if quiet, wait := tuneQuiet(); !quiet {
 			if !paused {
 				paused = true
@@ -5628,6 +5630,23 @@ func prewarmModelFile(path string) {
 		}
 	}
 	logger("[CC] Warmed %s into memory in %s", filepath.Base(path), time.Since(began).Round(time.Millisecond))
+	return true
+}
+
+// waitTuneQuiet waits for the newest tune on the machine to age past
+// tuneFresh, up to the bound. False means the machine never went quiet.
+func waitTuneQuiet(bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		quiet, wait := tuneQuiet()
+		if quiet {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(wait)
+	}
 }
 
 // tuneQuiet reports whether the newest tune on the machine is old enough for
