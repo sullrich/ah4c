@@ -4338,7 +4338,7 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	// is a core burned idling. Eight spinning threads beside a tune's
 	// playback checks was part of how captions cost a recording.
 	threads := captionComputeThreads()
-	if svc.backend != txBackendCPU {
+	if svc.onGPU {
 		threads = captionGPUThreads()
 	}
 	sp.nThreads = int32(threads)
@@ -5004,7 +5004,18 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	sp.nThreads = int32(captionThreads(cfg))
+	// The same rule the shared recognizer follows, because the reason for it
+	// is the backend and not which path opened the session. This one is
+	// per-stream — a streaming model keeps its own copy — so the allowance it
+	// starts from is already divided among the streams that may caption at
+	// once, and the GPU share is taken from that. Left alone, every one of
+	// those sessions would have opened a processor's worth of threads to spin
+	// while the graphics chip did the arithmetic.
+	streamThreads := captionThreads(cfg)
+	if variant != "cpu" {
+		streamThreads = gpuThreadShare(streamThreads)
+	}
+	sp.nThreads = int32(streamThreads)
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(key, shared)
@@ -7362,9 +7373,24 @@ func captionComputeThreads() int {
 // two is the same floor the processor path has: below that there is nothing to
 // share out.
 func captionGPUThreads() int {
-	n := captionComputeThreads() / 2
-	if n < 2 {
-		n = 2
+	return gpuThreadShare(captionComputeThreads())
+}
+
+// gpuThreadShare turns a processor thread allowance into the GPU path's share
+// of it. One rule, applied wherever a session is opened, so the two places
+// that open one cannot drift apart on what a GPU backend is entitled to.
+//
+// It never raises the figure it is given. The allowance handed in has already
+// been divided by whatever else is running — on the per-stream path that is
+// the other streams — and half of a small share is still smaller than the
+// share, which is the direction this may move it and the only one.
+func gpuThreadShare(cpuThreads int) int {
+	n := cpuThreads / 2
+	if n < 1 {
+		n = 1
+	}
+	if n > cpuThreads {
+		n = cpuThreads
 	}
 	return n
 }
