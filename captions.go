@@ -1568,7 +1568,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 		return "", fmt.Errorf("no saved packages to install")
 	}
 	logger("[CC] Installing %d saved packages for %s", len(debs), g.Name)
-	cmd := exec.Command("dpkg", append([]string{"-i", "--force-depends"}, debs...)...)
+	cmd := politeCommand("dpkg", append([]string{"-i", "--force-depends"}, debs...)...)
 	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	out, err := cmd.CombinedOutput()
 	if err != nil && !driverActive(g) {
@@ -1611,6 +1611,30 @@ func applyDriver(g gpuRuntime) (string, error) {
 	}
 	setDriverFault("")
 	return string(out), nil
+}
+
+// politeCommand builds a command that loses every contest with a tune.
+//
+// The quiet gate decides when heavy work may start; this decides what happens
+// when it turns out to have been wrong. A package install cannot be paused
+// partway — stopping dpkg between unpacking and configuring leaves a container
+// worse than either — so the one thing left is to make sure that whatever it is
+// doing, the tuners get the processor and the disk first. Nice and ionice are
+// in the base image; if they ever are not, the command runs exactly as it did
+// before.
+func politeCommand(name string, args ...string) *exec.Cmd {
+	pre := []string{}
+	if p, err := exec.LookPath("ionice"); err == nil {
+		pre = append(pre, p, "-c3")
+	}
+	if p, err := exec.LookPath("nice"); err == nil {
+		pre = append(pre, p, "-n", "19")
+	}
+	if len(pre) == 0 {
+		return exec.Command(name, args...)
+	}
+	full := append(append(pre, name), args...)
+	return exec.Command(full[0], full[1:]...)
 }
 
 // driverFault is why the graphics driver cannot be used, in the words the page
@@ -1890,7 +1914,19 @@ func restoreGPURuntimeQuietly() {
 	// cold container, hundreds of megabytes of disk read, beside the DVR
 	// re-tuning everything it was recording. The probe is heavy work and
 	// takes its turn like the rest.
-	for !waitTuneQuiet(30 * time.Second) {
+	//
+	// Quiet has to be held, not merely observed. A container that has just
+	// come up is quiet because the DVR has not asked for anything yet: asking
+	// once and starting is starting an uninterruptible thirty-second package
+	// install directly into the storm that is two seconds away, and dpkg
+	// cannot be paused for a tune the way a file read can. That is exactly
+	// what happened — a driver set that grew from two packages to
+	// thirty-seven ran straight through two tunes and both missed their
+	// playback confirmation. A minute of proven quiet tells the calm before
+	// from the calm after; if it never comes, the install simply waits, and
+	// captions run on the processor in the meantime.
+	for !waitTuneQuietHeld(time.Minute, 5*time.Minute) {
+		logger("[CC] Still waiting for a quiet minute before touching the graphics driver; tunes come first")
 	}
 	need := false
 	for _, g := range gpuRuntimes {
@@ -6567,6 +6603,43 @@ func waitTuneQuiet(bound time.Duration) bool {
 			return false
 		}
 		time.Sleep(wait)
+	}
+}
+
+// waitTuneQuietHeld waits for the machine to have been quiet continuously for
+// hold, rather than merely quiet at the instant it is asked.
+//
+// The difference is the whole difference for work that cannot be interrupted
+// once it starts. A container that has just come up is quiet because the DVR
+// has not asked for anything yet, not because there is nothing coming — the
+// storm is seconds away, and starting a job at that moment is starting it
+// directly into the storm. Waiting for a stretch of proven quiet is the only
+// way to tell the calm before from the calm after.
+//
+// Returns false if hold could not be held within bound, and the caller is
+// expected to try again rather than proceed anyway.
+func waitTuneQuietHeld(hold, bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		if !waitTuneQuiet(time.Until(deadline)) {
+			return false
+		}
+		quietSince := time.Now()
+		for {
+			if time.Since(quietSince) >= hold {
+				return true
+			}
+			if quiet, _ := tuneQuiet(); !quiet {
+				break // the run was broken; start counting again
+			}
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(time.Second)
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
 	}
 }
 
