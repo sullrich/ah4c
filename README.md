@@ -103,6 +103,13 @@ downloads it the same way it downloads a model: the packages and everything they
 are saved into `captions/drivers` inside the bind mount, and put back automatically
 at startup after a rebuild, without needing the network again.
 
+The driver package also ships llvmpipe, a Vulkan device that is really the processor in
+disguise, and the loader quietly offers it whenever the real driver cannot reach the card —
+which looks like a working GPU and runs three times slower than the processor used
+honestly. ah4c refuses it: only hardware Vulkan drivers are considered, the log prints the
+name of the device actually doing the work, and if no real card is reachable the engine
+runs on the processor and says so.
+
 You also have to pass the graphics device through, which is off by default. Set this in your
 env file and recreate the container:
 
@@ -133,33 +140,39 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — two. The page recommends one for your machine; the recommendation is
-guidance, never a gate, and both run anywhere.
+**Models** — three. Cohere Transcribe is the one to pick; the other two are for
+processor-only machines that need more. Every recommendation is guidance, never a gate,
+and all three run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Machines with a GPU (integrated is plenty) | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 |
-| **Parakeet TDT-CTC 110M** — a tenth the size, punctuated | Processor-only machines, down to a Pi | Good | Set by the delay setting | 170 MB | English |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. On a processor it keeps up with one or two streams; a GPU keeps it fast with many | Best — 1.3% | Set by the delay setting | 1.8 GB | 8 |
+| **Nemotron 3.5 Streaming 0.6B** — transcribes live as the audio arrives, punctuated | Processor-only machines running several streams at once | Very good — 3.1% | Under a second | 716 MB | 32 |
+| **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
 Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
 television is harder than clean read speech for every model.
 
-**Memory.** One copy of a model is shared by every tuner captioning at once — about 2.2 GB
-resident for Cohere Transcribe, about 300 MB for the 110M, however many streams run — and
-it is freed when the last of them ends. If the shared copy provably cannot keep pace with
-the streams feeding it, a second copy is loaded to run them in parallel, the log says so,
-and that doubles the figure while the pressure lasts. The page works the numbers out for
-your own setup.
+**Memory.** Cohere Transcribe reads a phrase at a time, so one copy — about 2.2 GB
+resident — is shared by every tuner captioning at once and freed when the last of them
+ends. If the shared copy provably cannot keep pace with the streams feeding it, a second
+copy is loaded to run them in parallel, the log says so, and that doubles the figure while
+the pressure lasts. The streaming models hold their session open for the whole tune, so
+each tuner runs its own copy: about 960 MB per stream for Nemotron, about 160 MB for
+Moonshine. The page works the numbers out for your own setup.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.
 
-**The delay setting** governs how closely captions follow the picture: both models read a
-phrase at a time, and the setting decides how long a phrase may run — shorter follows
-closer, longer is a little more accurate and cheaper per minute. The default lands two to
-four seconds behind, which is what live broadcast captioning runs. The recognizer reports
-its own throughput in the log every twenty-five dispatches, so whether your hardware is
-keeping up is a measurement, not a guess.
+**The delay setting** governs how closely captions follow the picture. For a
+phrase-at-a-time model it decides how long a phrase may run — shorter follows closer,
+longer is a little more accurate; the default lands two to four seconds behind, which is
+what live broadcast captioning runs. For a streaming model it picks how far ahead the
+model listens before committing a word. The recognizer reports its own throughput in the
+log, so whether your hardware is keeping up is a measurement, not a guess. The display
+itself is paced too: a finished caption line stays on screen a beat before the next one
+rolls it up, the way broadcast roll-up reads, instead of scrolling as fast as recognition
+can produce text.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That

@@ -154,7 +154,9 @@
                 at once. A GPU build is only offered when this container can actually load it: CUDA
                 appears once the NVIDIA container runtime is passing the driver through, Vulkan once
                 a Vulkan driver and <code>/dev/dri</code> are present. Neither needs a change to the
-                image &mdash; only to your compose file.
+                image &mdash; only to your compose file. Software Vulkan renderers are refused: if the
+                driver cannot reach a real graphics card, captions run on the processor directly, which
+                is faster than pretending, and the log names the device actually in use.
             </p>
             <p class="footnote">
                 One helper program, <strong>transcribe.cpp</strong>, runs every model. Pick where it
@@ -335,11 +337,7 @@ function render() {
               (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
             : '';
 
-    // Both engines are listed, always, each under its own heading. They are two
-    // different programs by two different projects and only one of them is
-    // being downloaded, so the page says which — rather than swapping one
-    // card's contents and leaving the reader to notice the name changed.
-    const engineKey = model ? model.engine : 'parakeet';
+    const engineKey = model ? model.engine : 'transcribe';
     const engineName = model ? model.engineName : '';
     const engineReady = !!(model && model.engineReady);
     document.getElementById('engineHint').textContent = engineName

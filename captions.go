@@ -442,20 +442,13 @@ type captionModel struct {
 	Languages []string `json:"languages"`
 }
 
-const captionModelRepo = "mudler/parakeet-cpp-gguf"
-
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
-//
-// The streaming models are listed first because they are what most people
-// want: they transcribe as the audio arrives instead of waiting for a phrase to
-// finish, which is the difference between captions a second behind and captions
-// three or four seconds behind.
 var captionModelCatalog = []captionModel{
 	{
 		Key:  "cohere-transcribe",
 		Name: "Cohere Transcribe 03-2026",
-		Role: "For machines with a GPU",
+		Role: "The one to pick",
 		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a phrase at a time and what it writes reads like the closed captions on a broadcast channel. One copy is shared by every tuner, and the delay setting below decides how closely it follows the picture.",
 		// It reads a whole phrase and then writes it, so the delay setting
 		// governs how far behind it runs; the batch service amortises its
@@ -463,7 +456,7 @@ var captionModelCatalog = []captionModel{
 		Latency:     "A few seconds, set by the delay setting below",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "Best with a GPU, and integrated graphics are plenty. This is guidance, not a gate: it runs on a processor too, and the log will tell you honestly whether it keeps up there.",
+		Hardware:    "On a processor it keeps up with one or two streams; a GPU keeps it fast with many, and integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q5_K_M.gguf",
@@ -472,17 +465,40 @@ var captionModelCatalog = []captionModel{
 		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 	},
 	{
-		Key:         "parakeet-110m",
-		Name:        "Parakeet TDT-CTC 110M",
-		Role:        "For processor-only machines",
-		Desc:        "A tenth the size, with punctuation, and light enough for a Raspberry Pi class board or a low-power NAS. English only. Phrase at a time like the big one, so the delay setting below governs both the same way. Guidance, not a gate: it runs anywhere, including on a GPU.",
-		Latency:     "A few seconds, set by the delay setting below",
-		Accuracy:    "Good",
+		Key:  "nemotron-realtime",
+		Name: "Nemotron 3.5 Streaming 0.6B",
+		Role: "For processors running several streams",
+		Desc: "Transcribes continuously as the audio arrives, with proper punctuation and sentence case, in 32 languages. Lighter per phrase than the big model, so a processor-only machine that falls behind on Cohere with several tuners going holds the pace here. Each tuner runs its own copy.",
+		Latency:     "Under a second",
+		Accuracy:    "Very good",
+		Benchmark:   "3.1% of words come out wrong",
+		Hardware:    "A modern multi-core processor keeps several streams live. Guidance, not a gate.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+		File:        "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
+		SizeMB:      716,
+		Streaming:   true,
+		Punctuation: true,
+		// This family wants a full locale and refuses bare codes: en, not
+		// accepted; en-US, transcribed. The list is the documented examples of
+		// its 32 locales.
+		Languages: []string{"en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "it-IT",
+			"pt-BR", "nl-NL", "ru-RU", "zh-CN", "ja-JP", "ko-KR", "hi-IN", "ar-AR"},
+	},
+	{
+		Key:         "moonshine-tiny",
+		Name:        "Moonshine Streaming Tiny",
+		Role:        "For very small machines",
+		Desc:        "A forty-eight megabyte model that streams live and runs comfortably on a Celeron, a low-power NAS or a Raspberry Pi class board. English only. The least accurate of the three, and the only one that fits hardware this small.",
+		Latency:     "Under a second",
+		Accuracy:    "Decent",
+		Benchmark:   "4.5% of words come out wrong",
 		Hardware:    "Runs on almost anything.",
 		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/parakeet-tdt_ctc-110m-gguf",
-		File:        "parakeet-tdt_ctc-110m-Q8_0.gguf",
-		SizeMB:      170,
+		Repo:        "handy-computer/moonshine-streaming-tiny-gguf",
+		File:        "moonshine-streaming-tiny-Q8_0.gguf",
+		SizeMB:      48,
+		Streaming:   true,
 		Punctuation: true,
 		Languages:   []string{"en"},
 	},
@@ -497,6 +513,40 @@ var captionLanguageNames = map[string]string{
 	"lt": "Lithuanian", "lv": "Latvian", "mt": "Maltese", "nl": "Dutch", "pl": "Polish",
 	"pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak", "sl": "Slovenian",
 	"sv": "Swedish", "uk": "Ukrainian",
+	// The locale spellings the streaming multilingual model asks for.
+	"en-US": "English (US)", "en-GB": "English (UK)", "es-ES": "Spanish",
+	"fr-FR": "French", "de-DE": "German", "it-IT": "Italian",
+	"pt-BR": "Portuguese (Brazil)", "nl-NL": "Dutch", "ru-RU": "Russian",
+	"zh-CN": "Chinese (Mandarin)", "ja-JP": "Japanese", "ko-KR": "Korean",
+	"hi-IN": "Hindi", "ar-AR": "Arabic",
+}
+
+// modelLanguage maps the configured language onto one this model accepts. The
+// families disagree about spelling — one wants en, another insists on en-US and
+// refuses anything shorter — and switching models should not leave a saved
+// setting that quietly fails every stream. An exact match wins; a bare code
+// widens to the model's first matching locale; anything else falls back to the
+// model's first language rather than to an error.
+func modelLanguage(m captionModel, lang string) string {
+	if lang == "" || len(m.Languages) == 0 {
+		return lang
+	}
+	for _, l := range m.Languages {
+		if l == lang {
+			return l
+		}
+	}
+	for _, l := range m.Languages {
+		if strings.HasPrefix(l, lang+"-") {
+			return l
+		}
+	}
+	first := m.Languages[0]
+	if first == "auto" && len(m.Languages) > 1 {
+		first = m.Languages[1]
+	}
+	logger("[CC] %s does not take language %q; using %s", m.Name, lang, first)
+	return first
 }
 
 func findCaptionModel(key string) (captionModel, bool) {
@@ -545,7 +595,7 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:   false,
-		Model:     "realtime-multilingual",
+		Model:     "cohere-transcribe",
 		Language:  "en",
 		Style:     "rollup3",
 		Uppercase: true,
@@ -623,11 +673,7 @@ func currentCaptionConfig() captionConfig {
 // as well as used here, so it is always obvious what is being downloaded and
 // from whom.
 func modelURL(m captionModel) string {
-	repo := m.Repo
-	if repo == "" {
-		repo = captionModelRepo
-	}
-	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", repo, m.File)
+	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", m.Repo, m.File)
 }
 
 // modelPath is where a model's weights live once downloaded.
@@ -1520,6 +1566,10 @@ type cea608 struct {
 	// sentence from four minutes ago presented as if it were current. A
 	// broadcast encoder erases after a while and so does this.
 	lastText time.Time
+	// lastCR is when the display last rolled, and crCopies how many repeats of
+	// that carriage return are still owed; see next() for what they pace.
+	lastCR   time.Time
+	crCopies int
 	rows     byte // ccRU2 / ccRU3 / ccRU4
 	started  bool
 	col      int
@@ -1655,6 +1705,24 @@ func (c *cea608) writeRune(r rune) {
 // looks like a failure — a blank line — instead of looking like a caption.
 const ccStaleAfter = 20 * time.Second
 
+// ccMinRollGap is the least time between two rolls of the display.
+//
+// The text itself is paced by the channel — sixty characters a second, no
+// faster — but a carriage return is only two byte pairs, so a burst of
+// recognition can roll the display several times in well under a second and a
+// line leaves the screen before anyone has read it. This floor keeps a
+// finished line put for a beat; with three rows up, a line then stays visible
+// for a few seconds after it completes, which is what broadcast roll-up looks
+// like.
+const ccMinRollGap = 1200 * time.Millisecond
+
+// ccRollPressure is the backlog, in byte pairs, past which the pacing yields.
+// Holding a roll holds everything queued behind it, so under sustained fast
+// speech the polite pace would push captions steadily further behind the
+// picture; at about two seconds of queued channel time, currency wins over
+// composure and the display rolls at channel speed.
+const ccRollPressure = 60
+
 // next returns the pair of bytes to attach to the next video frame.
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
@@ -1672,6 +1740,20 @@ func (c *cea608) next() [2]byte {
 			}
 		}
 		return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+	}
+	// A carriage return waits for the dwell before it rolls the display. Its
+	// doubled copy is exempt: control codes go out twice back to back, and a
+	// decoder is only guaranteed to drop the repeat when it arrives as one.
+	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) && p[1] == odd608(ccCR) {
+		switch {
+		case c.crCopies > 0:
+			c.crCopies--
+		case time.Since(c.lastCR) < ccMinRollGap && len(c.queue) < ccRollPressure:
+			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+		default:
+			c.lastCR = time.Now()
+			c.crCopies = 1
+		}
 	}
 	p := c.queue[0]
 	c.queue = c.queue[1:]
@@ -2711,6 +2793,7 @@ const (
 	txABIStreamParams  = 3
 	txABIStreamUpdate  = 9
 	txABIStreamText    = 10
+	txABIBackendDevice = 13
 )
 
 // The parameter and result structs, laid out to match transcribe.h. Every one
@@ -2772,6 +2855,19 @@ type (
 		tentativeTextBytes     uint64
 		rawTentativeStartBytes uint64
 	}
+	// A registered compute device, as the engine sees it. The strings are
+	// owned by the library and live as long as it does.
+	txBackendDevice struct {
+		structSize  uint64
+		name        *byte
+		description *byte
+		kind        *byte
+		deviceID    *byte
+		memoryTotal uint64
+		memoryFree  uint64
+		deviceType  int32
+		_           int32
+	}
 )
 
 var (
@@ -2782,6 +2878,10 @@ var (
 	txStatusString  func(status int32) string
 	txInitBackends  func(dir string) int32
 	txABIStructSize func(which int32) uint64
+
+	txDeviceCount func() int32
+	txDeviceInit  func(p unsafe.Pointer)
+	txGetDevice   func(index int32, out unsafe.Pointer) int32
 
 	txModelLoadFile func(path string, params, out unsafe.Pointer) int32
 	txModelFree     func(model uintptr)
@@ -2904,6 +3004,9 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txStreamParamsInit, handle, "transcribe_stream_params_init")
 		purego.RegisterLibFunc(&txStreamUpdateInit, handle, "transcribe_stream_update_init")
 		purego.RegisterLibFunc(&txStreamTextInit, handle, "transcribe_stream_text_init")
+		purego.RegisterLibFunc(&txDeviceCount, handle, "transcribe_backend_device_count")
+		purego.RegisterLibFunc(&txDeviceInit, handle, "transcribe_backend_device_init")
+		purego.RegisterLibFunc(&txGetDevice, handle, "transcribe_get_backend_device")
 
 		if err := txCheckABI(); err != nil {
 			txErr = err
@@ -2914,6 +3017,14 @@ func initTranscribe(variant string) error {
 		// line about its key/value cache for every phrase it transcribes, which
 		// on a busy channel is a line a second, for ever.
 		txLogSet(txLogCallback(), nil)
+		// Before the Vulkan module creates its instance: never let it pick a
+		// software renderer. Mesa's driver package installs llvmpipe alongside
+		// the real drivers, and when the real one cannot reach the card the
+		// loader hands ggml llvmpipe instead — a "GPU" that is the processor
+		// wearing a costume, three times slower than the processor backend
+		// used honestly. Better no Vulkan device than that one: the engine
+		// then lands on its native CPU backend and says so.
+		pinHardwareVulkanICDs()
 		if st := txInitBackends(dir); st != txOK {
 			txErr = fmt.Errorf("registering the transcribe.cpp backends: %s", txStatusString(st))
 			return
@@ -2941,8 +3052,95 @@ func initTranscribe(variant string) error {
 		}
 		logger("[CC] transcribe.cpp backends available here: %s", strings.Join(have, ", "))
 		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
+		logComputeDevices()
 	})
 	return txErr
+}
+
+// logComputeDevices names every device the engine registered, so "which chip is
+// actually doing the work" is a line in the log instead of a day of guessing.
+// A whole afternoon went to a backend that reported itself as Vulkan and ran at
+// a third of the processor's speed, because the device behind it was llvmpipe
+// and nothing anywhere printed a device name.
+func logComputeDevices() {
+	n := txDeviceCount()
+	for i := int32(0); i < n; i++ {
+		var d txBackendDevice
+		txDeviceInit(unsafe.Pointer(&d))
+		if st := txGetDevice(i, unsafe.Pointer(&d)); st != txOK {
+			continue
+		}
+		desc := txGoString(d.description)
+		logger("[CC] compute device %d: %s (%s, %d MB free of %d)",
+			i, desc, txGoString(d.kind), d.memoryFree>>20, d.memoryTotal>>20)
+		if softwareRenderer(desc) {
+			logger("[CC] WARNING: %q is a software renderer, not a graphics card. Transcription on it is slower than the plain processor backend. Check that the compose file passes /dev/dri through and that the Vulkan driver install finished cleanly.", desc)
+		}
+	}
+}
+
+// softwareRenderer spots a Vulkan device that is really the CPU: Mesa's
+// llvmpipe/lavapipe and Google's SwiftShader announce themselves in the
+// device description.
+func softwareRenderer(desc string) bool {
+	l := strings.ToLower(desc)
+	return strings.Contains(l, "llvmpipe") || strings.Contains(l, "lavapipe") || strings.Contains(l, "swiftshader")
+}
+
+// pinHardwareVulkanICDs points the Vulkan loader at the hardware drivers only.
+//
+// The Vulkan loader reads driver manifests from the icd.d directories, and
+// mesa-vulkan-drivers ships one for llvmpipe — a renderer that runs on the
+// processor — next to the Intel and AMD ones. When the hardware driver comes
+// up empty (no /dev/dri in the container, wrong permissions, a half-finished
+// install) the loader silently offers llvmpipe instead, and everything
+// downstream believes it is on a GPU. Excluding the software manifests up
+// front turns that failure into "no Vulkan devices", which the engine answers
+// by using its native CPU backend — the fastest honest option — and the log
+// says what happened.
+//
+// A caller who has set VK_DRIVER_FILES or VK_ICD_FILENAMES themselves is
+// assumed to mean it, and nothing is touched.
+func pinHardwareVulkanICDs() {
+	if os.Getenv("VK_DRIVER_FILES") != "" || os.Getenv("VK_ICD_FILENAMES") != "" {
+		return
+	}
+	var hardware []string
+	sawSoftware := false
+	for _, dir := range []string{
+		"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d",
+		"/usr/local/share/vulkan/icd.d", "/usr/local/etc/vulkan/icd.d",
+	} {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			// Mesa names the llvmpipe manifest lvp_icd.<arch>.json.
+			l := strings.ToLower(e.Name())
+			if strings.Contains(l, "lvp") || strings.Contains(l, "llvmpipe") || strings.Contains(l, "swiftshader") {
+				sawSoftware = true
+				continue
+			}
+			hardware = append(hardware, filepath.Join(dir, e.Name()))
+		}
+	}
+	if !sawSoftware {
+		return
+	}
+	list := strings.Join(hardware, ":")
+	// Both names: VK_DRIVER_FILES is the current loader's spelling,
+	// VK_ICD_FILENAMES the one older loaders read.
+	os.Setenv("VK_DRIVER_FILES", list)
+	os.Setenv("VK_ICD_FILENAMES", list)
+	if len(hardware) == 0 {
+		logger("[CC] The only Vulkan driver here is a software renderer, which is slower than using the processor directly. Ignoring it; captions will run on the processor. Pass /dev/dri through in the compose file and reinstall the driver to use the GPU.")
+	} else {
+		logger("[CC] Vulkan drivers limited to the hardware ones: %s", list)
+	}
 }
 
 // txCheckABI compares every struct this file declares against the library's own
@@ -2959,6 +3157,7 @@ func txCheckABI() error {
 		{"stream params", txABIStreamParams, unsafe.Sizeof(txStreamParams{})},
 		{"stream update", txABIStreamUpdate, unsafe.Sizeof(txStreamUpdate{})},
 		{"stream text", txABIStreamText, unsafe.Sizeof(txStreamText{})},
+		{"backend device", txABIBackendDevice, unsafe.Sizeof(txBackendDevice{})},
 	} {
 		if got := txABIStructSize(s.id); got != uint64(s.size) {
 			return fmt.Errorf("transcribe.cpp %s is %d bytes here and %d bytes in the engine; this build of ah4c expects transcribe.cpp %s",
@@ -3138,6 +3337,11 @@ var (
 // is the right tool for a device that really does run things in parallel.
 var gpuGate = make(chan struct{}, 2)
 
+// Diagnostic toggle, read once. CC_NO_WATCHDOG=1 skips installing the abort
+// callback, which isolates its per-decode polling cost on a machine where the
+// recognizer measures slower than it should.
+var noWatchdog = os.Getenv("CC_NO_WATCHDOG") == "1"
+
 // maxBatchAudioSec bounds how much audio one dispatch may carry. Compute time
 // follows audio length, and the run deadline is fixed: a batch allowed to grow
 // without limit under backlog was the one path left where a single call could
@@ -3271,9 +3475,19 @@ func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, 
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 	w := &txWorker{shared: shared, session: session, abort: &txAbortHandle{}}
-	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
-	logger("[CC] recognizer worker up: %s, %s backend, %d threads, decoder window at the model's own default",
-		filepath.Base(svc.path), txBackendName(svc.backend), threads)
+	// Diagnostic isolation: CC_NO_WATCHDOG=1 leaves the abort callback
+	// uninstalled, so a run cannot be interrupted but also pays no C-to-Go
+	// crossing during decode. If speed returns with this set, the watchdog
+	// polling is the tax.
+	if !noWatchdog {
+		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&w.abort.deadlineUnixNano))
+	}
+	flags := ""
+	if noWatchdog {
+		flags += ", watchdog off"
+	}
+	logger("[CC] recognizer worker up: %s, %s backend, %d threads, decoder window at the model's own default%s",
+		filepath.Base(svc.path), txBackendName(svc.backend), threads, flags)
 	return w, nil
 }
 
@@ -3460,7 +3674,18 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	}
 	atomic.StoreInt64(&w.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
 	began := time.Now()
-	st := txRunBatch(w.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
+	// A single phrase goes through the plain run call. The batch entry point
+	// earns its keep only with company: the engine runs each utterance's
+	// encoder serially and shares only the decode loop, so batch-of-one is
+	// the direct call's work routed through a driver tuned for lockstep
+	// decoding — overhead with nothing bought. The direct path is the one the
+	// family tunes for a lone utterance.
+	var st int32
+	if len(batch) == 1 {
+		st = txRun(w.session, ptrs[0], lens[0], unsafe.Pointer(&p))
+	} else {
+		st = txRunBatch(w.session, unsafe.Pointer(&ptrs[0]), unsafe.Pointer(&lens[0]), int32(len(batch)), unsafe.Pointer(&p))
+	}
 	compute := time.Since(began)
 	atomic.StoreInt64(&w.abort.deadlineUnixNano, 0)
 	if held {
@@ -3480,17 +3705,22 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		}
 		return
 	}
-	nres := int(txBatchNResults(w.session))
-	for i, r := range batch {
-		if i >= nres {
-			r.reply <- txBatchReply{err: fmt.Errorf("no result for this phrase")}
-			continue
+	if len(batch) == 1 {
+		// The direct call fills the single-result accessors, not the batch ones.
+		batch[0].reply <- txBatchReply{text: cleanRecognized(txFullText(w.session))}
+	} else {
+		nres := int(txBatchNResults(w.session))
+		for i, r := range batch {
+			if i >= nres {
+				r.reply <- txBatchReply{err: fmt.Errorf("no result for this phrase")}
+				continue
+			}
+			if pst := txBatchStatus(w.session, int32(i)); pst != txOK {
+				r.reply <- txBatchReply{err: fmt.Errorf("%s", txStatusString(pst))}
+				continue
+			}
+			r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(w.session, int32(i)))}
 		}
-		if pst := txBatchStatus(w.session, int32(i)); pst != txOK {
-			r.reply <- txBatchReply{err: fmt.Errorf("%s", txStatusString(pst))}
-			continue
-		}
-		r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(w.session, int32(i)))}
 	}
 
 	var audio time.Duration
@@ -4510,6 +4740,9 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 
 // loadRecognizer opens a model on whichever engine can run it.
 func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool) (recognizer, error) {
+	// Spell the language the way this model wants it before anything is loaded;
+	// cfg is a copy, so the correction lives exactly as long as this model.
+	cfg.Language = modelLanguage(m, cfg.Language)
 	if !m.Streaming {
 		// One shared copy serves every tuner; see txBatchService.
 		variant, err := captionVariantFor(m)
@@ -5599,12 +5832,9 @@ func memoryWarning(cfg captionConfig) string {
 // the Nemotron is the better answer — it is quicker off the mark and it is the
 // only recommendation that works in a language other than English.
 func recommendedModel() (key, why string) {
-	// The pick follows the hardware as guidance, never as a gate: both models
-	// run anywhere, and the page only says which one this machine would enjoy.
-	if gpuAvailable() {
-		return "cohere-transcribe", "Recommended for this machine: it has a usable GPU, and this is the most accurate captioning available — one copy shared by every tuner."
-	}
-	return "parakeet-110m", "Recommended for this machine: no GPU is available, and this one is light enough to caption on any processor. The big model still works here if you want to try it."
+	// Guidance, never a gate: every model runs anywhere, and the page only
+	// says where to start.
+	return "cohere-transcribe", "The place to start on any machine: the most accurate captioning available, one copy shared by every tuner. A processor keeps up with one or two streams; with more tuners going on a processor-only box, the streaming model below holds the pace better."
 }
 
 // memoryNote describes what a model costs to run.
