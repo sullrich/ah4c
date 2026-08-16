@@ -145,7 +145,7 @@ that cannot run it. Every recommendation is guidance, never a gate, and both run
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU. Each concurrent stream adds about a second of caption delay | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
 Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
