@@ -4451,6 +4451,12 @@ func txLogCallback() uintptr {
 				return
 			}
 			text := strings.TrimSpace(txGoString(msg))
+			// The sample window is for the per-stage timing breakdown; the
+			// engine's routine allocation notes ride the same level and say
+			// nothing anyone acts on.
+			if level != 2 && level != 3 && strings.Contains(text, "kv_cache") {
+				return
+			}
 			if text == "" {
 				return
 			}
@@ -5985,7 +5991,6 @@ func (e *captionEngine) caption(item phraseItem) {
 // captionResult accounts for one phrase's outcome and queues its text for
 // display. Called on the recognize goroutine only, in phrase order.
 func (e *captionEngine) captionResult(item phraseItem, text string, err error, took time.Duration) {
-	secs := float64(len(item.pcm)) / asrSampleRate
 	if age := time.Since(item.cut); age > phraseStaleAfter+txRunDeadline {
 		// It was fresh going in and ancient coming out: the recognizer stalled
 		// underneath it. Showing it now would caption the past.
@@ -5996,24 +6001,22 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		logger("[CC] %s recognition failed after %s: %v", e.label, took.Round(time.Millisecond), err)
 		return
 	}
-	// Taking longer than the audio lasted is not the same as falling behind,
-	// and reporting it as though it were was alarming people whose captions
-	// were perfect. Speech has gaps in it: the segmenter only ever hands over
-	// the parts somebody was talking, so a phrase holding 2.7 seconds of speech
-	// usually has a good deal more than 2.7 seconds of wall clock behind it.
-	// A recognizer at just over the length of the speech is comfortably keeping
-	// up with the channel.
-	//
-	// What actually means it is losing is phrases being dropped, which is
-	// counted where it happens. So that is what this waits for, and until then
-	// a thin margin is reported as a thin margin.
-	if took.Seconds() > secs {
+	// What matters is what the viewer feels: how old this caption is as it
+	// reaches the screen, measured from the moment the phrase was cut. The
+	// old comparison — wall time against speech length — stopped meaning
+	// anything when phrases started waiting in a send window on purpose, and
+	// it read healthy streams as struggling ones. Two in flight means a
+	// couple of seconds of age is the design working; real trouble is age
+	// climbing past the freshness ceiling, or phrases being dropped, and
+	// those are what get said.
+	if lag := time.Since(item.cut); lag > 7*time.Second {
 		e.slow++
-		switch drops := atomic.LoadInt64(&e.dropped); {
-		case drops > 0 && (e.slow == 1 || e.slow%20 == 0):
-			logger("[CC] %s falling behind: %s for %.1fs of speech, %d dropped", e.label, took.Round(time.Millisecond), secs, drops)
-		case e.slow == 1 || e.slow%100 == 0:
-			logger("[CC] %s tight on time: %s for %.1fs of speech, keeping up (nothing dropped)", e.label, took.Round(time.Millisecond), secs)
+		if e.slow == 1 || e.slow%20 == 0 {
+			if drops := atomic.LoadInt64(&e.dropped); drops > 0 {
+				logger("[CC] %s captions are running %.0fs behind (%d phrases dropped)", e.label, lag.Seconds(), drops)
+			} else {
+				logger("[CC] %s captions are running %.0fs behind (nothing dropped)", e.label, lag.Seconds())
+			}
 		}
 	}
 	text = e.trimOverlap(text)
