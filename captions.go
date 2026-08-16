@@ -5664,8 +5664,16 @@ func memoryWarning(cfg captionConfig) string {
 	per := streamMemoryMB(m)
 	totalMB := per * n
 	if runtimeOf(m) == rtTranscribe && !m.Streaming {
-		// Shared: the total is one copy no matter how many tuners.
-		totalMB = per
+		// Shared: one copy no matter how many tuners, and the banner has to
+		// say that rather than reciting the per-stream story.
+		if per < 2000 {
+			return ""
+		}
+		return fmt.Sprintf("%s uses about %s of memory, shared by every tuner captioned at once "+
+			"— the copy is loaded when the first stream needs it and freed when the last one ends. "+
+			"That is the weights plus the working memory a decode needs, so it is more than the "+
+			"download size, and it is on top of everything else this machine is doing.",
+			m.Name, humanMB(per))
 	}
 	// Two gigabytes is the point at which this stops being a detail. A single
 	// large model on one tuner is above it on its own, which is deliberate: it
@@ -5727,7 +5735,17 @@ func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
 	} else {
 		total = fmt.Sprintf("about %s with one tuner captioned", humanMB(per))
 	}
-	reuse = "Every stream captioned at the same time loads its own copy, so this can use a lot of memory. It is freed as soon as the stream ends."
+	// The wording scales with the model. "Can use a lot of memory" on a model
+	// small enough for a Pi is not caution, it is noise — and noise on every
+	// card teaches people to ignore the one card where the warning is real.
+	switch {
+	case per < 400:
+		reuse = "Each stream loads its own copy, and at this size that is cheap: comfortable on low-power hardware, freed as soon as the stream ends."
+	case per < 2000:
+		reuse = "Each stream captioned at the same time loads its own copy, freed as soon as the stream ends."
+	default:
+		reuse = "Every stream captioned at the same time loads its own copy, so this can use a lot of memory. It is freed as soon as the stream ends."
+	}
 	return memory, reuse, total
 }
 
