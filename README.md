@@ -78,8 +78,8 @@ leaving the box.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
 - **No GPU, no /dev/dri, no hardware encoder.** Every model except one runs several times
-  faster than real time on an ordinary CPU. The exception is Cohere Transcribe, which is
-  the most accurate of them and wants a graphics card; the page says so next to it.
+  faster than real time on an ordinary CPU. The exception is Cohere Transcribe, the most
+  accurate of them, which needs a graphics card and is not offered without one.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
 The page offers an engine plus your choice of model. Nothing is bundled and nothing is
@@ -164,7 +164,7 @@ engine that runs it, and the page downloads that engine when you pick the model:
 | **Parakeet Unified 0.6B** — continuous and punctuated, twice as accurate on English | Excellent — 1.4% | About two seconds | 731 MB | English | transcribe.cpp |
 | **Multitalker Parakeet Streaming 0.6B** — trained on people talking over each other | Very good — 2.2% | About a second | 734 MB | English | transcribe.cpp |
 | **Parakeet Realtime 120M** — just as quick, no punctuation | Basic | Under a second | 168 MB | English | parakeet.cpp |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Best — 1.3% | 3–4 seconds | 2.4 GB | 8 | transcribe.cpp |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is, GPU only | Best — 1.3% | About a second | 2.4 GB | 8 | transcribe.cpp |
 | **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
 | **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
@@ -183,15 +183,25 @@ continuous, punctuated, multilingual and quick, which no other single entry mana
 neither punctuation nor capitalisation, and no setting changes that — so it is there for
 hardware that cannot spare the cores.
 
-**Cohere Transcribe wants a GPU.** It is the most accurate model here and the top of the
-public open-ASR leaderboard, but it is a 2B model that decodes a word at a time and cannot
-transcribe continuously, so it reads a whole phrase before writing it. On a GPU that is
-comfortable. On a fast desktop CPU it only just keeps pace with live audio, and on a NAS it
-will fall behind and drop speech. Give it CUDA or Vulkan and it is the best captioning in
-the list; leave it on a modest processor and one of the streaming models will serve you
-better. It is offered in eight languages rather than the fourteen it knows, because CEA-608
-cannot carry Japanese, Chinese, Korean, Arabic or Greek — those would come out blank rather
-than wrong.
+**Cohere Transcribe needs a GPU, and is worth one.** It is the most accurate model here and
+the top of the public open-ASR leaderboard. It does not transcribe continuously — it reads a
+whole phrase and then writes it — but that costs less than it sounds: with graphics
+acceleration the captions land about a second behind the picture, as close as the streaming
+models and more accurate than any of them. The output does not read like machine
+transcription. It reads like the closed captions on a broadcast channel, which is the whole
+reason for putting the most accurate model on the list.
+
+The bar for "a GPU" is low. Integrated graphics clear it: a 12th-generation Intel desktop
+chip driving it over Vulkan keeps it about a second behind. What it cannot do is run on a
+processor, where a 2B model decoded a word at a time loses ground against live audio
+continuously until most of the speech is missed. So this one is **gated rather than
+labelled**: with no usable GPU build it cannot be selected or downloaded, the page says why,
+and it appears the moment Vulkan or CUDA is working. Discovering the problem after a 2.4 GB
+download would be a poor way to learn it.
+
+It is offered in eight languages rather than the fourteen it knows, because CEA-608 cannot
+carry Japanese, Chinese, Korean, Arabic or Greek — those would come out blank rather than
+wrong.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That

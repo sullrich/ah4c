@@ -125,7 +125,7 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Speech engine <span class="hint">nothing is bundled in the image; fetch only what you want</span></div>
+            <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled in the image; fetch only what you want</span></div>
             <div id="accel"></div>
             <div id="engineFor"></div>
             <div class="model-list" id="runtimeRow"></div>
@@ -304,6 +304,9 @@ function render() {
     const engineKey = model ? model.engine : 'parakeet';
     const engineName = model ? model.engineName : '';
     const engineReady = !!(model && model.engineReady);
+    document.getElementById('engineHint').textContent = engineName
+        ? 'the model you picked needs ' + engineName
+        : 'nothing is bundled in the image; fetch only what you want';
     document.getElementById('engineFor').innerHTML = `
         <div class="accel ${engineReady ? 'on' : ''}" style="margin-bottom:0.6rem;">
             <span class="dot"></span>
@@ -335,13 +338,23 @@ function render() {
             </div>
         </div>`).join('');
 
-    // Models
+    // Models. One that cannot run here is shown but not selectable, with the
+    // reason spelled out: hiding it entirely just raises the same question
+    // later, and the reason is something the reader can act on.
     document.getElementById('models').innerHTML = state.models.map(m => `
-        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}">
-            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''} onchange="pickModel('${esc(m.key)}')">
+        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}" ${m.runnable ? '' : 'style="opacity:0.6;"'}>
+            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''}
+                   ${m.runnable ? '' : 'disabled'} onchange="pickModel('${esc(m.key)}')">
             <div>
                 <div class="model-name">${esc(m.name)}</div>
                 <div class="model-meta">${esc(m.desc)}</div>
+                ${m.runnable ? '' : `<div class="warn" style="margin:0.5rem 0 0;">
+                    <span class="dot"></span>
+                    <div>
+                        <div class="h">Not available on this machine</div>
+                        <div class="d">${esc(m.blocked)}</div>
+                    </div>
+                </div>`}
                 <div class="model-tags">
                     <span class="tag tag-acc">Accuracy: ${esc(m.accuracy || 'Unrated')}${m.benchmark ? ' &mdash; ' + esc(m.benchmark) : ''}</span>
                     <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Continuous' : 'Phrase at a time'}</span>
@@ -349,8 +362,8 @@ function render() {
                     <span class="tag ${m.punctuation ? '' : 'tag-warn'}">${m.punctuation ? 'Punctuation' : 'No punctuation'}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
-                    ${m.wantsGPU ? '<span class="tag tag-warn">GPU recommended</span>' : ''}
-                    <span class="tag ${m.engineReady ? '' : 'tag-warn'}">${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
+                    ${m.needsGPU ? '<span class="tag tag-warn">GPU required</span>' : ''}
+                    <span class="tag ${m.engineReady ? '' : 'tag-warn'}">Engine: ${esc(m.engineName)}${m.engineReady ? '' : ' &mdash; not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">Runs on: ${esc(m.hardware)}</div>
                 <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
@@ -358,7 +371,7 @@ function render() {
             <div class="model-actions">
                 ${m.installed
                     ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeModel('${esc(m.key)}')">Remove</button>`
-                    : `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>`}
+                    : (m.runnable ? `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>` : '')}
             </div>
         </div>`).join('');
 

@@ -186,15 +186,40 @@ func findEngineVariant(key string) (engineVariant, bool) {
 // library it depends on. Asking the loader is the only honest test: a driver
 // can be present without the device, or injected by a container runtime that
 // left no other trace.
+//
+// The answer is cached, and has to be. Asking means dlopen, which takes the
+// dynamic loader's global lock and bumps a reference this code never drops. The
+// Closed Captions page asks about every build of both engines on every poll,
+// and it polls while a download runs, so an open page was making a few thousand
+// dlopen calls an hour against CUDA and Vulkan. That is how a page that only
+// reports on captions ends up stalling the recognizer it is reporting on: the
+// engine's own calls into native code contend for the same loader lock.
+var (
+	usableLock  sync.Mutex
+	usableCache = map[string]bool{}
+)
+
 func engineUsable(v engineVariant) bool {
 	if v.Needs == "" {
 		return true
 	}
-	h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil || h == 0 {
-		return false
+	usableLock.Lock()
+	defer usableLock.Unlock()
+	if ok, seen := usableCache[v.Needs]; seen {
+		return ok
 	}
-	return true
+	h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	ok := err == nil && h != 0
+	usableCache[v.Needs] = ok
+	return ok
+}
+
+// forgetEngineUsable clears that cache. A driver can be installed while ah4c is
+// running, which is the one moment the answer legitimately changes.
+func forgetEngineUsable() {
+	usableLock.Lock()
+	usableCache = map[string]bool{}
+	usableLock.Unlock()
 }
 
 // engineAsset names the archive for the engine the selected model needs, and
@@ -443,10 +468,12 @@ type captionModel struct {
 	// a wall of unpunctuated capitals is worth knowing about in advance.
 	Streaming   bool `json:"streaming"`
 	Punctuation bool `json:"punctuation"`
-	// WantsGPU marks a model that is only comfortable with graphics
-	// acceleration, so the page can say so before a large download rather than
-	// after it.
-	WantsGPU  bool     `json:"wantsGPU"`
+	// NeedsGPU marks a model that is not usable without graphics acceleration.
+	// It is not a preference: these are offered only where a GPU build can
+	// actually run, because the alternative is a model that loads, falls
+	// steadily behind live audio and drops most of what is said. Captions that
+	// bad are worse than none, and finding out costs a multi-gigabyte download.
+	NeedsGPU  bool     `json:"needsGPU"`
 	Languages []string `json:"languages"`
 }
 
@@ -541,20 +568,23 @@ var captionModelCatalog = []captionModel{
 	{
 		Key:  "cohere-transcribe",
 		Name: "Cohere Transcribe 03-2026",
-		Desc: "The most accurate open speech model there is, and top of the public leaderboard. It cannot transcribe continuously — it reads a whole phrase and then writes it — so captions arrive a few seconds behind however fast the hardware is. Use it where accuracy matters more than keeping pace, and give it a GPU.",
-		// This is the one model here that is genuinely uncomfortable on a
-		// processor: a 2B model decoding a word at a time only just keeps up
-		// with live audio on a fast desktop CPU, and falls behind on a NAS.
-		Latency:     "Three to four seconds",
+		Desc: "The most accurate open speech model there is, and top of the public leaderboard. It reads a whole phrase and then writes it rather than transcribing as the audio arrives, so it trails the picture by about the length of a phrase. With a GPU behind it that is around a second, which is as good as the streaming models and more accurate than any of them. The result does not read like machine transcription: it reads like the closed captions on a broadcast channel, which is the point of putting the most accurate model on the list.",
+		// This is the one model here that is not merely slower on a processor
+		// but unusable on one: 2B parameters decoded a word at a time loses
+		// ground against live audio continuously until most of the speech is
+		// missed. It is gated on a working GPU build for that reason. The bar
+		// is low, though — integrated graphics clear it comfortably — so the
+		// gate is about having a GPU at all rather than having a good one.
+		Latency:     "About a second, with a GPU",
 		Accuracy:    "Best available",
 		Benchmark:   "1.3% word error rate",
-		Hardware:    "A GPU. It will run on a fast multi-core CPU, but only just keeps pace with live audio there and will fall behind on modest hardware.",
+		Hardware:    "Any GPU, including the integrated graphics in a modern desktop chip: a 12th-generation Intel iGPU over Vulkan keeps it about a second behind the picture. Not offered without one, because on a processor it cannot keep pace with live audio and drops most of what is said.",
 		Runtime:     rtTranscribe,
 		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
 		File:        "cohere-transcribe-03-2026-Q8_0.gguf",
 		SizeMB:      2410,
 		Punctuation: true,
-		WantsGPU:    true,
+		NeedsGPU:    true,
 		Languages:   cohereLanguages,
 	},
 	{
@@ -762,6 +792,11 @@ func downloadStatus() captionDownload {
 // startModelDownload pulls a model from Hugging Face in the background. It is a
 // no-op if a download is already running.
 func startModelDownload(m captionModel) error {
+	// The page hides a model it cannot run, but the endpoint is reachable
+	// without it, and this is the one download where a mistake costs gigabytes.
+	if m.NeedsGPU && !gpuAvailable() {
+		return fmt.Errorf("%s needs a GPU, and no GPU build can run in this container", m.Name)
+	}
 	dlLock.Lock()
 	if dlState.Active {
 		dlLock.Unlock()
@@ -1403,6 +1438,29 @@ func accelStatus() accelReport {
 		}
 	}
 	return r
+}
+
+// gpuAvailable reports whether any GPU build could actually run here: its
+// driver loads, and for Vulkan a graphics device is present as well. It asks
+// the same questions accelStatus does, but about every build rather than the
+// selected one, because what it decides is whether a model that cannot work
+// without a GPU is offered at all.
+//
+// It deliberately does not care whether that build has been downloaded yet.
+// Refusing to show a model because the engine it would use is still a button
+// press away would be a maze rather than a gate.
+func gpuAvailable() bool {
+	nodes := renderNodes()
+	for _, v := range engineVariants {
+		if v.Key == "cpu" || !engineUsable(v) {
+			continue
+		}
+		if v.Key == "vulkan" && len(nodes) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // restoreGPURuntime puts the driver back after a container rebuild, from the
@@ -2752,6 +2810,15 @@ type recognizer interface {
 	beginStream(language string) error
 	feedStream(pcm []float32) *streamResult
 	finishStream() *streamResult
+	// idleFlush releases the tail of a sentence after the talking stops.
+	//
+	// A streaming engine holds the last few words back until more audio arrives
+	// to confirm them, which is right in the middle of speech and wrong at the
+	// end of it: the closing words of a sentence would sit unsaid until the next
+	// person started talking, so a pause left the caption hanging mid-sentence
+	// for as long as the room was quiet. A model that reports the end of an
+	// utterance itself has nothing to do here.
+	idleFlush() *streamResult
 	Close()
 }
 
@@ -2908,6 +2975,11 @@ func (p *parakeet) feedStream(pcm []float32) *streamResult {
 	runtime.KeepAlive(pcm)
 	return parseStreamResult(cStringFree(out))
 }
+
+// idleFlush does nothing here. These models mark the end of an utterance
+// themselves and the feed carries that flag out, so a pause already closes the
+// sentence without being asked.
+func (p *parakeet) idleFlush() *streamResult { return nil }
 
 // finishStream flushes the tail when the stream ends.
 func (p *parakeet) finishStream() *streamResult {
@@ -3359,6 +3431,39 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	return t.takeCommitted()
 }
 
+// idleFlush ends the utterance and opens a new one, which is how the last words
+// of a sentence get said while the room is still quiet.
+//
+// Finalizing is the only way to make this engine release text it is holding for
+// confirmation, and finalizing closes the stream, so a fresh one is started
+// straight after. That is the right shape anyway: a pause is an utterance
+// boundary, and the next sentence begins with no assumptions carried into it.
+func (t *transcribeModel) idleFlush() *streamResult {
+	t.mu.Lock()
+	if t.session == 0 || !t.streaming {
+		t.mu.Unlock()
+		return nil
+	}
+	u := txStreamUpdate{}
+	txStreamUpdateInit(unsafe.Pointer(&u))
+	st := txStreamFinalize(t.session, unsafe.Pointer(&u))
+	var r *streamResult
+	if st == txOK {
+		r = t.takeCommitted()
+	}
+	t.streaming = false
+	t.mu.Unlock()
+
+	if err := t.beginStream(""); err != nil {
+		logger("[CC] could not reopen the continuous session after a pause: %v", err)
+	}
+	if r != nil {
+		// The talking stopped, so whatever just came out finishes a sentence.
+		r.EOU = 1
+	}
+	return r
+}
+
 func (t *transcribeModel) finishStream() *streamResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -3455,6 +3560,9 @@ type captionEngine struct {
 	audioCh chan []byte
 	closed  chan struct{}
 	once    sync.Once
+	// mu guards ffmpeg and audioIn, which are replaced when the decoder is
+	// restarted underneath the goroutine writing to it.
+	mu sync.Mutex
 
 	// done is closed when the listening goroutine has returned. Nothing the
 	// engine owns may be freed before then: the recognizer is native code, and
@@ -3464,6 +3572,13 @@ type captionEngine struct {
 	// streaming is set when the chosen model transcribes continuously; the
 	// phrase segmenter is not used in that case.
 	streaming bool
+	// phrases carries cut phrases from the reader to the recognizer, so that a
+	// slow model never stops the audio being read. It is small on purpose: a
+	// phrase is a couple of hundred kilobytes, and a recognizer far enough
+	// behind to fill this is not going to catch up by being given more room.
+	// Only the reader goroutine touches dropped.
+	phrases chan []float32
+	dropped int
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
@@ -3481,39 +3596,15 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		cfg:     cfg,
 		model:   model,
 		audioCh: make(chan []byte, 64),
+		phrases: make(chan []float32, 3),
 		closed:  make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 
-	// ffmpeg is already in the image and is only asked for the audio, so the
-	// video never passes through a codec: the caption bytes are the only change
-	// this feature makes to the stream.
-	// Probe and analysis are held to a second so a tune starts captioning
-	// quickly. They are not switched off: "nobuffer" and "low_delay" make
-	// ffmpeg emit silence for these encoders rather than audio, which shows up
-	// as captions that simply never appear.
-	e.ffmpeg = exec.Command("ffmpeg",
-		"-hide_banner", "-loglevel", "error",
-		"-probesize", "1000000", "-analyzeduration", "1000000",
-		"-f", "mpegts", "-i", "pipe:0",
-		"-vn", "-sn", "-dn",
-		"-ac", "1", "-ar", strconv.Itoa(asrSampleRate), "-f", "s16le", "pipe:1")
-	audioIn, err := e.ffmpeg.StdinPipe()
+	pcm, err := e.startDecoder()
 	if err != nil {
 		model.Close()
 		return nil, err
-	}
-	pcm, err := e.ffmpeg.StdoutPipe()
-	if err != nil {
-		model.Close()
-		return nil, err
-	}
-	e.ffmpeg.Stderr = os.Stderr
-	e.audioIn = audioIn
-
-	if err := e.ffmpeg.Start(); err != nil {
-		model.Close()
-		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
 
 	if m.Streaming {
@@ -3526,8 +3617,12 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 
 	go e.pumpAudio()
 	if e.streaming {
+		// A streaming model is fed a tenth of a second at a time and returns in
+		// a fraction of it, so reading and recognizing stay on one goroutine
+		// there; it is the phrase-at-a-time path that can block for seconds.
 		go e.listenStreaming(pcm)
 	} else {
+		go e.recognize()
 		go e.listen(pcm)
 	}
 	mode := "phrase at a time"
@@ -3556,11 +3651,81 @@ func runtimeOf(m captionModel) string {
 	return m.Runtime
 }
 
+// startDecoder launches ffmpeg and returns the pipe its audio comes out of.
+//
+// ffmpeg is already in the image and is only asked for the audio, so the video
+// never passes through a codec: the caption bytes are the only change this
+// feature makes to the stream.
+//
+// Probe and analysis are held to a second so a tune starts captioning quickly.
+// They are not switched off: "nobuffer" and "low_delay" make ffmpeg emit silence
+// for these encoders rather than audio, which shows up as captions that simply
+// never appear.
+func (e *captionEngine) startDecoder() (io.ReadCloser, error) {
+	cmd := exec.Command("ffmpeg",
+		"-hide_banner", "-loglevel", "error",
+		"-probesize", "1000000", "-analyzeduration", "1000000",
+		"-f", "mpegts", "-i", "pipe:0",
+		"-vn", "-sn", "-dn",
+		"-ac", "1", "-ar", strconv.Itoa(asrSampleRate), "-f", "s16le", "pipe:1")
+	audioIn, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	pcm, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %w", err)
+	}
+	e.mu.Lock()
+	e.ffmpeg, e.audioIn = cmd, audioIn
+	e.mu.Unlock()
+	return pcm, nil
+}
+
+// restartDecoder brings the audio decoder back after it has stopped.
+//
+// It should not stop, and after the reader and the recognizer were separated it
+// has no reason to. But when it did, captions were gone for the rest of the
+// recording while the picture carried on perfectly, and nothing said so: a
+// three hour capture lost its captions in the first ten minutes and looked
+// fine. Coming back costs a second of speech; not coming back costs the lot.
+func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
+	select {
+	case <-e.closed:
+		return nil, false
+	default:
+	}
+	if attempt > 5 {
+		logger("[CC] %s the audio decoder keeps stopping; giving up on captions for this tune", e.label)
+		return nil, false
+	}
+	e.mu.Lock()
+	old, oldIn := e.ffmpeg, e.audioIn
+	e.mu.Unlock()
+	if oldIn != nil {
+		oldIn.Close()
+	}
+	if old != nil && old.Process != nil {
+		old.Process.Kill()
+		old.Wait()
+	}
+	pcm, err := e.startDecoder()
+	if err != nil {
+		logger("[CC] %s could not restart the audio decoder: %v", e.label, err)
+		return nil, false
+	}
+	logger("[CC] %s the audio decoder stopped and was restarted (attempt %d); captions resume shortly", e.label, attempt)
+	return pcm, true
+}
+
 // pumpAudio hands buffered transport stream bytes to ffmpeg. Writes here must
 // never block the video path, so a slow recognizer loses audio rather than
 // stalling the DVR.
 func (e *captionEngine) pumpAudio() {
-	defer e.audioIn.Close()
 	for {
 		select {
 		case <-e.closed:
@@ -3569,8 +3734,17 @@ func (e *captionEngine) pumpAudio() {
 			if !ok {
 				return
 			}
-			if _, err := e.audioIn.Write(b); err != nil {
-				return
+			e.mu.Lock()
+			w := e.audioIn
+			e.mu.Unlock()
+			if w == nil {
+				continue
+			}
+			// A write that fails means the decoder has gone. The reader notices
+			// the same thing and restarts it, so this keeps going rather than
+			// returning and leaving the replacement with nothing to read.
+			if _, err := w.Write(b); err != nil {
+				continue
 			}
 		}
 	}
@@ -3611,8 +3785,19 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// 100 ms per feed: short enough that nothing waits on a buffer, long enough
 	// that the call overhead is irrelevant next to the work inside.
 	const chunk = asrSampleRate / 10
+	const chunkSec = 0.1
+	// How long the talking has to stop before the sentence is closed off. Short
+	// enough that a natural pause ends the line while the pause is still
+	// happening, long enough that the gap between two words never does.
+	const flushSilence = 0.6
 	raw := make([]byte, chunk*2)
 	buf := make([]float32, chunk)
+	floor := 0.005
+	quiet := 0.0
+	// Nothing is pending before anyone has spoken, so the first silence has
+	// nothing to flush.
+	settled := true
+	decoderTries := 0
 
 	take := func(r *streamResult) {
 		if r == nil {
@@ -3638,12 +3823,48 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
 			take(e.model.finishStream())
-			return
+			next, ok := e.restartDecoder(decoderTries + 1)
+			if !ok {
+				return
+			}
+			decoderTries++
+			pcm.Close()
+			pcm = next
+			// The continuous session has just been closed off, so open a new
+			// one for the audio that is about to start arriving again.
+			if err := e.model.beginStream(e.cfg.Language); err != nil {
+				logger("[CC] %s could not resume continuous recognition: %v", e.label, err)
+				return
+			}
+			quiet, settled = 0, true
+			continue
 		}
+		// See the phrase path: the budget counts consecutive failures.
+		decoderTries = 0
+		var sum float64
 		for i := range buf {
-			buf[i] = float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
+			v := float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
+			buf[i] = v
+			sum += float64(v) * float64(v)
 		}
 		take(e.model.feedStream(buf))
+
+		// Watch for the talking stopping, so the end of a sentence is not left
+		// waiting for the next one to start. The floor tracks the channel's own
+		// noise, because broadcast audio is never actually silent.
+		rms := math.Sqrt(sum / float64(len(buf)))
+		if rms > math.Max(floor*3.0, 0.012) {
+			quiet, settled = 0, false
+			continue
+		}
+		floor = 0.995*floor + 0.005*rms
+		if settled {
+			continue
+		}
+		if quiet += chunkSec; quiet >= flushSilence {
+			take(e.model.idleFlush())
+			settled = true
+		}
 	}
 }
 
@@ -3656,16 +3877,33 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 	e.enc.pushText(text, breakAfter)
 }
 
-// listen reads decoded audio, splits it into phrases and captions each one.
+// listen reads decoded audio, splits it into phrases and hands each one to the
+// recognizer.
+//
+// Reading and recognizing are on separate goroutines, and have to be. They
+// shared one until captions stopped for twenty seconds at a time, and the chain
+// is worth spelling out because nothing about it is local: a model that took a
+// while over a phrase stopped draining ffmpeg's output for exactly as long as
+// it was thinking, ffmpeg filled its pipe and blocked, a blocked ffmpeg stopped
+// reading its own input, and the transport stream bytes queued behind that were
+// dropped by feed. Dropping bytes out of the middle of a transport stream does
+// not cost a moment of audio, it corrupts the stream, and ffmpeg then emits
+// nothing at all until it finds its way back in. So a model that was merely
+// slow produced silence rather than late captions, and it landed mid-sentence
+// because a long phrase is what triggered it.
+//
+// Reading never blocks now. When the recognizer cannot keep up the cost is a
+// dropped phrase, which is a missing sentence rather than a broken stream.
 func (e *captionEngine) listen(pcm io.ReadCloser) {
-	defer close(e.done)
 	defer pcm.Close()
+	defer close(e.phrases)
 
 	raw := make([]byte, vadFrame*2)
 	var pending []float32
 	speaking := false
 	var silenceRun, speechLen float64
 	floor := 0.005
+	decoderTries := 0
 
 	for {
 		select {
@@ -3674,8 +3912,20 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		default:
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
-			return
+			next, ok := e.restartDecoder(decoderTries + 1)
+			if !ok {
+				return
+			}
+			decoderTries++
+			pcm.Close()
+			pcm = next
+			pending, speaking, silenceRun, speechLen = nil, false, 0, 0
+			continue
 		}
+		// Audio is flowing again, so the restart budget is for consecutive
+		// failures rather than for the whole recording. A three hour capture
+		// that hiccups twice an hour should recover every time.
+		decoderTries = 0
 
 		frame := make([]float32, vadFrame)
 		var sum float64
@@ -3741,6 +3991,38 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			continue
 		}
 		speechLen = 0
+		e.queue(audio)
+	}
+}
+
+// queue hands a phrase to the recognizer, and never waits for it.
+func (e *captionEngine) queue(audio []float32) {
+	select {
+	case e.phrases <- audio:
+	default:
+		// The recognizer is still working through what it has. Losing this
+		// phrase costs a sentence; waiting here would cost the audio stream,
+		// which is the trade that made captions stop altogether.
+		e.dropped++
+		if e.dropped == 1 || e.dropped%10 == 0 {
+			logger("[CC] %s recognizer is behind and dropped %d phrase(s) so far; a GPU build or a lighter model would keep up", e.label, e.dropped)
+		}
+	}
+}
+
+// recognize turns queued phrases into captions, one at a time.
+//
+// It owns the recognizer for the life of the engine, which is what lets Close
+// wait for this goroutine and then free the model safely: no other goroutine
+// ever calls into it on this path.
+func (e *captionEngine) recognize() {
+	defer close(e.done)
+	for audio := range e.phrases {
+		select {
+		case <-e.closed:
+			return
+		default:
+		}
 		e.caption(audio)
 	}
 }
@@ -3890,6 +4172,13 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 		logger("[CC] %s model %s is not downloaded, captions disabled for this tune", label, m.Key)
 		return src
 	}
+	if m.NeedsGPU && !gpuAvailable() {
+		// Captioning anyway would be worse than not captioning: this model on a
+		// processor loses ground against live audio until most of the speech is
+		// missed, and half a transcript is harder to watch than none.
+		logger("[CC] %s model %s needs a GPU and none is usable here, captions disabled for this tune", label, m.Key)
+		return src
+	}
 	if !engineInstalled() {
 		logger("[CC] %s the speech runtime is not downloaded, captions disabled for this tune", label)
 		return src
@@ -4017,21 +4306,36 @@ type captionStatusModel struct {
 	Engine      string `json:"engine"`
 	EngineName  string `json:"engineName"`
 	EngineReady bool   `json:"engineReady"`
-	URL         string `json:"url"`
+	// Runnable is false when this machine cannot give the model what it needs.
+	// Blocked says what is missing, in the words the page shows.
+	Runnable bool   `json:"runnable"`
+	Blocked  string `json:"blocked"`
+	URL      string `json:"url"`
 }
 
 func captionStatusPayload() captionStatus {
 	cfg := currentCaptionConfig()
 	cur := currentEngineVariant()
+	hasGPU := gpuAvailable()
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
+		blocked := ""
+		if m.NeedsGPU && !hasGPU {
+			blocked = "This model needs a GPU and no GPU build can run in this container yet. " +
+				"On a processor it cannot keep pace with live audio: it falls further behind every " +
+				"minute and drops most of what is said, so it is not offered rather than left to " +
+				"disappoint after a multi-gigabyte download. The bar is low — integrated graphics " +
+				"clear it comfortably — so set up Vulkan or CUDA above and this appears."
+		}
 		models = append(models, captionStatusModel{
 			captionModel: m,
 			Installed:    modelInstalled(m),
 			Engine:       rt,
 			EngineName:   findSpeechRuntime(rt).Name,
 			EngineReady:  runtimeInstalled(rt, cur),
+			Runnable:     blocked == "",
+			Blocked:      blocked,
 			URL:          modelURL(m),
 		})
 	}
@@ -4065,6 +4369,10 @@ func captionStatusPayload() captionStatus {
 				continue
 			}
 			v.SizeMB = runtimeSizeMB(eng.Key, v)
+			// Say which engine this build belongs to. "GPU via Vulkan" on its
+			// own does not tell you what is about to be downloaded when there
+			// are two engines that both have one.
+			v.Name = eng.Name + " · " + v.Name
 			list = append(list, captionStatusEngine{
 				engineVariant: v,
 				Usable:        engineUsable(v),
