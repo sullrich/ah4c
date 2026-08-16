@@ -406,11 +406,7 @@ function render() {
     latSel.innerHTML = lats.map(l =>
         `<option value="${esc(l.key)}" ${l.key === (cfg.latency || 'balanced') ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
     const chosen = lats.find(l => l.key === (cfg.latency || 'balanced'));
-    document.getElementById('latencyNote').textContent = chosen
-        ? chosen.desc + (model && !model.streaming
-            ? ' For this model the setting decides how long a phrase may run before it is cut, which is most of the delay you see.'
-            : ' For this model the setting picks how far ahead it listens before committing a word.')
-        : '';
+    document.getElementById('latencyNote').textContent = chosen ? chosen.desc : '';
 
     const off = document.getElementById('offset');
     off.innerHTML = Array.from({length: 16}, (_, i) =>
