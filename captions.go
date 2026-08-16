@@ -1180,12 +1180,38 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		log.Write(b)
 		return e
 	}
+	// A fresh fetch replaces the saved set wholesale. Leaving the old
+	// packages beside the new ones would have the installer lay a 2022 driver
+	// over a 2026 one, or the reverse, depending on filename order — mixed
+	// versions are strictly worse than either.
+	if old, _ := savedDebs(g); len(old) > 0 {
+		for _, p := range old {
+			os.Remove(p)
+		}
+		logger("[CC] Cleared %d previously saved packages before fetching fresh ones", len(old))
+	}
+	// The stable suite of the base image freezes its graphics drivers for
+	// years — the driver it offers today shipped before this GPU's compute
+	// paths were optimised, and a modern engine on a museum driver runs at a
+	// fraction of the hardware's speed while looking perfectly healthy. The
+	// distribution's backports suite carries the current driver for exactly
+	// this reason, so it is preferred and stable is the fallback.
+	suite := ensureBackports(&log)
 	if err := run("apt-get", "update"); err != nil {
 		return log.String(), fmt.Errorf("apt-get update: %w", err)
 	}
-	args := append([]string{"apt-get", "install", "-y", "--no-install-recommends",
-		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}, g.Packages...)
+	base := []string{"apt-get", "install", "-y", "--no-install-recommends",
+		"--reinstall", "--download-only", "-o", "Dir::Cache::archives=" + abs}
+	args := base
+	if suite != "" {
+		args = append(append([]string{}, base...), "-t", suite)
+	}
+	args = append(args, g.Packages...)
 	aptErr := run(args...)
+	if aptErr != nil && suite != "" {
+		logger("[CC] The backports fetch failed; falling back to the stable packages")
+		aptErr = run(append(append([]string{}, base...), g.Packages...)...)
+	}
 
 	// Whether or not apt honoured the archive directory, the packages have to
 	// end up in the bind mount, because that is the only thing a rebuild does
@@ -1202,8 +1228,47 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return log.String(), fmt.Errorf("no packages ended up in %s", dir)
 	}
 	n, _ := savedDebs(g)
-	logger("[CC] Saved %d packages for %s in %s", len(n), g.Name, dir)
+	names := make([]string, len(n))
+	for i, p := range n {
+		names[i] = filepath.Base(p)
+	}
+	// The filenames carry the versions, and the versions are the whole story:
+	// a driver from the wrong era looks identical in every way but speed.
+	logger("[CC] Saved %d packages for %s in %s: %s", len(n), g.Name, dir, strings.Join(names, " "))
 	return log.String(), nil
+}
+
+// ensureBackports makes the base image's backports suite available and
+// returns its name, or "" when it cannot be arranged. Backports is where the
+// distribution keeps current graphics drivers for a stable release.
+func ensureBackports(log *strings.Builder) string {
+	b, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	codename := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "VERSION_CODENAME="); ok {
+			codename = strings.Trim(strings.TrimSpace(v), `"`)
+		}
+	}
+	if codename == "" {
+		return ""
+	}
+	suite := codename + "-backports"
+	// Already configured, by the image or an earlier run?
+	for _, f := range []string{"/etc/apt/sources.list", "/etc/apt/sources.list.d/backports.list", "/etc/apt/sources.list.d/debian.sources"} {
+		if c, err := os.ReadFile(f); err == nil && strings.Contains(string(c), suite) {
+			return suite
+		}
+	}
+	line := fmt.Sprintf("deb http://deb.debian.org/debian %s main\n", suite)
+	if err := os.WriteFile("/etc/apt/sources.list.d/backports.list", []byte(line), 0o644); err != nil {
+		fmt.Fprintf(log, "could not add %s: %v\n", suite, err)
+		return ""
+	}
+	logger("[CC] Added the %s package source for a current graphics driver", suite)
+	return suite
 }
 
 // harvestDebs copies anything apt left in the default cache into the bind
