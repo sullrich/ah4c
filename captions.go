@@ -2109,6 +2109,26 @@ func reconcileResidentModel() {
 		residentSaid = ""
 		return
 	}
+	// Opening the engine is not free to do early, and this is the cost.
+	//
+	// The engine scans for its backends once, when it opens, and that answer
+	// stands for the life of the process. Until the startup load existed
+	// nothing opened it until the first captioned tune, which meant a driver
+	// installed from the page at any point beforehand was simply picked up —
+	// nobody ever had to restart anything. Opening it at container start spends
+	// that one scan before the user has done anything, so a driver installed
+	// afterwards could never be seen, and the page had to start asking for a
+	// restart. That is a worse container for the sake of a faster first tune.
+	//
+	// So the scan is only spent where a driver arriving later could not have
+	// changed its answer: on a GPU that already works, or on a machine with no
+	// graphics device at all, where a driver would change nothing. A device
+	// present and no driver working yet is precisely the state somebody is
+	// about to fix from the page, and the engine stays shut until they have.
+	if gpuStillPossible() {
+		sayResidentOnce("[CC] Not loading the model at startup yet: this container has a graphics device but no working GPU driver, and opening the engine now would settle it on the processor for good. Install the driver from the Closed Captions page and it will load then, with no restart")
+		return
+	}
 	variant, err := captionVariantFor(m)
 	if err != nil {
 		sayResidentOnce("[CC] The model could not be readied at startup: %v", err)
@@ -2154,6 +2174,21 @@ func reconcileResidentModel() {
 	}
 	residentSvc, residentKey, residentSaid = svc, key, ""
 	logger("[CC] %s stays loaded in memory from here on, so a tune never waits on it", filepath.Base(weights))
+}
+
+// gpuStillPossible reports whether installing a driver from the page could
+// still change which backends the engine would find.
+//
+// A graphics device with no usable GPU build behind it is the one state where
+// the answer is not settled: the device is there, the driver is a button press
+// away, and whoever passed /dev/dri through meant to use it. No device means no
+// driver would help, and a GPU build that already loads means the driver is
+// there — both of those are final, and the engine may be opened against them.
+func gpuStillPossible() bool {
+	if len(renderNodes()) == 0 {
+		return false
+	}
+	return gpuVariant(neededRuntime()) == ""
 }
 
 // releaseResidentModel drops the standing claim. Streams still on the service
