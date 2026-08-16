@@ -59,6 +59,61 @@ const (
 // no cgo, no ONNX Runtime and nothing linked into the binary.
 const parakeetRelease = "v0.5.0"
 
+// transcribeRelease is the transcribe.cpp build, the second engine. It is the
+// same idea as parakeet.cpp — ggml, a flat C entry point, downloaded rather
+// than bundled — but it runs a much wider set of model families, which is what
+// makes Cohere Transcribe and the newer streaming checkpoints reachable at all.
+// parakeet.cpp only ever implements NVIDIA's Parakeet architectures.
+//
+// The tag is v0.1.3; the asset file names carry the version without the v.
+const transcribeRelease = "0.1.3"
+
+// A model names the engine that can run it. Nothing else in the feature cares
+// which is which: the engines are downloaded the same way, kept in the same
+// directory, and hidden behind the same recognizer interface.
+const (
+	rtParakeet   = "parakeet"
+	rtTranscribe = "transcribe"
+)
+
+// speechRuntime describes an engine for the page. Both are fetched on demand
+// and neither is in the image.
+type speechRuntime struct {
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Desc    string `json:"desc"`
+}
+
+var speechRuntimes = []speechRuntime{
+	{
+		Key: rtParakeet, Name: "parakeet.cpp", Version: parakeetRelease,
+		Desc: "NVIDIA's Parakeet and Nemotron models. About a megabyte.",
+	},
+	{
+		Key: rtTranscribe, Name: "transcribe.cpp", Version: "v" + transcribeRelease,
+		Desc: "A wider set of families, including Cohere Transcribe. Larger, because it carries its own ggml backends.",
+	},
+}
+
+// runtimeDescriptions is the engine blurbs keyed by engine, for the page.
+func runtimeDescriptions() map[string]string {
+	out := make(map[string]string, len(speechRuntimes))
+	for _, r := range speechRuntimes {
+		out[r.Key] = r.Name + " " + r.Version + ". " + r.Desc
+	}
+	return out
+}
+
+func findSpeechRuntime(key string) speechRuntime {
+	for _, r := range speechRuntimes {
+		if r.Key == key {
+			return r
+		}
+	}
+	return speechRuntimes[0]
+}
+
 // engineVariant is a build of the engine: which processor it runs the model on.
 //
 // All of them are downloaded at run time, so choosing one costs nothing in the
@@ -142,11 +197,143 @@ func engineUsable(v engineVariant) bool {
 	return true
 }
 
-// engineAsset names the engine archive for this build and the library inside
-// it. The architecture is decided at compile time, so an arm64 image fetches
-// the arm64 build without being told which it is.
+// engineAsset names the archive for the engine the selected model needs, and
+// the library inside it. The architecture is decided at compile time, so an
+// arm64 image fetches the arm64 build without being told which it is.
 func engineAsset() (url, local string, ok bool) {
-	return engineAssetFor(runtime.GOOS, runtime.GOARCH, currentEngineVariant())
+	url, _, local, ok = runtimeAssetFor(neededRuntime(), runtime.GOOS, runtime.GOARCH, currentEngineVariant())
+	return url, local, ok
+}
+
+// neededRuntime is the engine the selected model runs on. A model that names
+// no engine is a Parakeet one, which is what the catalog held before there was
+// a second engine to name.
+func neededRuntime() string {
+	m, ok := findCaptionModel(currentCaptionConfig().Model)
+	if !ok || m.Runtime == "" {
+		return rtParakeet
+	}
+	return m.Runtime
+}
+
+// runtimeAssetFor is the platform table for both engines. It returns where the
+// archive is, the directory its contents are unpacked into, and the library
+// whose presence means the engine is installed.
+//
+// The unpack directory is named by the engine's own build rather than by the
+// processor choice, because the two engines do not divide their builds the same
+// way: parakeet.cpp publishes one archive per backend, while transcribe.cpp
+// puts the processor and Vulkan backends in a single archive and picks between
+// them when the model is loaded.
+func runtimeAssetFor(rt, goos, goarch, variant string) (url, dir, lib string, ok bool) {
+	if rt == rtTranscribe {
+		url, lane, ok := transcribeAssetFor(goos, goarch, variant)
+		if !ok {
+			return "", "", "", false
+		}
+		return url, filepath.Join(rtTranscribe, lane), transcribeLib(goos), true
+	}
+	url, lib, ok = engineAssetFor(goos, goarch, variantSuffix(variant))
+	if !ok {
+		return "", "", "", false
+	}
+	return url, variant, lib, true
+}
+
+// transcribeAssetFor names the transcribe.cpp archive and the build inside it.
+//
+// Two things differ from parakeet.cpp and both simplify what has to be
+// downloaded. The processor and Vulkan backends ship together, so switching
+// between them costs nothing once either is here. And libtranscribe.so does not
+// link Vulkan itself — the backend is a separate library the engine loads if it
+// finds one — so the combined build runs on a machine with no GPU at all rather
+// than failing to open.
+func transcribeAssetFor(goos, goarch, variant string) (url, lane string, ok bool) {
+	switch goos + "/" + goarch {
+	case "linux/amd64":
+		lane = "linux-x86_64-cpu-vulkan"
+		if variant == "cuda" || variant == "cuda12" {
+			// There is one CUDA build rather than the two parakeet.cpp offers,
+			// so both of those choices land on it.
+			lane = "linux-x86_64-cuda"
+		}
+	case "linux/arm64":
+		lane = "linux-aarch64-cpu-vulkan"
+	case "darwin/arm64":
+		lane = "macos-arm64-metal"
+	case "darwin/amd64":
+		lane = "macos-x86_64-cpu"
+	default:
+		return "", "", false
+	}
+	return "https://github.com/handy-computer/transcribe.cpp/releases/download/v" + transcribeRelease +
+		"/transcribe-native-" + transcribeRelease + "-" + lane + ".tar.gz", lane, true
+}
+
+// runtimeSizeMB is roughly what a build costs to download. The two engines are
+// not remotely the same size: parakeet.cpp is a megabyte because ggml is
+// compiled into it, while transcribe.cpp ships its backends separately and the
+// Vulkan one alone is most of the archive.
+func runtimeSizeMB(rt string, v engineVariant) int {
+	if rt != rtTranscribe {
+		return v.SizeMB
+	}
+	_, lane, ok := transcribeAssetFor(runtime.GOOS, runtime.GOARCH, v.Key)
+	if !ok {
+		return 0
+	}
+	switch lane {
+	case "linux-x86_64-cuda":
+		return 216
+	case "linux-x86_64-cpu-vulkan":
+		return 28
+	case "linux-aarch64-cpu-vulkan":
+		return 25
+	}
+	return 2
+}
+
+func transcribeLib(goos string) string {
+	if goos == "darwin" {
+		return "libtranscribe.dylib"
+	}
+	return "libtranscribe.so"
+}
+
+// runtimeVariantOffered reports whether a processor choice is a real choice for
+// an engine on this platform, so the page does not offer a build that is either
+// unpublished or identical to one already listed.
+func runtimeVariantOffered(rt, goos, goarch, variant string) bool {
+	if rt == rtTranscribe {
+		_, lane, ok := transcribeAssetFor(goos, goarch, variant)
+		if !ok {
+			return false
+		}
+		switch variant {
+		case "cpu":
+			return true
+		case "vulkan":
+			return strings.Contains(lane, "vulkan")
+		case "cuda":
+			return strings.Contains(lane, "cuda")
+		case "cuda12":
+			// transcribe.cpp publishes a single CUDA build, already offered.
+			return false
+		}
+		return false
+	}
+	url, _, ok := engineAssetFor(goos, goarch, variantSuffix(variant))
+	if !ok {
+		return false
+	}
+	if variant == "cpu" {
+		return true
+	}
+	// A variant with no build of its own for this platform is not a choice.
+	// Apple silicon is the clear case: Metal is in the one build there, and
+	// arm64 Linux has no CUDA build at all.
+	cpuURL, _, _ := engineAssetFor(goos, goarch, "cpu")
+	return url != cpuURL
 }
 
 // currentEngineVariant is the configured build, falling back to the processor
@@ -185,17 +372,37 @@ func engineAssetFor(goos, goarch, variant string) (url, local string, ok bool) {
 	return "", "", false
 }
 
-// engineLibPath is where the downloaded engine lands.
+// engineLibPath is where the engine the selected model needs would land.
 func engineLibPath() string {
-	_, local, ok := engineAsset()
+	return runtimeLibPath(neededRuntime(), currentEngineVariant())
+}
+
+// runtimeLibPath is where a given engine's library lives once downloaded.
+func runtimeLibPath(rt, variant string) string {
+	_, dir, lib, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
 	if !ok {
 		return ""
 	}
-	return filepath.Join(captionRuntime, currentEngineVariant(), local)
+	return filepath.Join(captionRuntime, dir, lib)
+}
+
+// runtimeDirFor is the directory an engine unpacks into. transcribe.cpp needs
+// it by name at run time as well as at download time: its ggml backends are
+// separate libraries next to the engine, and it is told where to find them.
+func runtimeDirFor(rt, variant string) string {
+	_, dir, _, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
+	if !ok {
+		return ""
+	}
+	return filepath.Join(captionRuntime, dir)
 }
 
 func engineInstalled() bool {
-	p := engineLibPath()
+	return runtimeInstalled(neededRuntime(), currentEngineVariant())
+}
+
+func runtimeInstalled(rt, variant string) bool {
+	p := runtimeLibPath(rt, variant)
 	if p == "" {
 		return false
 	}
@@ -213,14 +420,33 @@ type captionModel struct {
 	Key  string `json:"key"`
 	Name string `json:"name"`
 	// Desc says what the model does, Latency how soon captions appear, and
-	// Hardware what it is comfortable running on. All three are shown on the
-	// page, because the choice between these is not really about accuracy.
-	Desc      string   `json:"desc"`
-	Latency   string   `json:"latency"`
-	Hardware  string   `json:"hardware"`
-	File      string   `json:"file"`
-	SizeMB    int      `json:"sizeMB"`
-	Streaming bool     `json:"streaming"`
+	// Hardware what it is comfortable running on. All of it is shown on the
+	// page, because the choice between these is a trade rather than a ranking:
+	// the most accurate model is the slowest, and the fastest writes no
+	// punctuation.
+	Desc     string `json:"desc"`
+	Latency  string `json:"latency"`
+	Hardware string `json:"hardware"`
+	// Accuracy is the plain-English tier and Benchmark the measurement behind
+	// it. Benchmark is empty where there is no published figure, rather than
+	// carrying a guess: a made-up number would outrank a real one on the page.
+	Accuracy  string `json:"accuracy"`
+	Benchmark string `json:"benchmark"`
+	// Runtime names the engine that can load these weights, and Repo the
+	// Hugging Face repository they come from.
+	Runtime string `json:"runtime"`
+	Repo    string `json:"repo"`
+	File    string `json:"file"`
+	SizeMB  int    `json:"sizeMB"`
+	// Streaming models transcribe as the audio arrives. Punctuation says
+	// whether the model writes any: the ones that do not cannot be made to, and
+	// a wall of unpunctuated capitals is worth knowing about in advance.
+	Streaming   bool `json:"streaming"`
+	Punctuation bool `json:"punctuation"`
+	// WantsGPU marks a model that is only comfortable with graphics
+	// acceleration, so the page can say so before a large download rather than
+	// after it.
+	WantsGPU  bool     `json:"wantsGPU"`
 	Languages []string `json:"languages"`
 }
 
@@ -239,48 +465,123 @@ var euroLanguages = []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "
 // want: they transcribe as the audio arrives instead of waiting for a phrase to
 // finish, which is the difference between captions a second behind and captions
 // three or four seconds behind.
+// cohereLanguages is the Latin-script part of what Cohere Transcribe knows.
+//
+// The model reads fourteen languages, including Japanese, Chinese, Korean,
+// Arabic and Greek. Those are not offered here because CEA-608 cannot carry
+// them: the caption character set is essentially ASCII plus a handful of
+// accented letters, and everything outside it is folded to the nearest letter
+// or dropped. Offering Japanese would produce a stream of blank captions, which
+// is a worse answer than not offering it. Vietnamese is left out for the same
+// reason in milder form: it is Latin script, but folding away its tone marks
+// changes the words.
+var cohereLanguages = []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"}
+
 var captionModelCatalog = []captionModel{
 	{
-		Key:       "realtime-multilingual",
-		Name:      "Nemotron 3.5 Streaming 0.6B (recommended)",
-		Desc:      "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. This is the one that reads like real captions.",
-		Latency:   "Under a second",
-		Hardware:  "A modern multi-core CPU. Roughly five times the work of the 120M.",
-		File:      "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
-		SizeMB:    938,
-		Streaming: true,
-		Languages: euroLanguages,
+		Key:         "realtime-multilingual",
+		Name:        "Nemotron 3.5 Streaming 0.6B (recommended)",
+		Desc:        "Transcribes continuously as the audio arrives and writes proper punctuation and sentence case, in any of its languages. The best balance of the four things that matter here, and the one to start with.",
+		Latency:     "Under a second",
+		Accuracy:    "Good",
+		Benchmark:   "3.0% word error rate",
+		Hardware:    "A modern multi-core CPU. Roughly five times the work of the 120M.",
+		Runtime:     rtParakeet,
+		File:        "nemotron-3.5-asr-streaming-0.6b-q8_0.gguf",
+		SizeMB:      938,
+		Streaming:   true,
+		Punctuation: true,
+		Languages:   euroLanguages,
+	},
+	{
+		Key:         "parakeet-unified-en",
+		Name:        "Parakeet Unified 0.6B",
+		Desc:        "The most accurate model that still transcribes continuously, and about twice as accurate as the Nemotron on English. It buys that by looking a little further ahead before committing a word, so captions sit a second or so further behind the picture.",
+		Latency:     "About two seconds",
+		Accuracy:    "Excellent",
+		Benchmark:   "1.4% word error rate",
+		Hardware:    "A modern multi-core CPU.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/parakeet-unified-en-0.6b-gguf",
+		File:        "parakeet-unified-en-0.6b-Q8_0.gguf",
+		SizeMB:      731,
+		Streaming:   true,
+		Punctuation: true,
+		Languages:   []string{"en"},
+	},
+	{
+		Key:         "multitalker-en",
+		Name:        "Multitalker Parakeet Streaming 0.6B",
+		Desc:        "Trained on people talking over each other, which is most of live television. Continuous, punctuated and cased. Worth trying on panel shows and news desks, where a model trained on one voice at a time tends to run two speakers into a single sentence.",
+		Latency:     "About a second",
+		Accuracy:    "Very good",
+		Benchmark:   "2.2% word error rate",
+		Hardware:    "A modern multi-core CPU.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf",
+		File:        "multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf",
+		SizeMB:      734,
+		Streaming:   true,
+		Punctuation: true,
+		Languages:   []string{"en"},
 	},
 	{
 		Key:       "realtime-120m",
 		Name:      "Parakeet Realtime 120M",
 		Desc:      "Just as quick and a fifth of the size, for hardware that cannot spare the cores. Writes no punctuation at all: the model produces none, and no setting changes that.",
 		Latency:   "Under a second",
+		Accuracy:  "Basic",
 		Hardware:  "Runs on almost anything. A low-power NAS, a mini PC or a Raspberry Pi class board is plenty.",
+		Runtime:   rtParakeet,
 		File:      "realtime_eou_120m-v1-q8_0.gguf",
 		SizeMB:    168,
 		Streaming: true,
 		Languages: []string{"en"},
 	},
 	{
-		Key:       "parakeet-v3",
-		Name:      "Parakeet TDT 0.6B v3",
-		Desc:      "Waits for a whole phrase and then transcribes it, with punctuation. The most accurate of the multilingual options, at the cost of arriving later.",
-		Latency:   "Three to four seconds",
-		Hardware:  "A modern multi-core CPU.",
-		File:      "tdt-0.6b-v3-q8_0.gguf",
-		SizeMB:    897,
-		Languages: euroLanguages,
+		Key:  "cohere-transcribe",
+		Name: "Cohere Transcribe 03-2026",
+		Desc: "The most accurate open speech model there is, and top of the public leaderboard. It cannot transcribe continuously — it reads a whole phrase and then writes it — so captions arrive a few seconds behind however fast the hardware is. Use it where accuracy matters more than keeping pace, and give it a GPU.",
+		// This is the one model here that is genuinely uncomfortable on a
+		// processor: a 2B model decoding a word at a time only just keeps up
+		// with live audio on a fast desktop CPU, and falls behind on a NAS.
+		Latency:     "Three to four seconds",
+		Accuracy:    "Best available",
+		Benchmark:   "1.3% word error rate",
+		Hardware:    "A GPU. It will run on a fast multi-core CPU, but only just keeps pace with live audio there and will fall behind on modest hardware.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
+		File:        "cohere-transcribe-03-2026-Q8_0.gguf",
+		SizeMB:      2410,
+		Punctuation: true,
+		WantsGPU:    true,
+		Languages:   cohereLanguages,
 	},
 	{
-		Key:       "parakeet-110m",
-		Name:      "Parakeet TDT-CTC 110M",
-		Desc:      "Phrase at a time, English only, with punctuation. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
-		Latency:   "Three to four seconds",
-		Hardware:  "Modest hardware. Comfortable on a NAS.",
-		File:      "tdt_ctc-110m-q8_0.gguf",
-		SizeMB:    170,
-		Languages: []string{"en"},
+		Key:         "parakeet-v3",
+		Name:        "Parakeet TDT 0.6B v3",
+		Desc:        "Waits for a whole phrase and then transcribes it, with punctuation. A solid multilingual option, at the cost of arriving later.",
+		Latency:     "Three to four seconds",
+		Accuracy:    "Very good",
+		Hardware:    "A modern multi-core CPU.",
+		Runtime:     rtParakeet,
+		File:        "tdt-0.6b-v3-q8_0.gguf",
+		SizeMB:      897,
+		Punctuation: true,
+		Languages:   euroLanguages,
+	},
+	{
+		Key:         "parakeet-110m",
+		Name:        "Parakeet TDT-CTC 110M",
+		Desc:        "Phrase at a time, English only, with punctuation. A fifth of the size of v3 and the lightest way to get accurate English if latency does not matter.",
+		Latency:     "Three to four seconds",
+		Accuracy:    "Good",
+		Hardware:    "Modest hardware. Comfortable on a NAS.",
+		Runtime:     rtParakeet,
+		File:        "tdt_ctc-110m-q8_0.gguf",
+		SizeMB:      170,
+		Punctuation: true,
+		Languages:   []string{"en"},
 	},
 }
 
@@ -413,7 +714,11 @@ func currentCaptionConfig() captionConfig {
 // as well as used here, so it is always obvious what is being downloaded and
 // from whom.
 func modelURL(m captionModel) string {
-	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", captionModelRepo, m.File)
+	repo := m.Repo
+	if repo == "" {
+		repo = captionModelRepo
+	}
+	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", repo, m.File)
 }
 
 // modelPath is where a model's weights live once downloaded.
@@ -551,48 +856,66 @@ func streamToFile(client *http.Client, url, dst string) error {
 	return os.Rename(tmp, dst)
 }
 
-// startRuntimeDownload fetches the parakeet.cpp engine in the background. It is
-// the one piece of native code captions need, it is about a megabyte, and it is
+// startRuntimeDownload fetches the engine the selected model needs, in the
+// background. It is the one piece of native code captions need, and it is
 // pulled on demand rather than shipped in the image.
-func startRuntimeDownload(variant string) error {
+//
+// Which engine that is follows from the model rather than from a separate
+// choice on the page: picking Cohere Transcribe and then being asked which of
+// two C++ libraries should run it is not a question anyone wants.
+// modelKey may name a model that has not been saved yet, so the page can fetch
+// the engine for something it is only considering.
+func startRuntimeDownload(variant, modelKey string) error {
 	if _, found := findEngineVariant(variant); !found {
 		variant = currentEngineVariant()
 	}
-	url, local, ok := engineAssetFor(runtime.GOOS, runtime.GOARCH, variantSuffix(variant))
+	rt := neededRuntime()
+	if m, ok := findCaptionModel(modelKey); ok {
+		rt = runtimeOf(m)
+	}
+	eng := findSpeechRuntime(rt)
+	url, dir, lib, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
 	if !ok {
-		return fmt.Errorf("no speech engine is published for %s/%s", runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("no %s build is published for %s/%s", eng.Name, runtime.GOOS, runtime.GOARCH)
 	}
 	dlLock.Lock()
 	if dlState.Active {
 		dlLock.Unlock()
 		return fmt.Errorf("a download is already running")
 	}
-	dlState = captionDownload{Model: "engine", Active: true, Count: 1, Index: 1, File: "parakeet.cpp " + parakeetRelease + " (" + variant + ")"}
+	dlState = captionDownload{Model: "engine", Active: true, Count: 1, Index: 1,
+		File: eng.Name + " " + eng.Version + " (" + variant + ")"}
 	dlLock.Unlock()
 
-	logger("[CC] Downloading the speech engine from %s", url)
+	logger("[CC] Downloading %s from %s", eng.Name, url)
 	go func() {
-		err := fetchRuntime(url, local, variant)
+		// parakeet.cpp is a single library; transcribe.cpp is a library plus
+		// the ggml backends it loads from alongside itself, so that one takes
+		// the whole archive.
+		err := fetchRuntime(url, dir, lib, rt == rtTranscribe)
 		dlLock.Lock()
 		dlState.Active = false
 		dlState.Finished = true
 		if err != nil {
 			dlState.Err = err.Error()
-			logger("[CC] Speech engine download failed: %v", err)
+			logger("[CC] %s download failed: %v", eng.Name, err)
 		} else {
-			logger("[CC] Speech engine %s is ready", parakeetRelease)
+			logger("[CC] %s %s is ready", eng.Name, eng.Version)
 		}
 		dlLock.Unlock()
 	}()
 	return nil
 }
 
-// fetchRuntime downloads the release archive and extracts the shared library
-// out of it, matching on file name so a change to the directory prefix inside
-// the archive does not break the download.
-func fetchRuntime(url, local, variant string) error {
-	dir := filepath.Join(captionRuntime, variant)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// fetchRuntime downloads the release archive and unpacks it into dir.
+//
+// With all set it takes every file, which is what an engine that loads sibling
+// libraries needs; otherwise it takes the one named library, matching on file
+// name so a change to the directory prefix inside the archive does not break
+// the download.
+func fetchRuntime(url, dir, lib string, all bool) error {
+	dst := filepath.Join(captionRuntime, dir)
+	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 30 * time.Minute}
@@ -615,34 +938,83 @@ func fetchRuntime(url, local, variant string) error {
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
+	found := false
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return fmt.Errorf("%s was not found in the archive", local)
+			break
 		}
 		if err != nil {
 			return err
 		}
-		if h.Typeflag != tar.TypeReg || path.Base(h.Name) != local {
+		if h.Typeflag != tar.TypeReg {
 			continue
 		}
-		dst := filepath.Join(dir, local)
-		tmp := dst + ".part"
-		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		if err != nil {
+		isLib := path.Base(h.Name) == lib
+		if !all {
+			if !isLib {
+				continue
+			}
+			// The one file wanted is here, so stop reading rather than pulling
+			// the rest of a half gigabyte archive through the connection.
+			if err := writeRuntimeFile(dst, lib, tr); err != nil {
+				return err
+			}
+			return nil
+		}
+		rel, ok := archiveRelPath(h.Name)
+		if !ok {
+			continue
+		}
+		if err := writeRuntimeFile(dst, rel, tr); err != nil {
 			return err
 		}
-		if _, err := io.Copy(f, tr); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return err
-		}
-		if err := f.Close(); err != nil {
-			os.Remove(tmp)
-			return err
-		}
-		return os.Rename(tmp, dst)
+		found = found || isLib
 	}
+	if !found {
+		return fmt.Errorf("%s was not found in the archive", lib)
+	}
+	return nil
+}
+
+// archiveRelPath drops the archive's own top-level directory, so what lands on
+// disk is not named after the release it came out of, and refuses anything that
+// would climb out of the destination.
+func archiveRelPath(name string) (string, bool) {
+	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
+	i := strings.IndexByte(clean, '/')
+	if i < 0 {
+		return "", false
+	}
+	rel := clean[i+1:]
+	if rel == "" || rel == "." {
+		return "", false
+	}
+	return rel, true
+}
+
+// writeRuntimeFile writes one archive entry through a temporary name, so an
+// interrupted download never leaves a half library looking installed.
+func writeRuntimeFile(dir, rel string, r io.Reader) error {
+	dst := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + ".part"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 // countingReader reports download progress for a stream that is being
@@ -2369,10 +2741,27 @@ func initParakeet() error {
 	return pkErr
 }
 
+// recognizer is a loaded speech model. There are two implementations, one per
+// engine, and nothing downstream of this knows which it has: the phrase
+// segmenter, the CEA-608 encoder and the injector are the same either way.
+//
+// beginStream returns an error on a model that cannot transcribe continuously,
+// which is the caller's cue to fall back to a phrase at a time.
+type recognizer interface {
+	transcribe(pcm []float32) (string, error)
+	beginStream(language string) error
+	feedStream(pcm []float32) *streamResult
+	finishStream() *streamResult
+	Close()
+}
+
 // parakeet is a loaded model, reused across utterances.
 type parakeet struct {
 	ctx  uintptr
 	lang string
+	// stream is the continuous session, opened by beginStream and non-zero
+	// only for a model that supports one.
+	stream uintptr
 	// eou is the out-parameter the streaming feed writes its event mask into.
 	// It lives on the heap for the life of the model: handing C a pointer into
 	// a goroutine stack is not safe, because the stack can move.
@@ -2405,6 +2794,10 @@ func loadParakeet(gguf, language string) (*parakeet, error) {
 func (p *parakeet) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.stream != 0 {
+		pkStreamFree(p.stream)
+		p.stream = 0
+	}
 	if p.ctx != 0 {
 		pkFreeCtx(p.ctx)
 		p.ctx = 0
@@ -2438,11 +2831,11 @@ func (p *parakeet) transcribe(pcm []float32) (string, error) {
 // beginStream opens a cache-aware streaming session. Only a streaming
 // checkpoint supports one; anything else returns an error and the caller falls
 // back to recognizing a phrase at a time.
-func (p *parakeet) beginStream(language string) (uintptr, error) {
+func (p *parakeet) beginStream(language string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.ctx == 0 {
-		return 0, fmt.Errorf("model is closed")
+		return fmt.Errorf("model is closed")
 	}
 	s := pkStreamBegin(p.ctx, language)
 	if s == 0 && language != "auto" && language != "" {
@@ -2455,11 +2848,12 @@ func (p *parakeet) beginStream(language string) (uintptr, error) {
 	}
 	if s == 0 {
 		if msg := pkLastError(p.ctx); msg != "" {
-			return 0, fmt.Errorf("%s", msg)
+			return fmt.Errorf("%s", msg)
 		}
-		return 0, fmt.Errorf("this model does not support streaming")
+		return fmt.Errorf("this model does not support streaming")
 	}
-	return s, nil
+	p.stream = s
+	return nil
 }
 
 // streamResult is what a streaming feed reports.
@@ -2470,13 +2864,19 @@ func (p *parakeet) beginStream(language string) (uintptr, error) {
 // them properly and timestamps each word, which is both what the display needs
 // and what makes a decent subtitle cue.
 type streamResult struct {
-	Text  string `json:"text"`
-	EOU   int    `json:"eou"`
-	Words []struct {
-		W     string  `json:"w"`
-		Start float64 `json:"start"`
-		End   float64 `json:"end"`
-	} `json:"words"`
+	Text  string       `json:"text"`
+	EOU   int          `json:"eou"`
+	Words []streamWord `json:"words"`
+}
+
+// streamWord is one finalized word and where it fell in the audio. It is named
+// rather than anonymous because both engines build these: parakeet.cpp hands
+// them over as JSON, transcribe.cpp through an accessor, and the caption side
+// should not be able to tell which it is looking at.
+type streamWord struct {
+	W     string  `json:"w"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
 }
 
 // words joins the grouped words of this result.
@@ -2500,21 +2900,21 @@ func (r *streamResult) words() string {
 
 // feedStream hands the session more audio and returns whatever it just
 // finalized.
-func (p *parakeet) feedStream(s uintptr, pcm []float32) *streamResult {
-	if s == 0 || len(pcm) == 0 {
+func (p *parakeet) feedStream(pcm []float32) *streamResult {
+	if p.stream == 0 || len(pcm) == 0 {
 		return nil
 	}
-	out := pkStreamFeed(s, unsafe.Pointer(&pcm[0]), int32(len(pcm)))
+	out := pkStreamFeed(p.stream, unsafe.Pointer(&pcm[0]), int32(len(pcm)))
 	runtime.KeepAlive(pcm)
 	return parseStreamResult(cStringFree(out))
 }
 
 // finishStream flushes the tail when the stream ends.
-func (p *parakeet) finishStream(s uintptr) *streamResult {
-	if s == 0 {
+func (p *parakeet) finishStream() *streamResult {
+	if p.stream == 0 {
 		return nil
 	}
-	return parseStreamResult(cStringFree(pkStreamFinalize(s)))
+	return parseStreamResult(cStringFree(pkStreamFinalize(p.stream)))
 }
 
 func parseStreamResult(doc string) *streamResult {
@@ -2561,6 +2961,484 @@ func cStringFree(p unsafe.Pointer) string {
 }
 
 // ---------------------------------------------------------------------------
+// Speech recognition: transcribe.cpp
+// ---------------------------------------------------------------------------
+
+// The second engine, bound the same way as the first: purego, no cgo, nothing
+// linked in. What it adds is reach. parakeet.cpp implements NVIDIA's Parakeet
+// architectures and only those; transcribe.cpp implements a couple of dozen
+// families, which is the only reason Cohere Transcribe can run here at all.
+//
+// Three things differ from parakeet.cpp and all three are handled below.
+// It is a library plus sibling ggml backends rather than a single file, so it
+// is told where they are. Work happens on a session rather than a bare context.
+// And results are read back through accessors instead of a returned string, so
+// nothing here owns engine memory or frees it.
+
+const (
+	// Backends, from transcribe.h. The processor is asked for by name rather
+	// than left to AUTO so that choosing it on the page actually means it.
+	txBackendAuto   = 0
+	txBackendCPU    = 1
+	txBackendVulkan = 3
+	txBackendCUDA   = 5
+
+	txOK = 0
+
+	// No alignment data is wanted; see runParams.
+	txTimestampsNone = 0
+
+	// Struct ids for the ABI check, from transcribe_abi_struct.
+	txABILoadParams    = 0
+	txABISessionParams = 1
+	txABIRunParams     = 2
+	txABIStreamParams  = 3
+	txABIStreamUpdate  = 9
+	txABIStreamText    = 10
+)
+
+// The parameter and result structs, laid out to match transcribe.h. Every one
+// of them is checked against the library's own sizeof at load rather than
+// trusted: this is a pre-1.0 ABI that says outright it may move between minor
+// releases, and a silently mismatched struct is memory corruption rather than
+// an error message.
+type (
+	txLoadParams struct {
+		structSize uint64
+		backend    int32
+		gpuDevice  int32
+	}
+	txSessionParams struct {
+		structSize uint64
+		nThreads   int32
+		kvType     int32
+		nCtx       int32
+	}
+	txRunParams struct {
+		structSize      uint64
+		task            int32
+		timestamps      int32
+		pnc             int32
+		itn             int32
+		language        *byte
+		targetLanguage  *byte
+		keepSpecialTags bool
+		family          uintptr
+		specKDrafts     int32
+	}
+	txStreamParams struct {
+		structSize             uint64
+		family                 uintptr
+		commitPolicy           int32
+		stablePrefixAgreementN uint32
+	}
+	txStreamUpdate struct {
+		structSize       uint64
+		resultChanged    bool
+		isFinal          bool
+		revision         int32
+		inputReceivedMS  int64
+		audioCommittedMS int64
+		bufferedMS       int64
+		committedChanged bool
+		tentativeChanged bool
+	}
+	// The engine reports byte lengths alongside every view of the transcript,
+	// which is what is used below: a length is exact where scanning for a
+	// terminator is a guess about encoding.
+	txStreamText struct {
+		structSize             uint64
+		fullText               *byte
+		fullTextBytes          uint64
+		committedText          *byte
+		committedTextBytes     uint64
+		tentativeText          *byte
+		tentativeTextBytes     uint64
+		rawTentativeStartBytes uint64
+	}
+)
+
+var (
+	txOnce sync.Once
+	txErr  error
+
+	txVersion       func() string
+	txStatusString  func(status int32) string
+	txInitBackends  func(dir string) int32
+	txABIStructSize func(which int32) uint64
+
+	txModelLoadFile func(path string, params, out unsafe.Pointer) int32
+	txModelFree     func(model uintptr)
+	txSessionInit   func(model uintptr, params, out unsafe.Pointer) int32
+	txSessionFree   func(session uintptr)
+
+	txRun      func(session uintptr, pcm unsafe.Pointer, n int32, params unsafe.Pointer) int32
+	txFullText func(session uintptr) string
+
+	txStreamBegin    func(session uintptr, runParams, streamParams unsafe.Pointer) int32
+	txStreamFeed     func(session uintptr, pcm unsafe.Pointer, n int32, update unsafe.Pointer) int32
+	txStreamFinalize func(session uintptr, update unsafe.Pointer) int32
+	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
+
+	txLoadParamsInit    func(p unsafe.Pointer)
+	txSessionParamsInit func(p unsafe.Pointer)
+	txRunParamsInit     func(p unsafe.Pointer)
+	txStreamParamsInit  func(p unsafe.Pointer)
+	txStreamUpdateInit  func(p unsafe.Pointer)
+	txStreamTextInit    func(p unsafe.Pointer)
+)
+
+// initTranscribe opens the engine once per process and registers its backends.
+//
+// dir is the directory the archive was unpacked into. transcribe.cpp keeps its
+// ggml backends in separate libraries next to itself and is handed that path,
+// which is also how a machine with no GPU ends up on the processor without
+// anything failing to open: the Vulkan backend is simply one of the libraries
+// that does not load, and the engine carries on with the ones that did.
+func initTranscribe(dir string) error {
+	txOnce.Do(func() {
+		lib := runtimeLibPath(rtTranscribe, currentEngineVariant())
+		if lib == "" {
+			txErr = fmt.Errorf("no transcribe.cpp build is published for %s/%s", runtime.GOOS, runtime.GOARCH)
+			return
+		}
+		if !runtimeInstalled(rtTranscribe, currentEngineVariant()) {
+			txErr = fmt.Errorf("transcribe.cpp has not been downloaded yet")
+			return
+		}
+		abs, err := filepath.Abs(lib)
+		if err != nil {
+			txErr = err
+			return
+		}
+		handle, err := purego.Dlopen(abs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		if err != nil || handle == 0 {
+			txErr = fmt.Errorf("opening %s: %w", abs, err)
+			return
+		}
+		defer func() {
+			// A missing symbol panics inside purego; report it as an error
+			// rather than taking the process down mid-tune.
+			if r := recover(); r != nil {
+				txErr = fmt.Errorf("transcribe.cpp is missing an entry point: %v", r)
+			}
+		}()
+		purego.RegisterLibFunc(&txVersion, handle, "transcribe_version")
+		purego.RegisterLibFunc(&txStatusString, handle, "transcribe_status_string")
+		purego.RegisterLibFunc(&txInitBackends, handle, "transcribe_init_backends")
+		purego.RegisterLibFunc(&txABIStructSize, handle, "transcribe_abi_struct_size")
+		purego.RegisterLibFunc(&txModelLoadFile, handle, "transcribe_model_load_file")
+		purego.RegisterLibFunc(&txModelFree, handle, "transcribe_model_free")
+		purego.RegisterLibFunc(&txSessionInit, handle, "transcribe_session_init")
+		purego.RegisterLibFunc(&txSessionFree, handle, "transcribe_session_free")
+		purego.RegisterLibFunc(&txRun, handle, "transcribe_run")
+		purego.RegisterLibFunc(&txFullText, handle, "transcribe_full_text")
+		purego.RegisterLibFunc(&txStreamBegin, handle, "transcribe_stream_begin")
+		purego.RegisterLibFunc(&txStreamFeed, handle, "transcribe_stream_feed")
+		purego.RegisterLibFunc(&txStreamFinalize, handle, "transcribe_stream_finalize")
+		purego.RegisterLibFunc(&txStreamGetText, handle, "transcribe_stream_get_text")
+		purego.RegisterLibFunc(&txLoadParamsInit, handle, "transcribe_model_load_params_init")
+		purego.RegisterLibFunc(&txSessionParamsInit, handle, "transcribe_session_params_init")
+		purego.RegisterLibFunc(&txRunParamsInit, handle, "transcribe_run_params_init")
+		purego.RegisterLibFunc(&txStreamParamsInit, handle, "transcribe_stream_params_init")
+		purego.RegisterLibFunc(&txStreamUpdateInit, handle, "transcribe_stream_update_init")
+		purego.RegisterLibFunc(&txStreamTextInit, handle, "transcribe_stream_text_init")
+
+		if err := txCheckABI(); err != nil {
+			txErr = err
+			return
+		}
+		if st := txInitBackends(dir); st != txOK {
+			txErr = fmt.Errorf("registering the transcribe.cpp backends: %s", txStatusString(st))
+			return
+		}
+		logger("[CC] transcribe.cpp %s loaded from %s", txVersion(), dir)
+	})
+	return txErr
+}
+
+// txCheckABI compares every struct this file declares against the library's own
+// idea of its size, and refuses to go further if any of them disagree.
+func txCheckABI() error {
+	for _, s := range []struct {
+		name string
+		id   int32
+		size uintptr
+	}{
+		{"model load params", txABILoadParams, unsafe.Sizeof(txLoadParams{})},
+		{"session params", txABISessionParams, unsafe.Sizeof(txSessionParams{})},
+		{"run params", txABIRunParams, unsafe.Sizeof(txRunParams{})},
+		{"stream params", txABIStreamParams, unsafe.Sizeof(txStreamParams{})},
+		{"stream update", txABIStreamUpdate, unsafe.Sizeof(txStreamUpdate{})},
+		{"stream text", txABIStreamText, unsafe.Sizeof(txStreamText{})},
+	} {
+		if got := txABIStructSize(s.id); got != uint64(s.size) {
+			return fmt.Errorf("transcribe.cpp %s is %d bytes here and %d bytes in the engine; this build of ah4c expects transcribe.cpp %s",
+				s.name, s.size, got, transcribeRelease)
+		}
+	}
+	return nil
+}
+
+// txBackend maps the processor choice on the page onto the backend the engine
+// is asked for.
+func txBackend(variant string) int32 {
+	switch variant {
+	case "vulkan":
+		return txBackendVulkan
+	case "cuda", "cuda12":
+		return txBackendCUDA
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		// The only Apple silicon build is the Metal one, and there is no
+		// separate choice on that platform, so let the engine pick.
+		return txBackendAuto
+	}
+	return txBackendCPU
+}
+
+// transcribeModel is a loaded model and the session that runs it.
+type transcribeModel struct {
+	model   uintptr
+	session uintptr
+	// lang is the NUL-terminated language code handed to the engine. It lives
+	// on the heap for the life of the model for the same reason parakeet's
+	// event mask does: a pointer into a goroutine stack is not safe to give to
+	// C, because the stack can move.
+	lang []byte
+	// committed counts the bytes of the continuous transcript already shown, so
+	// each feed contributes only what is new. The engine's committed text is
+	// append-only by contract, which is what makes this safe.
+	committed int
+	streaming bool
+	mu        sync.Mutex // the session holds decoder state: one call at a time
+}
+
+// loadTranscribe opens the weights the user downloaded.
+func loadTranscribe(gguf string, cfg captionConfig) (*transcribeModel, error) {
+	variant := currentEngineVariant()
+	dir := runtimeDirFor(rtTranscribe, variant)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := initTranscribe(abs); err != nil {
+		return nil, err
+	}
+	weights, err := filepath.Abs(gguf)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(weights); err != nil {
+		return nil, err
+	}
+
+	load := txLoadParams{}
+	txLoadParamsInit(unsafe.Pointer(&load))
+	load.backend = txBackend(variant)
+
+	var model uintptr
+	if st := txModelLoadFile(weights, unsafe.Pointer(&load), unsafe.Pointer(&model)); st != txOK || model == 0 {
+		return nil, fmt.Errorf("loading %s: %s", filepath.Base(gguf), txStatusString(st))
+	}
+
+	sp := txSessionParams{}
+	txSessionParamsInit(unsafe.Pointer(&sp))
+	var session uintptr
+	if st := txSessionInit(model, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
+		txModelFree(model)
+		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
+	}
+
+	t := &transcribeModel{model: model, session: session}
+	// "auto" is this page's word for detection, not the engine's: it wants a
+	// null language for that, and would reject "auto" as a locale.
+	if l := cfg.Language; l != "" && l != "auto" {
+		t.lang = append([]byte(l), 0)
+	}
+	return t, nil
+}
+
+func (t *transcribeModel) Close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session != 0 {
+		txSessionFree(t.session)
+		t.session = 0
+	}
+	if t.model != 0 {
+		txModelFree(t.model)
+		t.model = 0
+	}
+}
+
+// runParams is the per-call configuration.
+//
+// Timestamps are turned off rather than left at the default, which asks each
+// family for the finest alignment it can manage. Captions are shown the moment
+// the words are ready and never seek, so where a word fell in the audio is work
+// that would be done and then thrown away.
+func (t *transcribeModel) runParams() txRunParams {
+	p := txRunParams{}
+	txRunParamsInit(unsafe.Pointer(&p))
+	p.timestamps = txTimestampsNone
+	if len(t.lang) > 0 {
+		p.language = &t.lang[0]
+	}
+	return p
+}
+
+// transcribe runs one utterance of 16 kHz mono audio through the model. This is
+// the path Cohere Transcribe takes: it reads a whole phrase and writes it out,
+// which is why it cannot be as immediate as a streaming model however fast the
+// hardware is.
+func (t *transcribeModel) transcribe(pcm []float32) (string, error) {
+	if len(pcm) < asrSampleRate/4 {
+		return "", nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session == 0 {
+		return "", fmt.Errorf("model is closed")
+	}
+	p := t.runParams()
+	st := txRun(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&p))
+	// The engine reads the samples during the call, so keep them reachable for
+	// its duration rather than trusting the argument alone to pin them.
+	runtime.KeepAlive(pcm)
+	runtime.KeepAlive(t.lang)
+	if st != txOK {
+		return "", fmt.Errorf("%s", txStatusString(st))
+	}
+	return cleanRecognized(txFullText(t.session)), nil
+}
+
+// beginStream opens a continuous session. A model that cannot transcribe
+// continuously fails here and the caller falls back to a phrase at a time.
+func (t *transcribeModel) beginStream(language string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session == 0 {
+		return fmt.Errorf("model is closed")
+	}
+	sp := txStreamParams{}
+	txStreamParamsInit(unsafe.Pointer(&sp))
+	// The run params carry the language into the stream as well, so a
+	// prompt-conditioned model is told which locale to expect rather than
+	// having to work it out from the first few seconds of audio.
+	rp := t.runParams()
+	st := txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
+	runtime.KeepAlive(t.lang)
+	if st != txOK {
+		return fmt.Errorf("%s", txStatusString(st))
+	}
+	t.streaming = true
+	t.committed = 0
+	return nil
+}
+
+func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
+	if len(pcm) == 0 {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session == 0 || !t.streaming {
+		return nil
+	}
+	u := txStreamUpdate{}
+	txStreamUpdateInit(unsafe.Pointer(&u))
+	st := txStreamFeed(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&u))
+	runtime.KeepAlive(pcm)
+	if st != txOK {
+		return nil
+	}
+	if !u.committedChanged {
+		return nil
+	}
+	return t.takeCommitted()
+}
+
+func (t *transcribeModel) finishStream() *streamResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session == 0 || !t.streaming {
+		return nil
+	}
+	u := txStreamUpdate{}
+	txStreamUpdateInit(unsafe.Pointer(&u))
+	if st := txStreamFinalize(t.session, unsafe.Pointer(&u)); st != txOK {
+		return nil
+	}
+	r := t.takeCommitted()
+	if r != nil {
+		r.EOU = 1
+	}
+	return r
+}
+
+// takeCommitted returns the part of the transcript that has appeared since the
+// last call.
+//
+// The engine offers two views of a stream in progress: a raw hypothesis it may
+// rewrite anywhere, and a committed prefix it promises never to rewrite. This
+// takes the committed one. Captions are burned into the transport stream a
+// couple of bytes at a time and cannot be taken back, so text that might be
+// revised is of no use here — better a word later than a word retracted.
+//
+// The caller must hold the lock. The returned pointers belong to the session
+// and are only valid until the next call, which is why the text is copied out
+// before anything else happens.
+func (t *transcribeModel) takeCommitted() *streamResult {
+	var view txStreamText
+	txStreamTextInit(unsafe.Pointer(&view))
+	if st := txStreamGetText(t.session, unsafe.Pointer(&view)); st != txOK {
+		return nil
+	}
+	full := txGoStringN(view.committedText, view.committedTextBytes)
+	if len(full) < t.committed {
+		// Append-only is best effort rather than a guarantee. If the prefix
+		// ever shrinks, start again from what is there instead of slicing off
+		// the end of a shorter string.
+		t.committed = 0
+	}
+	fresh := strings.TrimSpace(full[t.committed:])
+	t.committed = len(full)
+	if fresh == "" {
+		return nil
+	}
+	fields := strings.Fields(fresh)
+	r := &streamResult{Text: fresh, Words: make([]streamWord, 0, len(fields))}
+	for _, w := range fields {
+		if c := cleanRecognized(w); c != "" {
+			r.Words = append(r.Words, streamWord{W: c})
+		}
+	}
+	if len(r.Words) == 0 {
+		return nil
+	}
+	// The engines report the end of an utterance differently: parakeet.cpp
+	// raises a flag, and this one does not. Sentence-ending punctuation is the
+	// signal that is actually available here, and it is a good one, because
+	// every model reaching this path writes punctuation.
+	if last := r.Words[len(r.Words)-1].W; strings.HasSuffix(last, ".") ||
+		strings.HasSuffix(last, "?") || strings.HasSuffix(last, "!") {
+		r.EOU = 1
+	}
+	return r
+}
+
+// txGoStringN copies n bytes out of engine memory. Unlike parakeet.cpp's
+// strings, these are borrowed rather than handed over, so there is nothing to
+// free: the session owns them until its next call.
+func txGoStringN(p *byte, n uint64) string {
+	if p == nil || n == 0 {
+		return ""
+	}
+	return string(unsafe.Slice(p, int(n)))
+}
+
+// ---------------------------------------------------------------------------
 // Listening
 // ---------------------------------------------------------------------------
 
@@ -2571,7 +3449,7 @@ type captionEngine struct {
 	enc     *cea608
 	label   string
 	cfg     captionConfig
-	model   *parakeet
+	model   recognizer
 	ffmpeg  *exec.Cmd
 	audioIn io.WriteCloser
 	audioCh chan []byte
@@ -2583,9 +3461,9 @@ type captionEngine struct {
 	// freeing a session out from under a call in flight is a crash, not an
 	// error.
 	done chan struct{}
-	// stream is non-zero when the chosen model transcribes continuously; the
+	// streaming is set when the chosen model transcribes continuously; the
 	// phrase segmenter is not used in that case.
-	stream uintptr
+	streaming bool
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
@@ -2593,7 +3471,7 @@ type captionEngine struct {
 }
 
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
-	model, err := loadParakeet(modelPath(m), cfg.Language)
+	model, err := loadRecognizer(m, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -2639,25 +3517,43 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 	}
 
 	if m.Streaming {
-		if st, err := model.beginStream(cfg.Language); err != nil {
+		if err := model.beginStream(cfg.Language); err != nil {
 			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", label, err)
 		} else {
-			e.stream = st
+			e.streaming = true
 		}
 	}
 
 	go e.pumpAudio()
-	if e.stream != 0 {
+	if e.streaming {
 		go e.listenStreaming(pcm)
 	} else {
 		go e.listen(pcm)
 	}
 	mode := "phrase at a time"
-	if e.stream != 0 {
+	if e.streaming {
 		mode = "continuous"
 	}
-	logger("[CC] %s captions started, model %s language %s, %s", label, m.Key, cfg.Language, mode)
+	logger("[CC] %s captions started, model %s on %s, language %s, %s",
+		label, m.Key, findSpeechRuntime(runtimeOf(m)).Name, cfg.Language, mode)
 	return e, nil
+}
+
+// loadRecognizer opens a model on whichever engine can run it.
+func loadRecognizer(m captionModel, cfg captionConfig) (recognizer, error) {
+	if runtimeOf(m) == rtTranscribe {
+		return loadTranscribe(modelPath(m), cfg)
+	}
+	return loadParakeet(modelPath(m), cfg.Language)
+}
+
+// runtimeOf is the engine a model needs. A catalog entry that names none is a
+// Parakeet one, which is what every entry was before there was a second engine.
+func runtimeOf(m captionModel) string {
+	if m.Runtime == "" {
+		return rtParakeet
+	}
+	return m.Runtime
 }
 
 // pumpAudio hands buffered transport stream bytes to ffmpeg. Writes here must
@@ -2741,13 +3637,13 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		default:
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
-			take(e.model.finishStream(e.stream))
+			take(e.model.finishStream())
 			return
 		}
 		for i := range buf {
 			buf[i] = float32(int16(uint16(raw[2*i])|uint16(raw[2*i+1])<<8)) / 32768.0
 		}
-		take(e.model.feedStream(e.stream, buf))
+		take(e.model.feedStream(buf))
 	}
 }
 
@@ -2942,14 +3838,10 @@ func (e *captionEngine) Close() {
 			stopped = false
 			logger("[CC] %s recognizer did not stop in time; leaving its memory alone", e.label)
 		}
-		if stopped {
-			if e.stream != 0 {
-				pkStreamFree(e.stream)
-				e.stream = 0
-			}
-			if e.model != nil {
-				e.model.Close()
-			}
+		if stopped && e.model != nil {
+			// Closing the recognizer releases its streaming session as well,
+			// so the order the two engines want is theirs to decide.
+			e.model.Close()
 		}
 		logger("[CC] %s captions stopped", e.label)
 	})
@@ -3073,22 +3965,33 @@ func (cs *captionStream) Close() error {
 
 // captionStatus is what the Closed Captions page renders.
 type captionStatus struct {
-	Config         captionConfig         `json:"config"`
-	Models         []captionStatusModel  `json:"models"`
-	Languages      map[string]string     `json:"languageNames"`
-	Download       captionDownload       `json:"download"`
-	Runtime        string                `json:"runtime"`
-	RuntimeReady   bool                  `json:"runtimeReady"`
-	RuntimeSizeMB  int                   `json:"runtimeSizeMB"`
-	RuntimeVersion string                `json:"runtimeVersion"`
-	RuntimeURL     string                `json:"runtimeURL"`
-	Engines        []captionStatusEngine `json:"engines"`
-	Drivers        []captionStatusDriver `json:"drivers"`
-	Accel          accelReport           `json:"accel"`
-	DriverInstall  gpuInstallState       `json:"driverInstall"`
-	Persistent     bool                  `json:"persistent"`
-	PersistWarning string                `json:"persistWarning"`
-	Tuners         int                   `json:"tuners"`
+	Config    captionConfig        `json:"config"`
+	Models    []captionStatusModel `json:"models"`
+	Languages map[string]string    `json:"languageNames"`
+	Download  captionDownload      `json:"download"`
+	// The Runtime fields describe the engine the selected model needs, which is
+	// the only one that has to be downloaded for that model to work.
+	Runtime       string `json:"runtime"`
+	RuntimeReady  bool   `json:"runtimeReady"`
+	RuntimeSizeMB int    `json:"runtimeSizeMB"`
+	RuntimeName   string `json:"runtimeName"`
+	// Runtimes describes each engine, keyed by engine, for the same reason
+	// Engines carries both: the page talks about the engine under the radio
+	// button, which is not always the saved one.
+	Runtimes       map[string]string `json:"runtimes"`
+	RuntimeVersion string            `json:"runtimeVersion"`
+	RuntimeURL     string            `json:"runtimeURL"`
+	// Engines carries the builds of both engines, keyed by engine, so the page
+	// can show what a model would need before it has been saved. Picking a
+	// radio button is browsing, not a decision, and must not change what a tune
+	// starting right now will do.
+	Engines        map[string][]captionStatusEngine `json:"engines"`
+	Drivers        []captionStatusDriver            `json:"drivers"`
+	Accel          accelReport                      `json:"accel"`
+	DriverInstall  gpuInstallState                  `json:"driverInstall"`
+	Persistent     bool                             `json:"persistent"`
+	PersistWarning string                           `json:"persistWarning"`
+	Tuners         int                              `json:"tuners"`
 }
 
 type captionStatusDriver struct {
@@ -3107,17 +4010,34 @@ type captionStatusEngine struct {
 
 type captionStatusModel struct {
 	captionModel
-	Installed bool   `json:"installed"`
-	URL       string `json:"url"`
+	Installed bool `json:"installed"`
+	// Engine is the engine this model runs on and EngineName the same thing
+	// said in full, so the page can be honest that picking some models means a
+	// second download.
+	Engine      string `json:"engine"`
+	EngineName  string `json:"engineName"`
+	EngineReady bool   `json:"engineReady"`
+	URL         string `json:"url"`
 }
 
 func captionStatusPayload() captionStatus {
 	cfg := currentCaptionConfig()
+	cur := currentEngineVariant()
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
-		models = append(models, captionStatusModel{captionModel: m, Installed: modelInstalled(m), URL: modelURL(m)})
+		rt := runtimeOf(m)
+		models = append(models, captionStatusModel{
+			captionModel: m,
+			Installed:    modelInstalled(m),
+			Engine:       rt,
+			EngineName:   findSpeechRuntime(rt).Name,
+			EngineReady:  runtimeInstalled(rt, cur),
+			URL:          modelURL(m),
+		})
 	}
 	engineURL, _, _ := engineAsset()
+	needed := findSpeechRuntime(neededRuntime())
+	curVariant, _ := findEngineVariant(cur)
 	persistent, dir := captionDirPersistent()
 	persistWarning := ""
 	if !persistent {
@@ -3131,35 +4051,36 @@ func captionStatusPayload() captionStatus {
 			Active:     driverActive(g),
 		})
 	}
-	cur := currentEngineVariant()
-	cpuURL, _, _ := engineAssetFor(runtime.GOOS, runtime.GOARCH, "cpu")
-	engines := make([]captionStatusEngine, 0, len(engineVariants))
-	for _, v := range engineVariants {
-		url, local, ok := engineAssetFor(runtime.GOOS, runtime.GOARCH, v.Suffix)
-		if !ok {
-			continue
+	// Both engines' builds are offered, so the page can say what a model would
+	// cost before it is chosen rather than after.
+	engines := make(map[string][]captionStatusEngine, len(speechRuntimes))
+	for _, eng := range speechRuntimes {
+		list := make([]captionStatusEngine, 0, len(engineVariants))
+		for _, v := range engineVariants {
+			if !runtimeVariantOffered(eng.Key, runtime.GOOS, runtime.GOARCH, v.Key) {
+				continue
+			}
+			url, _, _, ok := runtimeAssetFor(eng.Key, runtime.GOOS, runtime.GOARCH, v.Key)
+			if !ok {
+				continue
+			}
+			v.SizeMB = runtimeSizeMB(eng.Key, v)
+			list = append(list, captionStatusEngine{
+				engineVariant: v,
+				Usable:        engineUsable(v),
+				Installed:     runtimeInstalled(eng.Key, v.Key),
+				Selected:      v.Key == cur,
+				URL:           url,
+			})
 		}
-		// A variant with no build of its own for this platform is not a choice.
-		// Apple silicon is the clear case: Metal is in the one build there, and
-		// arm64 Linux has no CUDA build at all.
-		if v.Key != "cpu" && url == cpuURL {
-			continue
-		}
-		st, err := os.Stat(filepath.Join(captionRuntime, v.Key, local))
-		engines = append(engines, captionStatusEngine{
-			engineVariant: v,
-			Usable:        engineUsable(v),
-			Installed:     err == nil && st.Size() > 0,
-			Selected:      v.Key == cur,
-			URL:           url,
-		})
+		engines[eng.Key] = list
 	}
 	state := "ready"
 	switch {
 	case engineLibPath() == "":
-		state = fmt.Sprintf("no speech engine is published for %s/%s", runtime.GOOS, runtime.GOARCH)
+		state = fmt.Sprintf("no %s build is published for %s/%s", needed.Name, runtime.GOOS, runtime.GOARCH)
 	case !engineInstalled():
-		state = "the speech engine has not been downloaded yet"
+		state = needed.Name + " has not been downloaded yet"
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		state = "ffmpeg was not found, so audio cannot be decoded"
@@ -3171,8 +4092,10 @@ func captionStatusPayload() captionStatus {
 		Download:       downloadStatus(),
 		Runtime:        state,
 		RuntimeReady:   engineInstalled(),
-		RuntimeSizeMB:  1,
-		RuntimeVersion: parakeetRelease,
+		RuntimeSizeMB:  runtimeSizeMB(needed.Key, curVariant),
+		RuntimeName:    needed.Name,
+		Runtimes:       runtimeDescriptions(),
+		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Persistent:     persistent,
 		PersistWarning: persistWarning,

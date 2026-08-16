@@ -70,9 +70,10 @@ the usual subtitles button.
   unchanged, and streams that already carry captions are left alone.
 - **Nothing is added to the Docker image.** No new packages, no Python, no model.
 - **ah4c stays pure Go.** Recognition runs against
-  [parakeet.cpp](https://github.com/mudler/parakeet.cpp), a ggml build of the Parakeet
-  models, opened at run time with purego. There is no cgo and nothing linked into the
-  binary — `CGO_ENABLED=0` still builds.
+  [parakeet.cpp](https://github.com/mudler/parakeet.cpp) or
+  [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), ggml engines opened
+  at run time with purego. There is no cgo and nothing linked into the binary —
+  `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
 - **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
@@ -132,25 +133,43 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models**, all from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
-on Hugging Face:
+**Models**, from Hugging Face. Each names the engine that runs it, and the page downloads
+that engine when you pick the model:
 
-| Model | Delay | Size | Languages | Runs well on |
-| --- | --- | --- | --- | --- |
-| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, with punctuation and sentence case | Under a second | 938 MB | 25 | A modern multi-core CPU |
-| **Parakeet Realtime 120M** — just as quick, no punctuation | Under a second | 168 MB | English | Almost anything: a low-power NAS, a mini PC, a Pi class board |
-| **Parakeet TDT 0.6B v3** — waits for a phrase, most accurate multilingual | 3–4 seconds | 897 MB | 25 | A modern multi-core CPU |
-| **Parakeet TDT-CTC 110M** — phrase at a time, English | 3–4 seconds | 170 MB | English | Modest hardware; comfortable on a NAS |
+| Model | Accuracy | Delay | Size | Languages | Engine |
+| --- | --- | --- | --- | --- | --- |
+| **Nemotron 3.5 Streaming 0.6B** *(default)* — continuous, punctuated, sentence case | Good — 3.0% | Under a second | 938 MB | 25 | parakeet.cpp |
+| **Parakeet Unified 0.6B** — continuous and punctuated, twice as accurate on English | Excellent — 1.4% | About two seconds | 731 MB | English | transcribe.cpp |
+| **Multitalker Parakeet Streaming 0.6B** — trained on people talking over each other | Very good — 2.2% | About a second | 734 MB | English | transcribe.cpp |
+| **Parakeet Realtime 120M** — just as quick, no punctuation | Basic | Under a second | 168 MB | English | parakeet.cpp |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Best — 1.3% | 3–4 seconds | 2.4 GB | 8 | transcribe.cpp |
+| **Parakeet TDT 0.6B v3** — waits for a phrase, multilingual | Very good | 3–4 seconds | 897 MB | 25 | parakeet.cpp |
+| **Parakeet TDT-CTC 110M** — phrase at a time, English | Good | 3–4 seconds | 170 MB | English | parakeet.cpp |
 
-The two streaming models transcribe as the audio arrives rather than waiting for a
-phrase to finish, which is the difference between captions about a second behind and
-captions three or four seconds behind.
+Accuracy is word error rate on LibriSpeech test-clean, the one benchmark all of these
+publish. Read it as a ranking rather than a promise: it is clean read speech, and live
+television is harder than that for every model in the list. The two entries without a
+figure have no published number on it, and carry a rating rather than a guess.
 
-Punctuation is the other axis, and the reason the Nemotron model is the default: it is the
-only one that is both continuous and punctuated. The 120M produces no punctuation at all —
-NVIDIA's model card is explicit that it outputs neither punctuation nor capitalisation, and
-no setting changes that — so it is there for hardware that cannot spare the cores. The
-phrase-at-a-time models punctuate but arrive several seconds later.
+The streaming models transcribe as the audio arrives rather than waiting for a phrase to
+finish, which is the difference between captions about a second behind and captions three
+or four seconds behind.
+
+Punctuation is the other axis, and the reason the Nemotron model is the default: it is
+continuous, punctuated, multilingual and quick, which no other single entry manages. The
+120M produces no punctuation at all — NVIDIA's model card is explicit that it outputs
+neither punctuation nor capitalisation, and no setting changes that — so it is there for
+hardware that cannot spare the cores.
+
+**Cohere Transcribe wants a GPU.** It is the most accurate model here and the top of the
+public open-ASR leaderboard, but it is a 2B model that decodes a word at a time and cannot
+transcribe continuously, so it reads a whole phrase before writing it. On a GPU that is
+comfortable. On a fast desktop CPU it only just keeps pace with live audio, and on a NAS it
+will fall behind and drop speech. Give it CUDA or Vulkan and it is the best captioning in
+the list; leave it on a modest processor and one of the streaming models will serve you
+better. It is offered in eight languages rather than the fourteen it knows, because CEA-608
+cannot carry Japanese, Chinese, Korean, Arabic or Greek — those would come out blank rather
+than wrong.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. Subtitle
@@ -299,7 +318,26 @@ PLAYBACK_DETECTION=FALSE
 PLAYBACK_DELAY=0
 HEARTBEAT_INTERVAL=0
 HOST_DIR=/data
+GPU_DEVICE=/dev/null:/dev/null
+DOCKER_RUNTIME=runc
+NVIDIA_VISIBLE_DEVICES=
+NVIDIA_DRIVER_CAPABILITIES=
 ```
+
+The last four are only used by closed captions, and the values above are the defaults that
+do nothing: leave them exactly as they are unless you want a GPU build of the speech engine.
+`GPU_DEVICE` passes `/dev/null` rather than being empty because a device mapping has to
+point at something that exists. To use a GPU:
+
+| Variable | Default | For an Intel or AMD GPU (Vulkan) | For an NVIDIA GPU (CUDA) |
+| --- | --- | --- | --- |
+| `GPU_DEVICE` | `/dev/null:/dev/null` | `/dev/dri:/dev/dri` | leave at the default |
+| `DOCKER_RUNTIME` | `runc` | leave at the default | `nvidia` |
+| `NVIDIA_VISIBLE_DEVICES` | empty | leave empty | `all` |
+| `NVIDIA_DRIVER_CAPABILITIES` | empty | leave empty | `compute,utility` |
+
+The NVIDIA options need the NVIDIA container toolkit installed on the host. Nothing changes
+in the image either way, and captions run on the processor if none of this is set.
 
 #### Developer Instructions
 First see https://github.com/sullrich/ah4c/blob/main/getting_started.txt

@@ -843,7 +843,9 @@ func run() error {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
-		if err := startRuntimeDownload(c.Param("variant")); err != nil {
+		// The model is optional: without it the engine for the saved model is
+		// fetched, with it the engine that model would need.
+		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
