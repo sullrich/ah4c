@@ -3337,20 +3337,9 @@ func initTranscribe(variant string) error {
 		if os.Getenv("TRANSCRIBE_PERF_DEBUG") == "" {
 			os.Setenv("TRANSCRIBE_PERF_DEBUG", "cohere")
 		}
-		// On a GPU, take the direct convolution paths. The encoder is
-		// convolution-heavy and measures as the bulk of every dispatch; the
-		// im2col fallback trades compute for memory bandwidth, which is the
-		// one thing an integrated GPU sharing system RAM has none to spare.
-		// The stage timings above say within a minute whether this was
-		// right on a given machine, and a hand-set value always wins.
-		if strings.Contains(variant, "vulkan") || strings.Contains(variant, "cuda") {
-			if os.Getenv("TRANSCRIBE_CONV_DIRECT_DW") == "" && os.Getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") == "" {
-				os.Setenv("TRANSCRIBE_CONV_DIRECT_DW", "1")
-			}
-			if os.Getenv("TRANSCRIBE_CONV_DIRECT_PW") == "" && os.Getenv("TRANSCRIBE_CONV_NO_DIRECT_PW") == "" {
-				os.Setenv("TRANSCRIBE_CONV_DIRECT_PW", "1")
-			}
-		}
+		// The conv-dispatch overrides were tried here and measured: the
+		// per-utterance encoder time did not move. The engine's own
+		// defaults stand.
 		// Point the graphics driver's compiled-shader cache at the bind
 		// mount. The first Vulkan initialization compiles every compute
 		// shader the engine uses — seconds of every core, and un-pausable.
@@ -4022,20 +4011,18 @@ func (svc *txBatchService) run(w *txWorker) {
 			return
 		case first = <-svc.requests:
 		}
-		// Inference yields to tunes — at reduced power, not a dead stop. A
-		// full freeze during every channel change put running streams
-		// seconds behind, and at high utilization a backlog never drains, so
-		// one zap turned into permanent lag. While any tune is pending,
-		// dispatches shrink to about a second of compute with a breather
-		// between them: the tune's confirmation gets the machine's attention
-		// many times a second, and captions merely slow instead of stopping.
+		// Inference stops dead while any tune has yet to deliver video. A
+		// softer version — small dispatches with breathers — was tried and
+		// starved a real device's 40-second playback confirmation into a
+		// timed-out tune. Captions pause for the pending window and the
+		// freshness ceiling snaps them back to live afterward; a recording
+		// is never the thing that pays.
 		audioCap := maxBatchAudioSec
-		if tunesPending() {
-			audioCap = 4.0
+		for tunesPending() {
 			select {
 			case <-svc.closed:
 				return
-			case <-time.After(400 * time.Millisecond):
+			case <-time.After(2 * time.Second):
 			}
 		}
 		batch := []txBatchRequest{first}
