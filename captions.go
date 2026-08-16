@@ -1448,6 +1448,58 @@ func accelStatus() accelReport {
 	return r
 }
 
+// warmCaptionModel loads the selected model into memory at startup, in the
+// background, so that a tune never waits for it.
+//
+// Loading weights is slow in proportion to their size, and Cohere Transcribe is
+// 2.4 GB: doing it on the first tune held the picture for more than thirty
+// seconds and the tune timed out before any video arrived. Captions are a
+// convenience and must never cost a tune, so the expensive part happens once,
+// here, before anybody asks for anything.
+//
+// The reference taken here is never released, which is the point: it keeps the
+// weights resident for the life of the process rather than letting them be
+// freed when the last stream stops and reloaded when the next one starts.
+func warmCaptionModel() {
+	cfg := currentCaptionConfig()
+	if !cfg.Enabled {
+		return
+	}
+	m, ok := findCaptionModel(cfg.Model)
+	if !ok || runtimeOf(m) != rtTranscribe || !modelInstalled(m) {
+		// Only the transcribe.cpp engine separates weights from decoder state,
+		// so it is the only one that can usefully be warmed. The parakeet
+		// models are a fraction of the size and load in about a second.
+		return
+	}
+	if m.NeedsGPU && !gpuAvailable() {
+		return
+	}
+	go func() {
+		start := time.Now()
+		if err := initTranscribe(runtimeDirFor(rtTranscribe, currentEngineVariant())); err != nil {
+			logger("[CC] Could not preload %s: %v", m.Name, err)
+			return
+		}
+		weights, err := filepath.Abs(modelPath(m))
+		if err != nil {
+			return
+		}
+		variant := currentEngineVariant()
+		if m.NeedsGPU && variant == "cpu" {
+			if g := gpuVariant(); g != "" {
+				variant = g
+			}
+		}
+		if _, _, err := acquireTxModel(weights, txBackend(variant)); err != nil {
+			logger("[CC] Could not preload %s: %v", m.Name, err)
+			return
+		}
+		logger("[CC] %s is loaded and resident after %s; tunes will not wait for it",
+			m.Name, time.Since(start).Round(time.Second))
+	}()
+}
+
 // gpuAvailable reports whether any GPU build could actually run here: its
 // driver loads, and for Vulkan a graphics device is present as well. It asks
 // the same questions accelStatus does, but about every build rather than the
@@ -3789,31 +3841,66 @@ type captionEngine struct {
 	tail []string
 }
 
+// newCaptionEngine returns immediately and finishes starting in the background.
+//
+// It must return immediately. This is called on the tune path, so anything slow
+// here is time the viewer spends looking at nothing: loading Cohere Transcribe
+// takes longer than the tune is allowed to take, and doing it here meant the
+// tune timed out before a single frame of video was delivered. Captions are a
+// convenience and the picture is not, so the stream is never held up for them.
+//
+// The audio decoder is not started until the model is ready either. Nothing
+// would be draining it in the meantime, and an ffmpeg whose output nobody reads
+// blocks, stops reading its own input, and ends up being fed a corrupted
+// stream. Audio offered before then is dropped, which costs the first few
+// seconds of captions on a cold start and nothing at all on a warm one.
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
-	model, err := loadRecognizer(m, cfg)
-	if err != nil {
-		return nil, err
-	}
 	e := &captionEngine{
 		enc:     newCEA608(cfg.Style, cfg.Uppercase),
 		label:   label,
 		cfg:     cfg,
-		model:   model,
 		audioCh: make(chan []byte, 64),
 		phrases: make(chan []float32, 3),
 		closed:  make(chan struct{}),
 		done:    make(chan struct{}),
 	}
+	go e.start(cfg, m)
+	return e, nil
+}
+
+// start does the slow part off the tune path.
+func (e *captionEngine) start(cfg captionConfig, m captionModel) {
+	began := time.Now()
+	model, err := loadRecognizer(m, cfg)
+	if err != nil {
+		logger("[CC] %s could not load %s: %v; this tune has no captions", e.label, m.Name, err)
+		close(e.done)
+		return
+	}
+	select {
+	case <-e.closed:
+		// The stream ended while the weights were loading.
+		model.Close()
+		close(e.done)
+		return
+	default:
+	}
 
 	pcm, err := e.startDecoder()
 	if err != nil {
+		logger("[CC] %s could not start the audio decoder: %v", e.label, err)
 		model.Close()
-		return nil, err
+		close(e.done)
+		return
 	}
+
+	e.mu.Lock()
+	e.model = model
+	e.mu.Unlock()
 
 	if m.Streaming {
 		if err := model.beginStream(cfg.Language); err != nil {
-			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", label, err)
+			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", e.label, err)
 		} else {
 			e.streaming = true
 		}
@@ -3833,9 +3920,9 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 	if e.streaming {
 		mode = "continuous"
 	}
-	logger("[CC] %s captions started, model %s on %s, language %s, %s",
-		label, m.Key, findSpeechRuntime(runtimeOf(m)).Name, cfg.Language, mode)
-	return e, nil
+	logger("[CC] %s captions started after %s, model %s on %s, language %s, %s",
+		e.label, time.Since(began).Round(time.Millisecond), m.Key,
+		findSpeechRuntime(runtimeOf(m)).Name, cfg.Language, mode)
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
@@ -4416,10 +4503,13 @@ func (e *captionEngine) Close() {
 			stopped = false
 			logger("[CC] %s recognizer did not stop in time; leaving its memory alone", e.label)
 		}
-		if stopped && e.model != nil {
+		e.mu.Lock()
+		model := e.model
+		e.mu.Unlock()
+		if stopped && model != nil {
 			// Closing the recognizer releases its streaming session as well,
 			// so the order the two engines want is theirs to decide.
-			e.model.Close()
+			model.Close()
 		}
 		logger("[CC] %s captions stopped", e.label)
 	})
