@@ -3174,6 +3174,7 @@ var (
 	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
 
 	txSetAbortCallback  func(session uintptr, cb uintptr, userData unsafe.Pointer)
+	txLogSet            func(cb uintptr, userData unsafe.Pointer)
 	txWasAborted        func(session uintptr) bool
 	txLoadParamsInit    func(p unsafe.Pointer)
 	txSessionParamsInit func(p unsafe.Pointer)
@@ -3239,6 +3240,7 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txRun, handle, "transcribe_run")
 		purego.RegisterLibFunc(&txFullText, handle, "transcribe_full_text")
 		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
+		purego.RegisterLibFunc(&txLogSet, handle, "transcribe_log_set")
 		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
 		purego.RegisterLibFunc(&txStreamBegin, handle, "transcribe_stream_begin")
 		purego.RegisterLibFunc(&txStreamFeed, handle, "transcribe_stream_feed")
@@ -3255,6 +3257,11 @@ func initTranscribe(variant string) error {
 			txErr = err
 			return
 		}
+		// Take the engine's logging before the backend scan, or its running
+		// commentary goes to stderr and buries everything else. It writes a
+		// line about its key/value cache for every phrase it transcribes, which
+		// on a busy channel is a line a second, for ever.
+		txLogSet(txLogCallback(), nil)
 		if st := txInitBackends(dir); st != txOK {
 			txErr = fmt.Errorf("registering the transcribe.cpp backends: %s", txStatusString(st))
 			return
@@ -3432,7 +3439,7 @@ func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) 
 	live := txLive[key]
 	txModelLock.Unlock()
 	if live > 0 {
-		logger("[CC] Loading another copy of %s for a second stream; the copies cannot be shared without the streams waiting on each other", filepath.Base(path))
+		logger("[CC] Loading a second copy of %s for another stream", filepath.Base(path))
 	}
 
 	// Loaded outside the lock: this takes tens of seconds for a large model and
@@ -3449,7 +3456,7 @@ func acquireTxModel(path string, backend int32) (*sharedTxModel, string, error) 
 	txLive[key]++
 	n := txLive[key]
 	txModelLock.Unlock()
-	logger("[CC] %s loaded (%d copies now in memory)", filepath.Base(path), n)
+	logger("[CC] Loaded %s (%d in memory)", filepath.Base(path), n)
 	return m, key, nil
 }
 
@@ -3479,7 +3486,43 @@ func releaseTxModel(key string, m *sharedTxModel) {
 
 	// Freed outside the lock for the same reason it is loaded outside it.
 	txModelFree(handle)
-	logger("[CC] Released %s (%d copies still in memory)", filepath.Base(strings.SplitN(key, "|", 2)[0]), n)
+	logger("[CC] Freed %s (%d in memory)", filepath.Base(strings.SplitN(key, "|", 2)[0]), n)
+}
+
+// txLogCallback filters what the engine has to say down to what a person
+// running a TV proxy would want to see: warnings and errors, nothing else.
+// Chatter about buffer allocations is the engine's business.
+var (
+	txLogOnce sync.Once
+	txLogPtr  uintptr
+)
+
+func txLogCallback() uintptr {
+	txLogOnce.Do(func() {
+		txLogPtr = purego.NewCallback(func(level int32, msg *byte, _ unsafe.Pointer) {
+			// 2 is WARN and 3 is ERROR; INFO, DEBUG and continuation lines are
+			// dropped where they are made rather than filtered later.
+			if level != 2 && level != 3 {
+				return
+			}
+			if text := strings.TrimSpace(txGoString(msg)); text != "" {
+				logger("[CC] engine: %s", text)
+			}
+		})
+	})
+	return txLogPtr
+}
+
+// txGoString reads a NUL-terminated string the engine owns.
+func txGoString(p *byte) string {
+	if p == nil {
+		return ""
+	}
+	n := 0
+	for *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+		n++
+	}
+	return string(unsafe.Slice(p, n))
 }
 
 // transcribeModel is a loaded model and the session that runs it.
@@ -3857,9 +3900,10 @@ type captionEngine struct {
 	// slow model never stops the audio being read. It is small on purpose: a
 	// phrase is a couple of hundred kilobytes, and a recognizer far enough
 	// behind to fill this is not going to catch up by being given more room.
-	// Only the reader goroutine touches dropped.
+	// phrases carries cut phrases from the reader to the recognizer. dropped is
+	// written by the reader and read by the recognizer, so it is atomic.
 	phrases chan []float32
-	dropped int
+	dropped int64
 	// slow counts phrases that took longer to recognize than they were to say.
 	// Only the recognizer goroutine touches it.
 	slow int
@@ -3948,9 +3992,8 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if e.streaming {
 		mode = "continuous"
 	}
-	logger("[CC] %s captions started after %s, model %s on %s, language %s, %s",
-		e.label, time.Since(began).Round(time.Millisecond), m.Key,
-		findSpeechRuntime(runtimeOf(m)).Name, cfg.Language, mode)
+	logger("[CC] %s captions on: %s, %s, %s, ready in %s",
+		e.label, m.Key, cfg.Language, mode, time.Since(began).Round(time.Millisecond))
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
@@ -4337,7 +4380,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		frames++
 		if frames%framesPerMinute == 0 {
 			if cutThisMinute == 0 {
-				logger("[CC] %s a minute of audio arrived but no speech was found in it; starting the level detector again in case it has settled somewhere useless", e.label)
+				logger("[CC] %s a minute of audio with no speech found in it; resetting the level detector", e.label)
 				// Whatever the detector has learned, it is not working. The
 				// arithmetic above should make this unreachable; it is here
 				// because captions that never come back is the failure this
@@ -4426,9 +4469,9 @@ func (e *captionEngine) queue(audio []float32) {
 		// The recognizer is still working through what it has. Losing this
 		// phrase costs a sentence; waiting here would cost the audio stream,
 		// which is the trade that made captions stop altogether.
-		e.dropped++
-		if e.dropped == 1 || e.dropped%10 == 0 {
-			logger("[CC] %s recognizer is behind and dropped %d phrase(s) so far; a GPU build or a lighter model would keep up", e.label, e.dropped)
+		n := atomic.AddInt64(&e.dropped, 1)
+		if n == 1 || n%10 == 0 {
+			logger("[CC] %s behind: %d phrases dropped", e.label, n)
 		}
 	}
 }
@@ -4457,18 +4500,27 @@ func (e *captionEngine) caption(audio []float32) {
 	text, err := e.model.transcribe(audio)
 	took := time.Since(start)
 	if err != nil {
-		logger("[CC] %s recognition failed after %s on %.1fs of audio: %v", e.label, took.Round(time.Millisecond), secs, err)
+		logger("[CC] %s recognition failed after %s: %v", e.label, took.Round(time.Millisecond), err)
 		return
 	}
-	// A recognizer that cannot beat real time will fall behind for as long as
-	// people keep talking, and that shows up as captions that stop rather than
-	// captions that lag. Say so the first time it happens rather than leaving
-	// it to be deduced from the silence.
+	// Taking longer than the audio lasted is not the same as falling behind,
+	// and reporting it as though it were was alarming people whose captions
+	// were perfect. Speech has gaps in it: the segmenter only ever hands over
+	// the parts somebody was talking, so a phrase holding 2.7 seconds of speech
+	// usually has a good deal more than 2.7 seconds of wall clock behind it.
+	// A recognizer at just over the length of the speech is comfortably keeping
+	// up with the channel.
+	//
+	// What actually means it is losing is phrases being dropped, which is
+	// counted where it happens. So that is what this waits for, and until then
+	// a thin margin is reported as a thin margin.
 	if took.Seconds() > secs {
 		e.slow++
-		if e.slow == 1 || e.slow%20 == 0 {
-			logger("[CC] %s took %s to recognize %.1fs of audio (%d times now); this model cannot keep up on this hardware",
-				e.label, took.Round(time.Millisecond), secs, e.slow)
+		switch drops := atomic.LoadInt64(&e.dropped); {
+		case drops > 0 && (e.slow == 1 || e.slow%20 == 0):
+			logger("[CC] %s falling behind: %s for %.1fs of speech, %d dropped", e.label, took.Round(time.Millisecond), secs, drops)
+		case e.slow == 1 || e.slow%100 == 0:
+			logger("[CC] %s tight on time: %s for %.1fs of speech, keeping up (nothing dropped)", e.label, took.Round(time.Millisecond), secs)
 		}
 	}
 	text = e.trimOverlap(text)
