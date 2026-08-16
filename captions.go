@@ -4222,6 +4222,22 @@ func (b *batchClient) transcribe(pcm []float32) (string, error) {
 	}
 }
 
+// submit queues a phrase and returns the channel its reply will arrive on, so
+// a stream can keep more than one phrase in flight and the batch call can
+// actually batch. A nil channel with nil error means the clip was too short.
+func (b *batchClient) submit(pcm []float32) (<-chan txBatchReply, error) {
+	if len(pcm) < asrSampleRate/4 {
+		return nil, nil
+	}
+	reply := make(chan txBatchReply, 1)
+	select {
+	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply}:
+		return reply, nil
+	default:
+		return nil, fmt.Errorf("the shared recognizer is full")
+	}
+}
+
 func (b *batchClient) beginStream(string) error           { return fmt.Errorf("phrase at a time only") }
 func (b *batchClient) feedStream([]float32) *streamResult { return nil }
 func (b *batchClient) finishStream() *streamResult        { return nil }
@@ -5873,6 +5889,50 @@ func (e *captionEngine) queue(audio []float32) {
 // ever calls into it on this path.
 func (e *captionEngine) recognize() {
 	defer e.finish()
+	// Against the shared service, a stream keeps two phrases in flight and
+	// shows the answers strictly in order. Submitting one and waiting was
+	// this stream throttling itself to one phrase per service cycle — the
+	// batch call exists to take many at once, and with five tuners cutting
+	// phrases faster than one-per-cycle, every stream dropped phrases while
+	// the recognizer itself had capacity to spare.
+	type pendingPhrase struct {
+		reply <-chan txBatchReply
+		item  phraseItem
+		sent  time.Time
+	}
+	async, canAsync := e.model.(interface {
+		submit(pcm []float32) (<-chan txBatchReply, error)
+	})
+	var window []pendingPhrase
+	// settleHead shows the oldest in-flight phrase's result; when block is
+	// false it only does so if the result is already in.
+	settleHead := func(block bool) bool {
+		if len(window) == 0 {
+			return false
+		}
+		p := window[0]
+		var r txBatchReply
+		if block {
+			select {
+			case r = <-p.reply:
+			case <-e.closed:
+				return false
+			case <-time.After(txRunDeadline + 8*time.Second):
+				window = window[1:]
+				logger("[CC] %s the shared recognizer did not answer", e.label)
+				return true
+			}
+		} else {
+			select {
+			case r = <-p.reply:
+			default:
+				return false
+			}
+		}
+		window = window[1:]
+		e.captionResult(p.item, r.text, r.err, time.Since(p.sent))
+		return true
+	}
 	for item := range e.phrases {
 		select {
 		case <-e.closed:
@@ -5889,17 +5949,43 @@ func (e *captionEngine) recognize() {
 			}
 			continue
 		}
-		e.caption(item)
+		if !canAsync {
+			e.caption(item)
+			continue
+		}
+		for settleHead(false) {
+		}
+		reply, err := async.submit(item.pcm)
+		if err != nil {
+			// A full service is a dropped phrase; the falling-behind log
+			// already reports the count.
+			atomic.AddInt64(&e.dropped, 1)
+			continue
+		}
+		if reply == nil {
+			continue
+		}
+		window = append(window, pendingPhrase{reply: reply, item: item, sent: time.Now()})
+		for len(window) >= 2 {
+			if !settleHead(true) {
+				return
+			}
+		}
 	}
 }
 
 // caption recognizes one phrase and queues it for display.
 func (e *captionEngine) caption(item phraseItem) {
 	audio := item.pcm
-	secs := float64(len(audio)) / asrSampleRate
 	start := time.Now()
 	text, err := e.model.transcribe(audio)
-	took := time.Since(start)
+	e.captionResult(item, text, err, time.Since(start))
+}
+
+// captionResult accounts for one phrase's outcome and queues its text for
+// display. Called on the recognize goroutine only, in phrase order.
+func (e *captionEngine) captionResult(item phraseItem, text string, err error, took time.Duration) {
+	secs := float64(len(item.pcm)) / asrSampleRate
 	if age := time.Since(item.cut); age > phraseStaleAfter+txRunDeadline {
 		// It was fresh going in and ancient coming out: the recognizer stalled
 		// underneath it. Showing it now would caption the past.
