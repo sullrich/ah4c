@@ -4338,8 +4338,8 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	// is a core burned idling. Eight spinning threads beside a tune's
 	// playback checks was part of how captions cost a recording.
 	threads := captionComputeThreads()
-	if svc.backend != txBackendCPU && threads > 4 {
-		threads = 4
+	if svc.backend != txBackendCPU {
+		threads = captionGPUThreads()
 	}
 	sp.nThreads = int32(threads)
 	// The decoder window stays at the model's own maximum. The engine's header
@@ -7338,6 +7338,31 @@ func captionComputeThreads() int {
 	if reserve := availableCPUs() / 4; n > availableCPUs()-reserve {
 		n = availableCPUs() - reserve
 	}
+	if n < 2 {
+		n = 2
+	}
+	return n
+}
+
+// captionGPUThreads is the shared recognizer's allowance when the arithmetic
+// is happening on a graphics chip: half of what the processor path would get.
+//
+// Half, and not a fixed number, because the machine is the thing that decides
+// how much of itself it can spare — a four-core box and a thirty-two-core box
+// are not both entitled to the same four threads, and neither should be told a
+// figure that was measured on somebody else's hardware. It is derived from the
+// same probe as the processor path, so a cgroup quota, a hybrid chip's
+// efficiency cores and a machine with very few cores are all already accounted
+// for by the time this halves it.
+//
+// Half rather than all of it because on this path the threads are not doing
+// the arithmetic. The GPU is; these run the mel frontend and the handoffs, and
+// ggml spin-waits every one of them while the GPU computes, so a thread beyond
+// what the frontend needs is a core burned idling next to a tune. The floor of
+// two is the same floor the processor path has: below that there is nothing to
+// share out.
+func captionGPUThreads() int {
+	n := captionComputeThreads() / 2
 	if n < 2 {
 		n = 2
 	}
