@@ -1296,7 +1296,11 @@ func main() {
 	loadenv()
 	loadCaptionConfig()
 	warnIfNotPersistent()
-	restoreGPURuntime()
+	// The driver restore installs packages, which is heavy, and a container
+	// that just started is exactly when the DVR re-tunes everything at once.
+	// The restore yields to all of that in the background; nothing at startup
+	// may delay the server coming up.
+	go restoreGPURuntimeQuietly()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {

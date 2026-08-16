@@ -1529,9 +1529,41 @@ func gpuAvailable() bool {
 	return false
 }
 
+// driverRestoreDone closes when the startup driver restore has finished (or
+// found nothing to do). The engine's first initialisation waits on it, so a
+// fresh container does not open the Vulkan library half-installed and settle
+// on the processor for the life of the process.
+var driverRestoreDone = make(chan struct{})
+
+// restoreGPURuntimeQuietly is the startup restore, off the startup path. It
+// used to run synchronously in main, which put a whole package installation
+// between the container starting and the server listening — and a container
+// that just restarted faces every recording the DVR wants back immediately.
+// Now the server comes up first, and the installation waits its turn behind
+// the tunes like every other heavy thing here.
+func restoreGPURuntimeQuietly() {
+	defer close(driverRestoreDone)
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// Nothing saved, or already loaded, means nothing heavy will happen —
+	// skip the wait so the common case is settled instantly.
+	need := false
+	for _, g := range gpuRuntimes {
+		if driverDownloaded(g) && !driverActive(g) {
+			need = true
+		}
+	}
+	if need {
+		for !waitTuneQuiet(30 * time.Second) {
+		}
+	}
+	restoreGPURuntime()
+}
+
 // restoreGPURuntime puts the driver back after a container rebuild, from the
-// copy in the bind mount. Called at startup, so the choice survives without
-// anyone pressing anything or the network being reachable.
+// copy in the bind mount, so the choice survives without anyone pressing
+// anything or the network being reachable.
 func restoreGPURuntime() {
 	if runtime.GOOS != "linux" {
 		return
@@ -3063,6 +3095,15 @@ var (
 // that does not load, and the engine carries on with the ones that did.
 func initTranscribe(variant string) error {
 	txOnce.Do(func() {
+		// A fresh container may still be putting the driver back; opening the
+		// engine before that finishes would find no Vulkan library and settle
+		// on the processor for the life of the process. Bounded: a restore
+		// that is stuck does not get to hold captions hostage.
+		select {
+		case <-driverRestoreDone:
+		case <-time.After(90 * time.Second):
+			logger("[CC] The driver restore is still running after 90s; opening the engine with whatever is loadable now")
+		}
 		lib := runtimeLibPath(rtTranscribe, variant)
 		if lib == "" {
 			txErr = fmt.Errorf("no transcribe.cpp build is published for %s/%s", runtime.GOOS, runtime.GOARCH)
