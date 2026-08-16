@@ -1593,10 +1593,15 @@ func gpuAvailable() bool {
 // on the processor for the life of the process.
 var driverRestoreDone = make(chan struct{})
 
-// restoreGPURuntimeQuietly is the startup restore, off the startup path. It
-// A container that just restarted faces every recording the DVR wants back
-// immediately, so the server comes up first, and the installation waits its
-// turn behind the tunes like every other heavy thing here.
+// restoreGPURuntime is called once at startup and returns immediately: the
+// work happens in the background, behind the tune gate. A container that
+// just restarted faces every recording the DVR wants back immediately, so
+// the server comes up first and the installation waits its turn like every
+// other heavy thing here.
+func restoreGPURuntime() {
+	go restoreGPURuntimeQuietly()
+}
+
 func restoreGPURuntimeQuietly() {
 	defer close(driverRestoreDone)
 	if runtime.GOOS != "linux" {
@@ -1643,7 +1648,7 @@ func restoreGPURuntimeQuietly() {
 		}
 	}
 	if need {
-		restoreGPURuntime()
+		reinstallSavedDriver()
 	}
 	warmEngineCache()
 	// The engine scans for backends once per process. If it already ran that
@@ -1683,10 +1688,10 @@ func warmEngineCache() {
 	}
 }
 
-// restoreGPURuntime puts the driver back after a container rebuild, from the
-// copy in the bind mount, so the choice survives without anyone pressing
+// reinstallSavedDriver puts the driver back after a container rebuild, from
+// the copy in the bind mount, so the choice survives without anyone pressing
 // anything or the network being reachable.
-func restoreGPURuntime() {
+func reinstallSavedDriver() {
 	if runtime.GOOS != "linux" {
 		return
 	}
@@ -6106,13 +6111,14 @@ func waitTuneQuiet(bound time.Duration) bool {
 	}
 }
 
-// tuneSettleReader marks the tune settled on the first byte it delivers.
+// tuneSettleReader marks the tune settled on the first byte it delivers, or
+// on close for a stream that never delivers one — whichever comes first.
 type tuneSettleReader struct {
-	inner io.Reader
+	inner io.ReadCloser
 	once  sync.Once
 }
 
-func newTuneSettleReader(r io.Reader) *tuneSettleReader { return &tuneSettleReader{inner: r} }
+func newTuneSettleReader(r io.ReadCloser) *tuneSettleReader { return &tuneSettleReader{inner: r} }
 
 func (t *tuneSettleReader) Read(p []byte) (int, error) {
 	n, err := t.inner.Read(p)
@@ -6120,6 +6126,11 @@ func (t *tuneSettleReader) Read(p []byte) (int, error) {
 		t.once.Do(captionTuneSettled)
 	}
 	return n, err
+}
+
+func (t *tuneSettleReader) Close() error {
+	t.once.Do(captionTuneSettled)
+	return t.inner.Close()
 }
 
 // tuneQuiet reports whether every tune on the machine is out of its fragile
@@ -6285,7 +6296,15 @@ type captionStream struct {
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
 // the selected model is installed, so a tune costs nothing when captions are
 // off or half configured.
+//
+// It is also where the tune gate learns about tunes: this is called for every
+// tuner's stream as it comes up, captioned or not, so it marks the tune as
+// beginning here — through its most fragile stretch, playback confirmation —
+// and the returned reader marks it settled at the first delivered byte. All
+// of it inside this file; the caller just wraps a reader like always.
 func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadCloser {
+	captionTuneStarting()
+	src = newTuneSettleReader(src)
 	cfg := currentCaptionConfig()
 	if !cfg.Enabled {
 		return src

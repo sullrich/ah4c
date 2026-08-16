@@ -676,14 +676,8 @@ func run() error {
 	r.GET("/play/tuner:tuner/:channel", func(c *gin.Context) {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
-		// The tune's clock starts here, not at the first stream byte: the
-		// device launch and playback confirmation ahead of the stream are the
-		// most fragile part, and heavy caption work yields to all of it.
-		captionTuneStarting()
 		reader, err := tune(tuner, channel)
 		if err != nil {
-			// A tune that failed outright has nothing left to protect.
-			captionTuneSettled()
 			logger("[ERR] Failed to tune %s", err)
 			errorMessage := fmt.Sprintf("<html><body><h1>Error: %s</h1></body></html>", err.Error())
 			c.Data(500, "text/html; charset=utf-8", []byte(errorMessage))
@@ -696,13 +690,9 @@ func run() error {
 		defer func() {
 			reader.Close()
 		}()
-		// The tune leaves its fragile stretch the moment it delivers its
-		// first byte to the DVR — whichever tuner type and gating path got
-		// it there. If it never delivers one, the hold ages out on its own.
-		settled := newTuneSettleReader(reader)
 		starttime := time.Now()
 		var bytesCopied int64
-		if bytesCopied, err = io.Copy(c.Writer, settled); err != nil {
+		if bytesCopied, err = io.Copy(c.Writer, reader); err != nil {
 			logger("[IO] io.Copy: %v", err)
 		}
 		logger("[IOINFO] Successfully copied %v bytes", bytesCopied)
@@ -1295,11 +1285,7 @@ func main() {
 	loadenv()
 	loadCaptionConfig()
 	warnIfNotPersistent()
-	// The driver restore installs packages, which is heavy, and a container
-	// that just started is exactly when the DVR re-tunes everything at once.
-	// The restore yields to all of that in the background; nothing at startup
-	// may delay the server coming up.
-	go restoreGPURuntimeQuietly()
+	restoreGPURuntime()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {
