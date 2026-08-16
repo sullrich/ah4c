@@ -58,11 +58,12 @@ them back.
 > Nothing else about the image or the compose file changes, and the directory stays empty
 > unless captions are switched on.
 
-Audio is pulled out of the encoder's transport stream, transcribed on the CPU by an
-NVIDIA Parakeet model, and written back into the video as CEA-608 caption data carried
+Audio is pulled out of the encoder's transport stream, transcribed by a speech model
+running on this machine, and written back into the video as CEA-608 caption data carried
 in ATSC A/53 user data — the same carriage an HDHomeRun uses for over-the-air captions.
 Channels DVR, VLC and anything else see a real closed caption track and offer it under
-the usual subtitles button.
+the usual subtitles button. Nothing is sent anywhere: no account, no API key, no audio
+leaving the box.
 
 - **Not burned in, and not re-encoded.** The compressed video is passed through
   untouched; only a small caption message is inserted ahead of each picture, and the
@@ -76,27 +77,46 @@ the usual subtitles button.
   `CGO_ENABLED=0` still builds.
 - **Nothing is gated on an environment variable.** Everything is controlled from the web
   UI and stored in `captions/config.json`. Changes apply to the next tune.
-- **No GPU, no /dev/dri, no hardware encoder.** It runs several times faster than real
-  time on an ordinary CPU.
+- **No GPU, no /dev/dri, no hardware encoder.** Every model except one runs several times
+  faster than real time on an ordinary CPU. The exception is Cohere Transcribe, which is
+  the most accurate of them and wants a graphics card; the page says so next to it.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
-The page offers a small engine plus your choice of model. Nothing is bundled and
-nothing is fetched until you ask for it. Every download URL is shown on the page next to
-the button, so it is always clear what is being fetched and from where.
+The page offers an engine plus your choice of model. Nothing is bundled and nothing is
+fetched until you ask for it. Every download URL is shown on the page next to the button,
+so it is always clear what is being fetched and from where.
 
-**Speech engine** (required) — [parakeet.cpp](https://github.com/mudler/parakeet.cpp) built for
-your platform, from that project's GitHub releases. Four builds exist and the page offers
-whichever this container can actually load:
+**Speech engine** (required) — there are two, and the model you pick decides which one is
+used, so there is nothing to choose. Both are downloaded from their own GitHub releases
+into the same directory, and neither is in the image.
 
-| Build | Size | Needs |
+| Engine | Runs | Size on Linux x64 |
 | --- | --- | --- |
-| CPU | ~1 MB | Nothing. Fast enough for several tuners at once |
-| GPU via Vulkan | 59 MB | A Vulkan driver in the container and `/dev/dri` passed through |
-| GPU via CUDA | 537 MB | The NVIDIA container runtime; the download carries its own CUDA runtime |
-| GPU via CUDA 12 | 722 MB | The same, for older drivers |
+| [parakeet.cpp](https://github.com/mudler/parakeet.cpp) | NVIDIA's Parakeet and Nemotron models | ~1 MB CPU, 59 MB Vulkan, 537–722 MB CUDA |
+| [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) | A much wider set of families, Cohere Transcribe among them | 28 MB CPU and Vulkan together, 216 MB CUDA |
+
+parakeet.cpp implements NVIDIA's Parakeet architectures and only those, which is why the
+second one is here: everything at the top of the open speech leaderboard is a different
+shape. transcribe.cpp is larger because it ships its ggml backends as separate libraries
+rather than compiling them in. Switching between models that use different engines means
+one more download, once, and the page says which engine a model needs before you save the
+choice.
+
+Each engine is built per platform, and the page offers whichever builds this container can
+actually load:
+
+| Build | Needs |
+| --- | --- |
+| CPU | Nothing. Fast enough for several tuners at once |
+| GPU via Vulkan | A Vulkan driver in the container and `/dev/dri` passed through |
+| GPU via CUDA | The NVIDIA container runtime; the download carries its own CUDA runtime |
+| GPU via CUDA 12 | The same, for older drivers. parakeet.cpp only — transcribe.cpp has a single CUDA build |
 
 None of them change the image, and the page tells you at a glance whether acceleration is
-actually working or which piece is missing.
+actually working or which piece is missing. One difference worth knowing: transcribe.cpp
+puts its processor and Vulkan backends in the same archive and picks between them when the
+model is loaded, so those two are one download rather than two, and a machine with no
+graphics card runs the same file on its processor instead of failing to open it.
 
 **Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
 downloads it the same way it downloads a model: the packages and everything they depend on
@@ -127,14 +147,16 @@ A GPU build is greyed out until the library it needs is loadable, which is settl
 the dynamic loader rather than by guessing. If a GPU build is selected but cannot run, the
 engine falls back to the processor rather than failing, so captions keep working. Apple
 silicon gets Metal in its single build and has no choice to make; arm64 Linux has no CUDA
-build upstream and is offered CPU and Vulkan.
+build from either project and is offered CPU and Vulkan.
 
 Quick Sync is not on that list and cannot be. It is fixed-function video encode and decode
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models**, from Hugging Face. Each names the engine that runs it, and the page downloads
-that engine when you pick the model:
+**Models**, from Hugging Face — the Parakeet ones from
+[mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf), the rest from
+the [handy-computer](https://huggingface.co/handy-computer) collection. Each names the
+engine that runs it, and the page downloads that engine when you pick the model:
 
 | Model | Accuracy | Delay | Size | Languages | Engine |
 | --- | --- | --- | --- | --- | --- |
@@ -172,8 +194,8 @@ cannot carry Japanese, Chinese, Korean, Arabic or Greek — those would come out
 than wrong.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
-captioning and is easier to read across a room; there is a setting for mixed case. Subtitle
-files keep the natural sentence case regardless, since a file is read close up.
+captioning and is easier to read across a room; there is a setting for mixed case. That
+also evens out the streaming models, which write in lower case.
 
 The right build for the machine is chosen automatically, so the arm64 image fetches the
 arm64 engine without being told.
@@ -183,9 +205,11 @@ the host they sit in `${HOST_DIR}/ah4c/captions`, beside the `scripts`, `m3u` an
 directories ah4c already keeps there. Remove either download from the page to reclaim the
 space.
 
-Captions appear a second or two after the words are spoken, because a phrase has to
-finish before it can be recognized — the same lag live broadcast captioning has. An
-optional extra delay is available if you want to push them back further.
+How far behind the captions run depends on the model. A streaming one transcribes as the
+audio arrives and lands about a second back; a phrase-at-a-time one has to wait for the
+sentence to finish and lands three or four seconds back. Either way it is the same kind of
+lag live broadcast captioning has. An optional extra delay is available if you want to push
+them back further.
 
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
