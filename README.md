@@ -154,12 +154,12 @@ Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, sin
 television is harder than clean read speech for every model.
 
 **Memory.** Cohere Transcribe reads a phrase at a time, so one copy — about 2.2 GB
-resident — is shared by every tuner captioning at once and freed when the last of them
-ends. If the shared copy provably cannot keep pace with the streams feeding it, a second
-copy is loaded to run them in parallel, the log says so, and that doubles the figure while
-the pressure lasts. The streaming models hold their session open for the whole tune, so
-each tuner runs its own copy: about 960 MB per stream for Nemotron, about 160 MB for
-Moonshine. The page works the numbers out for your own setup.
+resident — is shared by every tuner captioning at once, and freed when the last of them
+ends. One copy is all it ever loads: if it cannot keep pace with the streams feeding it,
+captions thin themselves to stay current and the log says which backend would do better —
+memory is never spent to cover for a slow setting. The streaming models hold their session
+open for the whole tune, so each tuner runs its own copy: about 960 MB per stream for
+Nemotron, about 160 MB for Moonshine. The page works the numbers out for your own setup.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.

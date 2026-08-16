@@ -3626,11 +3626,7 @@ type txBatchService struct {
 	ready chan struct{}
 	err   error
 
-	workerLock sync.Mutex
-	workers    int
-	pressure   int
-
-	// Telemetry, shared by the workers.
+	// Telemetry.
 	telMu        sync.Mutex
 	tDispatches  int64
 	tPhrases     int64
@@ -3660,7 +3656,7 @@ var (
 )
 
 // makeWorker loads a copy of the weights and opens a session on it.
-func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, error) {
+func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	shared, key, err := acquireTxModel(svc.path, svc.backend, alive)
 	if err != nil {
 		return nil, err
@@ -3668,16 +3664,11 @@ func (svc *txBatchService) makeWorker(alive func() bool, share int) (*txWorker, 
 	_ = key
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	// The first worker gets the full compute allowance, because most of the
-	// time it is the only one; a second, spawned under pressure, takes a half
-	// share so the pair still respects the machine's reserve. Halving the
-	// first worker in anticipation of a second that mostly never exists was
-	// measured at a fraction of the model's known speed — a guard against a
-	// possible problem that manufactured a real one.
-	threads := captionComputeThreads() / share
-	if threads < 2 {
-		threads = 2
-	}
+	// The one worker gets the full compute allowance. There is exactly one:
+	// a model is one copy in memory, full stop. When it cannot keep pace the
+	// freshness rules thin the phrases and the telemetry says which backend
+	// would do better — memory is never spent to paper over a slow choice.
+	threads := captionComputeThreads()
 	sp.nThreads = int32(threads)
 	// The decoder window stays at the model's own maximum. The engine's header
 	// warns that for families where audio tokens share the decoder window,
@@ -3737,7 +3728,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 
 	go func() {
 		defer close(svc.ready)
-		w, err := svc.makeWorker(alive, 1)
+		w, err := svc.makeWorker(alive)
 		if err != nil {
 			svc.err = err
 			txServiceLock.Lock()
@@ -3745,9 +3736,6 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			txServiceLock.Unlock()
 			return
 		}
-		txServiceLock.Lock()
-		svc.workers = 1
-		txServiceLock.Unlock()
 		go svc.run(w)
 	}()
 
@@ -3774,34 +3762,6 @@ func (svc *txBatchService) release() {
 	}
 	delete(txServices, svc.path+"|"+fmt.Sprint(svc.backend))
 	close(svc.closed)
-}
-
-// notePressure spawns the second worker when dispatches keep ending with a
-// backlog still queued: one copy is provably not keeping up.
-func (svc *txBatchService) notePressure(queued int) {
-	svc.workerLock.Lock()
-	defer svc.workerLock.Unlock()
-	if queued == 0 {
-		svc.pressure = 0
-		return
-	}
-	svc.pressure++
-	if svc.pressure < 3 || svc.workers >= 2 {
-		return
-	}
-	svc.workers = 2
-	logger("[CC] The shared recognizer is not keeping up with its streams; loading a second copy of %s to run them in parallel — this costs its memory again", filepath.Base(svc.path))
-	go func() {
-		w, err := svc.makeWorker(nil, 2)
-		if err != nil {
-			logger("[CC] Could not load the second copy: %v", err)
-			svc.workerLock.Lock()
-			svc.workers = 1
-			svc.workerLock.Unlock()
-			return
-		}
-		go svc.run(w)
-	}()
 }
 
 func (svc *txBatchService) run(w *txWorker) {
@@ -3856,7 +3816,6 @@ func (svc *txBatchService) run(w *txWorker) {
 		}
 	ready:
 		svc.dispatch(w, batch)
-		svc.notePressure(len(svc.requests))
 	}
 }
 
