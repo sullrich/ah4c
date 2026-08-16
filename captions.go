@@ -3803,12 +3803,10 @@ type txBatchReply struct {
 }
 
 // txBatchService is the shared recognizer for a phrase-at-a-time model: one
-// request queue, served by one or two workers. A worker owns one copy of the
-// weights and one session, because the engine permits one run in flight per
-// copy — so concurrency is bought the only way it can be, with another copy.
-// The second worker is spawned only under demonstrated pressure: dispatches
-// repeatedly finishing with a backlog still waiting. Memory pays for keeping
-// pace, which is this project's standing trade, and the log says when and why.
+// request queue, served by one worker that owns the one copy of the weights
+// and its session. The engine permits one run in flight per copy, and one
+// copy is all there is: when the worker cannot keep pace, the freshness rules
+// thin the phrases and the telemetry says which backend would do better.
 type txBatchService struct {
 	path    string
 	backend int32
@@ -3862,11 +3860,16 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	_ = key
 	sp := txSessionParams{}
 	txSessionParamsInit(unsafe.Pointer(&sp))
-	// The one worker gets the full compute allowance. There is exactly one:
-	// a model is one copy in memory, full stop. When it cannot keep pace the
-	// freshness rules thin the phrases and the telemetry says which backend
-	// would do better — memory is never spent to paper over a slow choice.
+	// The one worker gets the full compute allowance on the processor. On a
+	// GPU backend it gets a fraction of it: the GPU does the arithmetic, the
+	// CPU threads exist for the frontend and the handoffs — and ggml spin-
+	// waits every one of them while the GPU computes, so each extra thread
+	// is a core burned idling. Eight spinning threads beside a tune's
+	// playback checks was part of how captions cost a recording.
 	threads := captionComputeThreads()
+	if svc.backend != txBackendCPU && threads > 4 {
+		threads = 4
+	}
 	sp.nThreads = int32(threads)
 	// The decoder window stays at the model's own maximum. The engine's header
 	// warns that for families where audio tokens share the decoder window,
@@ -3976,6 +3979,25 @@ func (svc *txBatchService) run(w *txWorker) {
 		case <-svc.closed:
 			return
 		case first = <-svc.requests:
+		}
+		// Inference yields to tunes like every other heavy thing here. A
+		// decode occupies the GPU in long submissions and spin-waits its CPU
+		// threads while it runs, and a tune's playback confirmation needs
+		// both; recognizing speech through somebody's channel change was the
+		// last way captions could still cost a recording. Held phrases age,
+		// the freshness rules thin them, and captions catch up on live audio
+		// the moment the machine is quiet — behind by nothing, minus a
+		// sentence or two around each tune.
+		for {
+			quiet, wait := tuneQuiet()
+			if quiet {
+				break
+			}
+			select {
+			case <-svc.closed:
+				return
+			case <-time.After(wait):
+			}
 		}
 		batch := []txBatchRequest{first}
 		audioSec := float64(len(first.pcm)) / asrSampleRate
