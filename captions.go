@@ -631,6 +631,11 @@ type captionConfig struct {
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
+	// Latency picks how far ahead a streaming model looks before it commits a
+	// word. It is the difference between captions a fifth of a second behind
+	// and two seconds behind, and between one unit of work per chunk and
+	// several, so it matters most when more than one tuner is captioned.
+	Latency string `json:"latency"`
 	// Tuners restricts captioning to specific tuner indexes. Empty means all.
 	Tuners []int `json:"tuners"`
 }
@@ -643,6 +648,7 @@ func defaultCaptionConfig() captionConfig {
 		Style:     "rollup3",
 		Uppercase: true,
 		Engine:    "cpu",
+		Latency:   "balanced",
 		OffsetSec: 0,
 	}
 }
@@ -3173,15 +3179,18 @@ var (
 	txStreamFinalize func(session uintptr, update unsafe.Pointer) int32
 	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
 
-	txSetAbortCallback  func(session uintptr, cb uintptr, userData unsafe.Pointer)
-	txLogSet            func(cb uintptr, userData unsafe.Pointer)
-	txWasAborted        func(session uintptr) bool
-	txLoadParamsInit    func(p unsafe.Pointer)
-	txSessionParamsInit func(p unsafe.Pointer)
-	txRunParamsInit     func(p unsafe.Pointer)
-	txStreamParamsInit  func(p unsafe.Pointer)
-	txStreamUpdateInit  func(p unsafe.Pointer)
-	txStreamTextInit    func(p unsafe.Pointer)
+	txSetAbortCallback   func(session uintptr, cb uintptr, userData unsafe.Pointer)
+	txAcceptsExtKind     func(model uintptr, slot int32, kind uint32) bool
+	txPkStreamExtInit    func(p unsafe.Pointer)
+	txPkBufStreamExtInit func(p unsafe.Pointer)
+	txLogSet             func(cb uintptr, userData unsafe.Pointer)
+	txWasAborted         func(session uintptr) bool
+	txLoadParamsInit     func(p unsafe.Pointer)
+	txSessionParamsInit  func(p unsafe.Pointer)
+	txRunParamsInit      func(p unsafe.Pointer)
+	txStreamParamsInit   func(p unsafe.Pointer)
+	txStreamUpdateInit   func(p unsafe.Pointer)
+	txStreamTextInit     func(p unsafe.Pointer)
 )
 
 // initTranscribe opens the engine once per process and registers its backends.
@@ -3241,6 +3250,9 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txFullText, handle, "transcribe_full_text")
 		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
 		purego.RegisterLibFunc(&txLogSet, handle, "transcribe_log_set")
+		purego.RegisterLibFunc(&txAcceptsExtKind, handle, "transcribe_model_accepts_ext_kind")
+		purego.RegisterLibFunc(&txPkStreamExtInit, handle, "transcribe_parakeet_stream_ext_init")
+		purego.RegisterLibFunc(&txPkBufStreamExtInit, handle, "transcribe_parakeet_buffered_stream_ext_init")
 		purego.RegisterLibFunc(&txWasAborted, handle, "transcribe_was_aborted")
 		purego.RegisterLibFunc(&txStreamBegin, handle, "transcribe_stream_begin")
 		purego.RegisterLibFunc(&txStreamFeed, handle, "transcribe_stream_feed")
@@ -3586,6 +3598,85 @@ func txGoString(p *byte) string {
 	return string(unsafe.Slice(p, n))
 }
 
+// Streaming models are trained on a menu of context windows and the caller
+// picks one when the stream opens. Left unasked, they use the first entry,
+// which is the most accurate and the slowest — and for the Unified that is
+// 5600 ms of left context, a 1040 ms chunk and 1040 ms of lookahead, so every
+// chunk re-runs the encoder over nearly eight seconds of audio and commits a
+// second behind. That is a fine default for transcribing a file and the wrong
+// one for live television, where it shows up as captions trailing the picture
+// and as work that multiplies by the number of tuners.
+//
+// Two families take two different knobs, and a model accepts exactly one of
+// them, so which to use is asked rather than assumed.
+const (
+	txExtKindParakeetStream   = 0x54534B50 // 'PKST', cache-aware
+	txExtKindParakeetBuffered = 0x53424B50 // 'PKBS', chunked attention
+	txExtSlotStream           = 0
+)
+
+type (
+	txExt struct {
+		size uint64
+		kind uint32
+		_    uint32
+	}
+	txParakeetStreamExt struct {
+		ext             txExt
+		attContextRight int32
+		_               int32
+	}
+	txParakeetBufferedExt struct {
+		ext     txExt
+		leftMS  int32
+		chunkMS int32
+		rightMS int32
+		_       int32
+	}
+)
+
+// captionLatency is the setting on the page, and the windows each one asks for.
+// Everything is in milliseconds and must be a multiple of the 80 ms encoder
+// frame; a tuple outside the model's training menu is refused by the engine
+// rather than silently rounded, which is why an unusable choice falls back to
+// the model's own default instead of failing the stream.
+type captionLatency struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	Desc string `json:"desc"`
+	// chunk and right are the buffered family's window; right alone is the
+	// cache-aware family's lookahead. -1 means the model's default.
+	chunkMS, rightMS int32
+	cacheRight       int32
+}
+
+var captionLatencies = []captionLatency{
+	{
+		Key: "fast", Name: "Lowest delay",
+		Desc:    "Captions follow speech as closely as the model can manage. Slightly less accurate, and much less work per stream, which is what matters when several tuners are captioned at once.",
+		chunkMS: 80, rightMS: 80, cacheRight: 1,
+	},
+	{
+		Key: "balanced", Name: "Balanced (recommended)",
+		Desc:    "A little further behind for a little more accuracy. The right answer for most setups.",
+		chunkMS: 480, rightMS: 480, cacheRight: 6,
+	},
+	{
+		Key: "accurate", Name: "Most accurate",
+		Desc:    "The model's own default: the published accuracy figures are measured here. About two seconds behind the picture, and several times the work of the lowest setting.",
+		chunkMS: -1, rightMS: -1, cacheRight: -1,
+	},
+}
+
+func findCaptionLatency(key string) captionLatency {
+	for _, l := range captionLatencies {
+		if l.Key == key {
+			return l
+		}
+	}
+	return captionLatencies[1]
+}
+
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
 	model uintptr
@@ -3612,6 +3703,8 @@ type transcribeModel struct {
 	// onGPU records that this copy decodes on the accelerator, which is shared
 	// between every stream and therefore rationed.
 	onGPU bool
+	// latency is the context window asked for when a stream opens.
+	latency string
 	// heldGPU is set between arm and disarm while this stream holds a place on
 	// the accelerator. Only the goroutine inside a call touches it.
 	heldGPU bool
@@ -3650,7 +3743,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 	}
 
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu"}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu", latency: cfg.Latency}
 	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
@@ -3762,6 +3855,22 @@ func (t *transcribeModel) beginStreamLocked() error {
 	}
 	sp := txStreamParams{}
 	txStreamParamsInit(unsafe.Pointer(&sp))
+	// Ask for a window if this model takes one. Keeping the struct alive for
+	// the duration of the call is the caller's job: the engine reads through
+	// the pointer during stream_begin and does not retain it.
+	var pkExt txParakeetStreamExt
+	var bufExt txParakeetBufferedExt
+	lat := findCaptionLatency(t.latency)
+	switch {
+	case t.model != 0 && txAcceptsExtKind(t.model, txExtSlotStream, txExtKindParakeetBuffered):
+		txPkBufStreamExtInit(unsafe.Pointer(&bufExt))
+		bufExt.chunkMS, bufExt.rightMS = lat.chunkMS, lat.rightMS
+		sp.family = uintptr(unsafe.Pointer(&bufExt))
+	case t.model != 0 && txAcceptsExtKind(t.model, txExtSlotStream, txExtKindParakeetStream):
+		txPkStreamExtInit(unsafe.Pointer(&pkExt))
+		pkExt.attContextRight = lat.cacheRight
+		sp.family = uintptr(unsafe.Pointer(&pkExt))
+	}
 	// The run params carry the language into the stream as well, so a
 	// prompt-conditioned model is told which locale to expect rather than
 	// having to work it out from the first few seconds of audio.
@@ -3770,6 +3879,18 @@ func (t *transcribeModel) beginStreamLocked() error {
 	st := txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
 	t.disarm()
 	runtime.KeepAlive(t.lang)
+	runtime.KeepAlive(&pkExt)
+	runtime.KeepAlive(&bufExt)
+	if st != txOK && sp.family != 0 {
+		// The window has to be one the model was trained on, and the engine
+		// refuses anything else rather than rounding it. Fall back to the
+		// model's own rather than leaving the stream unopened.
+		logger("[CC] %s window not available on this model (%s); using its default", t.latency, txStatusString(st))
+		sp.family = 0
+		t.arm()
+		st = txStreamBegin(t.session, unsafe.Pointer(&rp), unsafe.Pointer(&sp))
+		t.disarm()
+	}
 	if st != txOK {
 		return fmt.Errorf("%s", txStatusString(st))
 	}
@@ -4922,9 +5043,10 @@ type captionStatus struct {
 	// RuntimeList is every engine, in order, so the page can show both as the
 	// separate programs they are rather than swapping one card's contents and
 	// leaving the reader to notice the name changed.
-	RuntimeList    []speechRuntime `json:"runtimeList"`
-	RuntimeVersion string          `json:"runtimeVersion"`
-	RuntimeURL     string          `json:"runtimeURL"`
+	RuntimeList    []speechRuntime  `json:"runtimeList"`
+	Latencies      []captionLatency `json:"latencies"`
+	RuntimeVersion string           `json:"runtimeVersion"`
+	RuntimeURL     string           `json:"runtimeURL"`
 	// Engines carries the builds of both engines, keyed by engine, so the page
 	// can show what a model would need before it has been saved. Picking a
 	// radio button is browsing, not a decision, and must not change what a tune
@@ -5343,6 +5465,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeName:    needed.Name,
 		Runtimes:       runtimeDescriptions(),
 		RuntimeList:    speechRuntimes,
+		Latencies:      captionLatencies,
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Persistent:     persistent,

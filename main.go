@@ -824,6 +824,13 @@ func run() error {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown engine"})
 			return
 		}
+		if cfg.Latency == "" {
+			cfg.Latency = defaultCaptionConfig().Latency
+		}
+		if findCaptionLatency(cfg.Latency).Key != cfg.Latency {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown delay setting"})
+			return
+		}
 		if cfg.OffsetSec < 0 || cfg.OffsetSec > 15 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be between 0 and 15 seconds"})
 			return
