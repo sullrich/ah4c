@@ -1639,13 +1639,18 @@ func cc608ExpandText(text string) string {
 // cea608 turns lines of recognized text into the byte pairs that ride in the
 // caption stream, one pair per video frame.
 type cea608 struct {
-	mu      sync.Mutex
-	queue   [][2]byte
-	rows    byte // ccRU2 / ccRU3 / ccRU4
-	started bool
-	col     int
-	maxCol  int
-	upper   bool
+	mu    sync.Mutex
+	queue [][2]byte
+	// lastText is when text was last queued. A caption left on screen after
+	// everything upstream has stopped is worse than no caption: it is a
+	// sentence from four minutes ago presented as if it were current. A
+	// broadcast encoder erases after a while and so does this.
+	lastText time.Time
+	rows     byte // ccRU2 / ccRU3 / ccRU4
+	started  bool
+	col      int
+	maxCol   int
+	upper    bool
 }
 
 func newCEA608(style string, upper bool) *cea608 {
@@ -1733,6 +1738,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	if !c.started {
 		c.begin()
 	}
+	c.lastText = time.Now()
 	for _, w := range strings.Fields(text) {
 		runes := []rune(w)
 		if c.col > 0 && c.col+1+len(runes) > c.maxCol {
@@ -1767,21 +1773,30 @@ func (c *cea608) writeRune(r rune) {
 }
 
 // clear wipes the display, used when the stream goes quiet for a while.
-func (c *cea608) clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.started {
-		c.ctrl(ccEDM)
-		c.started = false
-		c.col = 0
-	}
-}
+// ccStaleAfter is how long a caption stays on screen with nothing behind it.
+//
+// Long enough to sit through a musical interlude or a quiet scene without the
+// text flickering away, short enough that a viewer is never reading a sentence
+// that stopped being true minutes ago. It also means a failure upstream now
+// looks like a failure — a blank line — instead of looking like a caption.
+const ccStaleAfter = 20 * time.Second
 
 // next returns the pair of bytes to attach to the next video frame.
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.queue) == 0 {
+		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
+			c.ctrl(ccEDM)
+			c.started = false
+			c.col = 0
+			c.lastText = time.Time{}
+			if len(c.queue) > 0 {
+				p := c.queue[0]
+				c.queue = c.queue[1:]
+				return p
+			}
+		}
 		return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 	}
 	p := c.queue[0]
@@ -3432,6 +3447,34 @@ var (
 	txLive      = map[string]int{}
 )
 
+// gpuGate limits how many streams decode on the accelerator at once.
+//
+// A machine has one graphics card and may have seven tuners. Seven decodes
+// issued at it together do not run seven times faster than two — the card runs
+// them one at a time regardless, and the interleaving costs command buffer
+// churn and working memory on top. Letting a couple through at a time keeps the
+// card busy without the pile-up; the rest wait briefly, and if they wait too
+// long the phrase queue drops one, which is the same back-pressure the rest of
+// this file already uses.
+//
+// The processor path is not gated: threads are shared out there instead, which
+// is the right tool for a device that really does run things in parallel.
+var gpuGate = make(chan struct{}, 2)
+
+func (t *transcribeModel) enterGPU() bool {
+	if !t.onGPU {
+		return false
+	}
+	gpuGate <- struct{}{}
+	return true
+}
+
+func (t *transcribeModel) leaveGPU(held bool) {
+	if held {
+		<-gpuGate
+	}
+}
+
 // txLoadGate allows one set of weights to be loaded at a time.
 //
 // Seven tuners starting together used to mean seven multi-gigabyte loads at
@@ -3515,14 +3558,31 @@ var (
 
 func txLogCallback() uintptr {
 	txLogOnce.Do(func() {
+		// Written to from the engine's own worker threads, mid-decode. Writing
+		// the log from here would put a disk or pipe write inside a compute
+		// graph, where the run deadline cannot interrupt it — a slow log would
+		// become a slow decode. So the text is copied and handed to a goroutine,
+		// and if even that would wait, the line is dropped. Losing a warning is
+		// better than stalling the decode that produced it.
+		lines := make(chan string, 64)
+		go func() {
+			for text := range lines {
+				logger("[CC] engine: %s", text)
+			}
+		}()
 		txLogPtr = purego.NewCallback(func(level int32, msg *byte, _ unsafe.Pointer) {
 			// 2 is WARN and 3 is ERROR; INFO, DEBUG and continuation lines are
 			// dropped where they are made rather than filtered later.
 			if level != 2 && level != 3 {
 				return
 			}
-			if text := strings.TrimSpace(txGoString(msg)); text != "" {
-				logger("[CC] engine: %s", text)
+			text := strings.TrimSpace(txGoString(msg))
+			if text == "" {
+				return
+			}
+			select {
+			case lines <- text:
+			default:
 			}
 		})
 	})
@@ -3564,6 +3624,12 @@ type transcribeModel struct {
 	// abort carries the current run's deadline to the engine's callback. It is
 	// allocated once and never moves for the life of the model.
 	abort *txAbortHandle
+	// onGPU records that this copy decodes on the accelerator, which is shared
+	// between every stream and therefore rationed.
+	onGPU bool
+	// heldGPU is set between arm and disarm while this stream holds a place on
+	// the accelerator. Only the goroutine inside a call touches it.
+	heldGPU bool
 }
 
 // loadTranscribe opens the weights the user downloaded.
@@ -3598,7 +3664,8 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		return nil, fmt.Errorf("opening a session: %s", txStatusString(st))
 	}
 
-	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session, abort: &txAbortHandle{}}
+	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
+		abort: &txAbortHandle{}, onGPU: variant != "cpu"}
 	txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	// "auto" is this page's word for detection, not the engine's: it wants a
 	// null language for that, and would reject "auto" as a locale.
@@ -3647,12 +3714,15 @@ func (t *transcribeModel) arm() {
 	if t.shared != nil {
 		t.shared.compute.Lock()
 	}
+	t.heldGPU = t.enterGPU()
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, time.Now().Add(txRunDeadline).UnixNano())
 }
 
 func (t *transcribeModel) disarm() {
 	atomic.StoreInt64(&t.abort.deadlineUnixNano, 0)
 	runtime.KeepAlive(t.abort)
+	t.leaveGPU(t.heldGPU)
+	t.heldGPU = false
 	if t.shared != nil {
 		t.shared.compute.Unlock()
 	}
@@ -4106,7 +4176,10 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 	default:
 	}
 	if attempt > 5 {
-		logger("[CC] %s the audio decoder keeps stopping; giving up on captions for this tune", e.label)
+		// Only consecutive rapid failures count: the caller clears the tally on
+		// every successful read, so this is a decoder that will not start at
+		// all rather than one that hiccuped six times over three hours.
+		logger("[CC] %s the audio decoder failed %d times in a row; captions are off for this tune", e.label, attempt-1)
 		return nil, false
 	}
 	e.mu.Lock()
@@ -4708,7 +4781,7 @@ func (e *captionEngine) Close() {
 		case <-e.done:
 		case <-time.After(10 * time.Second):
 			stopped = false
-			logger("[CC] %s recognizer did not stop in time; leaving its memory alone", e.label)
+			logger("[CC] %s recognizer did not stop in time; leaving its memory alone. Its copy of the model stays loaded until ah4c restarts.", e.label)
 		}
 		e.mu.Lock()
 		model := e.model
@@ -5121,7 +5194,15 @@ func atLeastOne(n int) int {
 
 // captionedStreams is how many tuners could be captioning at the same time.
 func captionedStreams(cfg captionConfig) int {
-	n := len(cfg.Tuners)
+	// Only tuners that exist. A selection left over from a larger setup would
+	// otherwise inflate every memory figure and shrink every thread share for
+	// streams that can never run.
+	n := 0
+	for _, t := range cfg.Tuners {
+		if t >= 0 && t < len(tuners) {
+			n++
+		}
+	}
 	if n == 0 {
 		n = len(tuners)
 	}
