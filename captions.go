@@ -2570,23 +2570,6 @@ func (c *cea608) backlog() int {
 	return len(c.queue)
 }
 
-// backlogTime is the queue in byte pairs and in the seconds those pairs will
-// take to air, at the rate this channel is measured to be clearing them.
-func (c *cea608) backlogTime() (int, float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.queue), float64(len(c.queue)) / c.pairRate()
-}
-
-// pairsPerSecond is the rate this channel is clearing its queue at, for the
-// log, so a delay reported in seconds can be read against the rate it was
-// worked out from.
-func (c *cea608) pairsPerSecond() float64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.pairRate()
-}
-
 // ---------------------------------------------------------------------------
 // CEA-708 (DTVCC)
 // ---------------------------------------------------------------------------
@@ -6008,16 +5991,6 @@ type captionEngine struct {
 	// slow counts phrases that took longer to recognize than they were to say.
 	// Only the recognizer goroutine touches it.
 	slow int
-	// aired counts phrases handed to the display, and the two sums beside it
-	// are what they cost: how old each was when the text was ready, and how
-	// much channel time was already queued ahead of it. Averaged and printed
-	// together they separate the two halves of the delay a viewer feels —
-	// waiting for the model, and waiting for the screen. Recognizer goroutine
-	// only, like slow.
-	aired     int
-	ageSum    time.Duration
-	queueSum  int
-	queueSecs float64
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
@@ -6561,16 +6534,26 @@ func isStockHallucination(text string) bool {
 // So the test is the ratio between the two. Two is conservative — ordinary
 // speech runs well above it, and a stretch that flat is not a sentence anybody
 // said.
-// One and a half, not two. Two was set against a measurement taken over the
-// loud frames alone — a set selected for being level, whose peak is close to
-// its average by construction — so it read ordinary speech as flat and held
-// back everything. Measured properly, across the quiet gaps as well, speech
-// runs several times its own average and steady noise sits near one and a
-// quarter. The floor is left low enough that being wrong again costs a
-// hallucination rather than a caption, and the measured figure is printed
-// whenever something is held back, so the number can be argued with from
-// evidence.
-const vadCrestMin = 1.5
+// The floor a phrase's peak must clear over its own average to count as
+// speech, and the length below which that test is allowed to decide anything.
+//
+// The test has been wrong twice in the same direction — first by measuring the
+// wrong frames, then by being set too high for real audio — and both times the
+// cost was captions rather than hallucinations. So it no longer rules on its
+// own. It applies only to phrases with barely any speech in them, which is
+// what a stretch of room tone that tripped the level bar looks like, and a
+// phrase carrying a sentence's worth of speech goes to the model whatever
+// shape it is.
+//
+// Two weak signals rather than one strong one, deliberately. Neither flatness
+// nor brevity is damning alone: a quiet speaker under a music bed is flat, and
+// a short answer is brief. Together they describe the thing the model's card
+// warns about and very little else, and being wrong now costs half a second
+// rather than an evening.
+const (
+	vadCrestMin  = 1.3
+	vadGateBelow = 1.2
+)
 
 // phraseCrest is how far the loudest moment of a phrase stands above its
 // average, and whether that is enough to be speech.
@@ -7193,22 +7176,6 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		}
 		return
 	}
-	// Say where the delay actually goes, in the two pieces it comes in, so the
-	// answer is a measurement rather than an argument. Age is everything up to
-	// the text existing: the wait in the send window and the recognition
-	// itself. Queued is what is already ahead of it on the channel, which the
-	// display can only clear at one pair a picture — so it converts straight
-	// into how long after that the words reach the screen.
-	e.aired++
-	e.ageSum += time.Since(item.cut)
-	pairs, secs := e.enc.backlogTime()
-	e.queueSum += pairs
-	e.queueSecs += secs
-	if e.aired%25 == 0 {
-		logger("[CC] %s caption delay: %.1fs waiting on the model, %.1fs of text queued ahead of it (%.0f pairs at %.0f a second), over the last 25 phrases",
-			e.label, (e.ageSum / 25).Seconds(), e.queueSecs/25, float64(e.queueSum)/25, e.enc.pairsPerSecond())
-		e.ageSum, e.queueSum, e.queueSecs = 0, 0, 0
-	}
 	if d := e.cfg.OffsetSec; d > 0 {
 		// Hold the phrase back for hand-tuned sync. The video is never delayed,
 		// so this only ever pushes text later.
@@ -7592,11 +7559,6 @@ type captionStream struct {
 	pr     *io.PipeReader
 	pw     *io.PipeWriter
 	once   sync.Once
-	// wrapped is when this stream was handed to the injector, so the one thing
-	// captions could possibly cost a tune — the gap between a byte arriving
-	// from the encoder and the same byte reaching the DVR — is a measurement
-	// in the log rather than an argument about whether it exists.
-	wrapped time.Time
 }
 
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
@@ -7653,7 +7615,7 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 		return src
 	}
 
-	cs := &captionStream{src: src, engine: engine, wrapped: time.Now()}
+	cs := &captionStream{src: src, engine: engine}
 	cs.pr, cs.pw = io.Pipe()
 	go cs.run()
 	return cs
@@ -7694,14 +7656,9 @@ func (cs *captionStream) inject() {
 	bw := bufio.NewWriterSize(cs.pw, 64*1024)
 	inj := newCaptionInjector(bw, cs.engine.enc, cs.engine.enc708, cs.engine.label)
 	buf := make([]byte, 64*1024)
-	var firstIn time.Time
-	said := false
 	for {
 		n, err := cs.src.Read(buf)
 		if n > 0 {
-			if firstIn.IsZero() {
-				firstIn = time.Now()
-			}
 			cs.engine.feed(buf[:n])
 			if _, werr := inj.Write(buf[:n]); werr != nil {
 				cs.pw.CloseWithError(werr)
@@ -7710,19 +7667,6 @@ func (cs *captionStream) inject() {
 			if werr := bw.Flush(); werr != nil {
 				cs.pw.CloseWithError(werr)
 				return
-			}
-			// One line, once, at the only moment captions can be blamed for a
-			// tune: the first byte the DVR could have had. Everything upstream
-			// of this — the pre script, the encoder, the playback gate — has
-			// already happened, and everything captions do afterwards happens
-			// on other goroutines. If the DVR gave up before this line was
-			// printed, the seconds were spent before the wrap, not inside it.
-			if !said {
-				said = true
-				logger("[CC] %s first bytes passed through %s after the stream was wrapped (%s inside the injector); captions add nothing beyond this",
-					cs.engine.label,
-					time.Since(cs.wrapped).Round(time.Millisecond),
-					time.Since(firstIn).Round(time.Millisecond))
 			}
 		}
 		if err != nil {
