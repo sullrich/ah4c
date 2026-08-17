@@ -2142,14 +2142,17 @@ var (
 	playbackSkipped  = map[string]int{}
 )
 
-const playbackReprobe = 10
+const (
+	playbackReprobe   = 10
+	playbackMissLimit = 2
+)
 
 func playbackSkip(tunerip string) (bool, int) {
 	playbackMissLock.Lock()
 	defer playbackMissLock.Unlock()
 	misses := playbackMisses[tunerip]
-	if misses == 0 {
-		return false, 0
+	if misses < playbackMissLimit {
+		return false, misses
 	}
 	playbackSkipped[tunerip]++
 	if playbackSkipped[tunerip] >= playbackReprobe {
