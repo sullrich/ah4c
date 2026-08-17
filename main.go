@@ -96,6 +96,7 @@ type reader struct {
 	gateDone      chan struct{}
 	gateStop      sync.Once
 	gateBase      map[string]bool
+	gateSig       string
 	startedAt     time.Time
 }
 
@@ -234,7 +235,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 			if r.gateReady != nil {
 				if base != nil {
-					waitForPlayback(r.t.tunerip, base, r.gateDone)
+					waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone)
 				} else {
 					logger("[PLAYBACK] %s no audio baseline, gating on motion alone", r.t.tunerip)
 				}
@@ -419,9 +420,11 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			tuneStart := time.Now()
 			var ready chan struct{}
 			var base map[string]bool
+			var sig string
 			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
 				ready = make(chan struct{})
 				base = audioBaseline(t.tunerip)
+				sig = mediaSignature(t.tunerip)
 			}
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
@@ -502,6 +505,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				gateReady:  ready,
 				gateDone:   make(chan struct{}),
 				gateBase:   base,
+				gateSig:    sig,
 			}
 			return r, nil
 		}
@@ -1782,6 +1786,7 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
+	playbackStatic  = 8
 	playbackTimeout = 12 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
@@ -2117,6 +2122,18 @@ func adbControl(tunerip string, action string) error {
 	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
 }
 
+func samePiids(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if !b[id] {
+			return false
+		}
+	}
+	return true
+}
+
 func piidList(m map[string]bool) string {
 	if len(m) == 0 {
 		return "no started players"
@@ -2127,6 +2144,24 @@ func piidList(m map[string]bool) string {
 	}
 	sort.Strings(ids)
 	return strings.Join(ids, ",")
+}
+
+func mediaSignature(tunerip string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "dumpsys media_session").Output()
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "description=") || strings.Contains(line, "metadata:") ||
+			strings.Contains(line, "PlaybackState {") {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, "|")
 }
 
 func audioBaseline(tunerip string) map[string]bool {
@@ -2150,13 +2185,14 @@ func playbackBudget() time.Duration {
 	return playbackTimeout
 }
 
-func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
+func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) {
 	t0 := time.Now()
 	budget := playbackBudget()
 	deadline := t0.Add(budget)
 	held := map[string]int{}
 	last := map[string]bool{}
 	fails := 0
+	static := 0
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
@@ -2176,11 +2212,25 @@ func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{})
 				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
 				return
 			}
+			now := mediaSignature(tunerip)
+			if now != "" && sig != "" && now != sig {
+				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
+				return
+			}
+			if samePiids(base, last) && now == sig {
+				if static++; static >= playbackStatic {
+					logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
+						tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
+					return
+				}
+			} else {
+				static = 0
+			}
 		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s",
-		tunerip, budget, piidList(base), piidList(last))
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
+		tunerip, budget, piidList(base), piidList(last), map[bool]string{true: "unchanged", false: "changed"}[mediaSignature(tunerip) == sig])
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
