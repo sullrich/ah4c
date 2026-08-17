@@ -1143,6 +1143,33 @@ type gpuInstallState struct {
 	Finished bool   `json:"finished"`
 	Err      string `json:"err"`
 	Log      string `json:"log"`
+	// Step names what is happening and Done of Total how far through it is, so
+	// the page can show a bar rather than the word "Installing" for a minute
+	// and a half while somebody wonders whether it has hung.
+	Step  string `json:"step"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+}
+
+// driverUrgent is set while somebody is waiting at the page for this.
+//
+// The per-package quiet wait exists for work nobody asked for — the restore at
+// startup, which is free anyway because it runs before the port is bound. On a
+// button press it is the wrong trade entirely: up to fifteen seconds of waiting
+// in front of each of thirty-seven packages is nine minutes of somebody staring
+// at a page, to protect tunes that the person pressing the button knows about.
+//
+// So an explicit press goes straight through. It is still one dpkg at a time
+// and still behind nice and ionice, so a tune that does arrive loses only the
+// package in flight rather than the whole set.
+var driverUrgent atomic.Bool
+
+// noteDriverStep publishes progress for the page. Called from the download and
+// the install, which are the two parts long enough to need one.
+func noteDriverStep(step string, done, total int) {
+	gpuLock.Lock()
+	gpuState.Step, gpuState.Done, gpuState.Total = step, done, total
+	gpuLock.Unlock()
 }
 
 var (
@@ -1175,13 +1202,21 @@ func startDriverDownload(kind string) error {
 	gpuLock.Unlock()
 
 	go func() {
-		// This one keeps a gate, because apt and dpkg are the only work here
-		// that cannot yield mid-flight. It is bounded and it is not obeyed
-		// absolutely: both halves below are divided a package at a time now, so
-		// the worst a bad start can cost is one package rather than the whole
-		// set. Preferring a quiet start is worth a minute of waiting; refusing
-		// to start at all is how a driver never installs.
-		awaitQuiet("The graphics driver setup", 10*time.Second, time.Minute)
+		// Somebody is at the page waiting for this, so it goes now.
+		//
+		// There was a wait for a quiet minute in front of it and a wait for a
+		// quiet moment in front of each of thirty-seven packages behind it,
+		// which on a machine with tuners running is minutes of a progress bar
+		// not moving. Those gates are for the restore at startup, which nobody
+		// asked for and which is free anyway because it runs before the port is
+		// bound. A button press is somebody who knows what they are doing and
+		// what it costs.
+		//
+		// It is still one dpkg at a time and still behind nice and ionice, so a
+		// tune arriving in the middle loses the package in flight rather than
+		// the whole set.
+		driverUrgent.Store(true)
+		defer driverUrgent.Store(false)
 		log, err := fetchDriver(g)
 		if err == nil {
 			var l2 string
@@ -1191,6 +1226,7 @@ func startDriverDownload(kind string) error {
 		gpuLock.Lock()
 		gpuState.Active = false
 		gpuState.Finished = true
+		gpuState.Step, gpuState.Done, gpuState.Total = "", 0, 0
 		gpuState.Log = tailLines(log, 12)
 		if err != nil {
 			gpuState.Err = err.Error()
@@ -1348,8 +1384,9 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		// can be in anybody's way is one package, and it stands aside between
 		// them.
 		warned := false
+		noteDriverStep("Fetching packages", 0, len(c))
 		for i, p := range c {
-			if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+			if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 				warned = true
 				logger("[CC] %s is being fetched through a busy machine, one package at a time", g.Name)
 			}
@@ -1357,6 +1394,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 				aptErr = fmt.Errorf("fetching %s: %w", p, aptErr)
 				break
 			}
+			noteDriverStep("Fetching packages", i+1, len(c))
 			if i == len(c)-1 || (i+1)%10 == 0 {
 				logger("[CC] %s: %d of %d packages fetched", g.Name, i+1, len(c))
 			}
@@ -1713,8 +1751,9 @@ func applyDriver(g gpuRuntime) (string, error) {
 	in := 0
 	err = nil
 	warned := false
+	noteDriverStep("Installing packages", 0, len(debs))
 	for i, deb := range debs {
-		if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+		if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
@@ -1728,6 +1767,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 		} else {
 			in++
 		}
+		noteDriverStep("Installing packages", in, len(debs))
 		if i == len(debs)-1 || (i+1)%10 == 0 {
 			// Packages that went in, not loops that were run. This counted the
 			// index, so it read "37 of 37 packages in" whatever dpkg had made
