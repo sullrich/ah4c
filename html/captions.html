@@ -142,14 +142,17 @@
                 GPU choices appear only when this container can load them (for Vulkan: a driver and
                 <code>/dev/dri</code>). The log names the device actually doing the work.
             </p>
-            <div class="card-title" style="margin-top:1rem;">Model <span class="hint">the choice is really about delay</span></div>
+            <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                They differ in shape, not in quality. <b>Cohere</b> waits for each sentence to
-                finish and then transcribes the whole thing, so it has the most to work with and
-                is the most accurate — and can never be quicker than the sentence is long.
-                <b>Nemotron</b> and <b>Moonshine</b> type as they hear: about a second behind,
-                and blind to whatever is said next, which is where the accuracy goes. No setting
-                closes that gap in either direction.
+                They differ in quality, and the difference is bought with delay. <b>Cohere</b>
+                waits for each sentence to finish and then transcribes the whole thing, so it has
+                the most to work with and is comfortably the most accurate — and can never be
+                quicker than the sentence is long. <b>Nemotron</b> and <b>Moonshine</b> type as
+                they hear: about a second behind, and blind to whatever is said next, which is
+                where the accuracy goes. A word that is only decidable from the three words after
+                it is a word a streaming model has to guess at and a sentence model does not. No
+                setting closes that gap in either direction, so the question is which of the two
+                you would rather have.
             </p>
             <p class="small muted" style="margin:0 0 0.6rem;">
                 Language decides it more often than either. Cohere reads eight; Nemotron reads

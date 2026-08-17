@@ -715,21 +715,18 @@ func startModelDownload(m captionModel) error {
 	dlLock.Unlock()
 
 	go func() {
-		// A button press must not fight a recording: gigabytes to disk wait
-		// for the machine to go quiet, bounded so the press is still honored
-		// on a machine that never quite is.
-		// Held, and the answer respected. This discarded its result — it waited
-		// up to a minute and then went ahead regardless, which is the override
-		// on a timer that cost a recording once already. Before the first tune
-		// of a container's life the plain wait does not even wait: nothing has
-		// asked for anything yet, so it answers instantly and the storm is two
-		// seconds away.
+		// No gate at the door, deliberately.
 		//
-		// A download pauses per read and an install goes a package at a time,
-		// so neither holds the machine for long once it starts. This is about
-		// not starting them into a tune in the first place.
-		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
-		}
+		// This download already yields all the way through: streamToFile stops
+		// between reads for as long as any tune is in flight, a quarter second
+		// at a time. Work that yields throughout does not need permission to
+		// begin, because it is never the thing holding the disk when a tune
+		// turns up.
+		//
+		// A gate here was worse than nothing. Ten seconds of proven quiet is
+		// not a thing a three-tuner machine reliably produces, so the press
+		// sat in a loop that said nothing while it waited — which from the
+		// page is indistinguishable from a button that does not work.
 		err := fetchModel(m)
 		dlLock.Lock()
 		dlState.Active = false
@@ -872,18 +869,12 @@ func startRuntimeDownload(variant, modelKey string) error {
 	logger("[CC] Downloading %s from %s", eng.Name, url)
 	go func() {
 		// Same rule as the model download: never fight a recording.
-		// Held, and the answer respected. This discarded its result — it waited
-		// up to a minute and then went ahead regardless, which is the override
-		// on a timer that cost a recording once already. Before the first tune
-		// of a container's life the plain wait does not even wait: nothing has
-		// asked for anything yet, so it answers instantly and the storm is two
-		// seconds away.
+		// No gate here either, and for the same reason as the model download:
+		// countingReader stops between reads while a tune is in flight, so the
+		// transfer and the decompression behind it both stand aside on their
+		// own. Gating it only added a silent wait in front of work that was
+		// already polite.
 		//
-		// A download pauses per read and an install goes a package at a time,
-		// so neither holds the machine for long once it starts. This is about
-		// not starting them into a tune in the first place.
-		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
-		}
 		// The engine is a library plus the ggml backends it loads from
 		// alongside itself, so the whole archive is taken.
 		err := fetchRuntime(url, dir, lib, rt == rtTranscribe)
@@ -1178,20 +1169,13 @@ func startDriverDownload(kind string) error {
 	gpuLock.Unlock()
 
 	go func() {
-		// apt and dpkg are heavy hands; they wait for the machine to go
-		// quiet, bounded so the press is still honored eventually.
-		// Held, and the answer respected. This discarded its result — it waited
-		// up to a minute and then went ahead regardless, which is the override
-		// on a timer that cost a recording once already. Before the first tune
-		// of a container's life the plain wait does not even wait: nothing has
-		// asked for anything yet, so it answers instantly and the storm is two
-		// seconds away.
-		//
-		// A download pauses per read and an install goes a package at a time,
-		// so neither holds the machine for long once it starts. This is about
-		// not starting them into a tune in the first place.
-		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
-		}
+		// This one keeps a gate, because apt and dpkg are the only work here
+		// that cannot yield mid-flight. It is bounded and it is not obeyed
+		// absolutely: both halves below are divided a package at a time now, so
+		// the worst a bad start can cost is one package rather than the whole
+		// set. Preferring a quiet start is worth a minute of waiting; refusing
+		// to start at all is how a driver never installs.
+		awaitQuiet("The graphics driver setup", 10*time.Second, time.Minute)
 		log, err := fetchDriver(g)
 		if err == nil {
 			var l2 string
@@ -1250,9 +1234,11 @@ func fetchDriver(g gpuRuntime) (string, error) {
 	}
 	// apt-get download writes into the working directory and has no option
 	// that moves it, so the working directory is where the staging set is.
+	// Not logged per call the way run is: this one is invoked once per package
+	// in the closure, and forty lines of apt command line buries the two lines
+	// that say what actually happened.
 	runIn := func(dir string, args ...string) error {
-		logger("[CC] %v", args)
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := politeCommand(args[0], args[1:]...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
@@ -1341,7 +1327,28 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		}
 		logger("[CC] %s needs %d packages in all; fetching them from %s", g.Name, len(c), src.name)
 		closure = c
-		if aptErr = runIn(stagingAbs, downloadArgs(suite, src.opts, c)...); aptErr == nil {
+		// A package at a time, for the same reason the install goes a package
+		// at a time. The whole closure on one command line is tens of megabytes
+		// over the network and onto the disk inside a single call that cannot
+		// be paused, cannot be divided once it has started, and takes about as
+		// long as a DVR is willing to wait for a tune. Split up, the longest it
+		// can be in anybody's way is one package, and it stands aside between
+		// them.
+		warned := false
+		for i, p := range c {
+			if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+				warned = true
+				logger("[CC] %s is being fetched through a busy machine, one package at a time", g.Name)
+			}
+			if aptErr = runIn(stagingAbs, downloadArgs(suite, src.opts, []string{p})...); aptErr != nil {
+				aptErr = fmt.Errorf("fetching %s: %w", p, aptErr)
+				break
+			}
+			if i == len(c)-1 || (i+1)%10 == 0 {
+				logger("[CC] %s: %d of %d packages fetched", g.Name, i+1, len(c))
+			}
+		}
+		if aptErr == nil {
 			break
 		}
 	}
@@ -1675,14 +1682,25 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// Order does not matter because --force-depends installs regardless of what
 	// is not there yet; anything left unconfigured is configured by a later
 	// package or caught by the verification below.
+	// A package is never skipped. The first version of this loop meant to wait
+	// and try the same one again, and wrote "i--; continue" inside a range —
+	// where the next iteration assigns i from the range anyway, so the
+	// decrement did nothing and the package was dropped instead. On a busy
+	// machine that dropped most of them, and a driver missing most of its
+	// libraries installs cleanly, loads cleanly and offers no device. That is
+	// the shape of tonight's "the driver isn't loading": not a failure, a
+	// silent partial success.
+	//
+	// So quiet is preferred and not required. One package is a second or two of
+	// polite work, which is a smaller thing to risk against a tune than an
+	// incomplete driver is against every tune afterwards.
 	var out []byte
 	err = nil
+	warned := false
 	for i, deb := range debs {
-		if !waitTuneQuietHeld(5*time.Second, 2*time.Minute) {
-			// Nothing has gone wrong; the machine is simply busy. Wait for it,
-			// however long it takes. A driver is a convenience.
-			i--
-			continue
+		if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+			warned = true
+			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
 		cmd := politeCommand("dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
@@ -2098,8 +2116,14 @@ func restoreGPURuntimeQuietly() {
 		logger("[CC] No quiet stretch for the graphics driver install yet. Captions will run on the processor this session; the driver goes in when the machine is idle and is used from the next start.")
 		close(driverRestoreDone)
 		released = true
-		for !waitTuneQuietHeld(10*time.Second, 5*time.Minute) {
-		}
+		// Five more minutes of looking for a quiet stretch, and then it goes in
+		// anyway. Everything below is divided a package at a time and runs
+		// behind nice and ionice, so proceeding is a second of polite work per
+		// package rather than the un-pausable install this gate was written
+		// for. Waiting for ever is the worse of the two: a machine that never
+		// goes quiet is a machine that never gets its driver, and captions
+		// spend the rest of the container's life on the processor.
+		awaitQuiet("The graphics driver restore", 10*time.Second, 5*time.Minute)
 	}
 	need := false
 	for _, g := range gpuRuntimes {
@@ -2170,8 +2194,13 @@ func warmEngineCache() {
 	// of a container's life the machine reads as quiet because nothing has
 	// asked yet, and this runs before the server is even listening — so it
 	// answered instantly and started loading drivers into the storm.
-	for !waitTuneQuietHeld(10*time.Second, time.Minute) {
-	}
+	//
+	// Bounded, and it proceeds if the minute runs out. What it is protecting
+	// against is a dlopen chain landing inside a tune, which is a fraction of a
+	// second; what waiting for ever costs is the cache never being primed at
+	// all, which puts that same dlopen chain on the first tune instead, under
+	// the tuner lock, where it delays every tuner rather than none.
+	awaitQuiet("The engine cache warm-up", 10*time.Second, time.Minute)
 	// Throw away whatever was learned before this point first.
 	//
 	// The driver restore waits for the machine to go quiet, so on a fresh
@@ -5346,8 +5375,18 @@ func (svc *txBatchService) startExtraWorkers() {
 			if n >= want {
 				return
 			}
-			// A minute of proven quiet before touching anything.
-			if !waitTuneQuietHeld(time.Minute, 5*time.Minute) {
+			// Ten seconds of proven quiet before touching anything, which is
+			// what every other gate in this file asks for.
+			//
+			// It asked for a full minute, and a minute of continuous quiet is
+			// not something a machine with three tuners produces very often —
+			// so the extra recognizers a user had asked for and been warned
+			// about the memory cost of simply never appeared, and nothing said
+			// why. This is the one gate that still stands its ground when the
+			// answer is no, because loading a recognizer is a gigabyte and a
+			// half off the disk and cannot be divided; it just says so now
+			// instead of waiting in silence.
+			if !awaitQuiet(fmt.Sprintf("Recognizer %d", n+1), 10*time.Second, 2*time.Minute) {
 				continue
 			}
 			w, err := svc.makeWorker(nil)
@@ -8013,6 +8052,28 @@ func waitTuneQuietHeld(hold, bound time.Duration) bool {
 			return false
 		}
 	}
+}
+
+// awaitQuiet is waitTuneQuietHeld with a voice.
+//
+// Every gate in this file is now bounded, and a bounded gate that fails is a
+// decision — proceed carefully, or come back later — which the log has to be
+// able to explain afterwards. The night this was written, three of them were
+// spinning in loops that waited for a quiet stretch a three-tuner machine was
+// never going to produce, and said nothing at all about it: the driver did not
+// install, captions did not start, and from outside it looked like a build that
+// had simply stopped working.
+//
+// So the rule is that no wait is silent and no wait is unbounded. A caller that
+// gets false decides what to do about it; what it may not do is loop back here
+// for ever.
+func awaitQuiet(what string, hold, bound time.Duration) bool {
+	began := time.Now()
+	if waitTuneQuietHeld(hold, bound) {
+		return true
+	}
+	logger("[CC] %s waited %s for a quiet moment and the machine has been tuning the whole time", what, time.Since(began).Round(time.Second))
+	return false
 }
 
 // tuneSettleReader marks the tune settled on the first byte it delivers, or
