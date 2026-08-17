@@ -1102,8 +1102,14 @@ func driverDownloaded(g gpuRuntime) bool {
 
 // driverActive reports whether the driver is loadable right now.
 func driverActive(g gpuRuntime) bool {
-	h, err := purego.Dlopen(g.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	return err == nil && h != 0
+	// Through the same cache the engine probe uses, because it is the same
+	// question about the same library. This asked it afresh every time, and the
+	// page asks on every poll — a second and a half apart, for as long as
+	// anybody has it open — so the loader's global lock was being taken all day
+	// for an answer that had already been worked out. The engine's own calls
+	// into native code contend for that lock, which is the reason the cache was
+	// written in the first place; this simply was not using it.
+	return engineUsable(engineVariant{Needs: g.Needs})
 }
 
 type gpuInstallState struct {
@@ -1165,6 +1171,7 @@ func startDriverDownload(kind string) error {
 			// Whether a GPU build can load is cached, and installing a
 			// driver is the one moment that answer changes.
 			forgetEngineUsable()
+			forgetBrokenDrivers()
 			// Record that this driver is wanted. Downloading it is the only
 			// point at which the intent is expressed: the engine picker will
 			// not offer a GPU build until the driver already loads, so waiting
@@ -1601,6 +1608,9 @@ func applyDriver(g gpuRuntime) (string, error) {
 		return "", fmt.Errorf("no saved packages to install")
 	}
 	logger("[CC] Installing %d saved packages for %s", len(debs), g.Name)
+	// Whatever was true about these libraries stops being true here.
+	forgetEngineUsable()
+	forgetBrokenDrivers()
 	// --force-unsafe-io because the fsync per file is the entire weight of
 	// this. dpkg syncs to be certain a package survives a power cut mid
 	// install; these packages exist in the bind mount either way, and a
@@ -1722,7 +1732,41 @@ func anyVulkanManifests() bool {
 // manifests and reports the ones that fail, each with the loader's verbatim
 // error — which names the missing library, and the missing library names the
 // stale dependency.
+// The result is remembered until something happens that could change it, which
+// is a driver being installed and nothing else. Working it out means opening
+// every driver the manifests name, and the page asks for it on every poll; the
+// answer only moves when dpkg has just rewritten the libraries underneath it.
+var (
+	brokenLock  sync.Mutex
+	brokenKnown []string
+	brokenSeen  bool
+)
+
+// forgetBrokenDrivers is called wherever the drivers themselves change.
+func forgetBrokenDrivers() {
+	brokenLock.Lock()
+	brokenSeen = false
+	brokenLock.Unlock()
+}
+
 func brokenVulkanDrivers() []string {
+	brokenLock.Lock()
+	if brokenSeen {
+		out := brokenKnown
+		brokenLock.Unlock()
+		return out
+	}
+	brokenLock.Unlock()
+
+	bad := scanBrokenVulkanDrivers()
+
+	brokenLock.Lock()
+	brokenKnown, brokenSeen = bad, true
+	brokenLock.Unlock()
+	return bad
+}
+
+func scanBrokenVulkanDrivers() []string {
 	var bad []string
 	for _, dir := range []string{
 		"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d",
@@ -2045,7 +2089,13 @@ func txStarted() bool {
 // The first tune otherwise pays those dlopens itself — under the tuner lock,
 // where one slow driver chain delays every tuner's tune.
 func warmEngineCache() {
-	for !waitTuneQuiet(30 * time.Second) {
+	// Held quiet, not observed quiet. This opens driver libraries, and a dlopen
+	// cannot be stopped once it starts, so it is the uninterruptible work the
+	// first rule is about. The plain wait does not do it: before the first tune
+	// of a container's life the machine reads as quiet because nothing has
+	// asked yet, and this runs before the server is even listening — so it
+	// answered instantly and started loading drivers into the storm.
+	for !waitTuneQuietHeld(10*time.Second, time.Minute) {
 	}
 	// Throw away whatever was learned before this point first.
 	//
@@ -2066,12 +2116,21 @@ func warmEngineCache() {
 	//
 	// So the moment the restore is done is the moment to forget, and priming
 	// straight afterwards means nothing is left to ask a stale question of.
-	forgetEngineUsable()
+	// Built beside the old answers rather than on top of the space where they
+	// were. Emptying the cache and refilling it leaves a window in which it is
+	// empty, and a tune arriving in that window pays for the driver load
+	// itself — which is the one thing this function exists to prevent.
+	fresh := map[string]bool{}
 	for _, v := range engineVariants {
-		if v.Key != "auto" {
-			engineUsable(v)
+		if v.Key == "auto" || v.Needs == "" {
+			continue
 		}
+		h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		fresh[v.Needs] = err == nil && h != 0
 	}
+	usableLock.Lock()
+	usableCache = fresh
+	usableLock.Unlock()
 }
 
 // reinstallSavedDriver puts the driver back after a container rebuild, from
@@ -6738,7 +6797,22 @@ func quietestCut(audio []float32) int {
 			best, bestRMS = i, rms
 		}
 	}
-	if n == 0 || best == 0 || bestRMS > (sum/float64(n))*0.5 {
+	// The dip only has to be a dip, not a chasm.
+	//
+	// Half the average was the first attempt and it works on a newscast, where
+	// a gap between words is many times quieter than the words. It fails on a
+	// commercial, which is the case that needed it most: advertising is
+	// compressed and limited to sit at one loudness, usually over a music bed
+	// that never stops, so nothing in it is half of anything. Finding no dip,
+	// this gave up and returned to cutting at whatever instant the timer named
+	// — mid-word, in the middle of the fastest and most crowded speech on
+	// television.
+	//
+	// Nine tenths accepts the quietest moment in a flattened mix, which is
+	// still the best place available and still likelier to be a word boundary
+	// than a point chosen by a clock. The only thing rejected now is audio with
+	// no variation at all, where one instant genuinely is as good as another.
+	if n == 0 || best == 0 || bestRMS > (sum/float64(n))*0.9 {
 		return 0
 	}
 	// Cut after the quiet frame, so the silence belongs to the phrase ending
