@@ -547,11 +547,6 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
-	// RollSpeed is how long a finished line is held before the display rolls
-	// it up, when there is nothing waiting to take its place. Taste, eyesight
-	// and the number of rows all bear on it, so it is asked rather than
-	// assumed; empty means the broadcast pace this always ran at.
-	RollSpeed string `json:"rollSpeed"`
 	// Uppercase renders captions in capitals, which is the long-standing
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
@@ -563,6 +558,9 @@ type captionConfig struct {
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
+	// OnScreenSec is the least time a line stays readable before it is allowed
+	// to leave, in seconds. Zero means the guidance minimum for the row count.
+	OnScreenSec float64 `json:"onScreenSec"`
 	// SpeedWPM is how fast captions are let onto the screen, in words a minute.
 	// Zero means the default. The guidance ranges from 120 to 160 and the page
 	// offers exactly that.
@@ -579,14 +577,14 @@ type captionConfig struct {
 
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
-		Enabled:   false,
-		Model:     "cohere-transcribe",
-		Language:  "en",
-		Style:     "rollup3",
-		RollSpeed: "broadcast",
-		Uppercase: true,
-		Engine:    "auto",
-		OffsetSec: 0,
+		Enabled:     false,
+		Model:       "cohere-transcribe",
+		Language:    "en",
+		Style:       "rollup3",
+		OnScreenSec: 3,
+		Uppercase:   true,
+		Engine:      "auto",
+		OffsetSec:   0,
 	}
 }
 
@@ -2744,7 +2742,7 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool, rollSpeed string, wpm int) *cea608 {
+func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -2760,7 +2758,7 @@ func newCEA608(style string, upper bool, rollSpeed string, wpm int) *cea608 {
 		n = 4
 	}
 	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm),
-		minRollGap: rollGapFloor(rollGapFor(rollSpeed), n)}
+		minRollGap: rollGapFor(onScreen, n)}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2914,24 +2912,7 @@ const ccStaleAfter = 20 * time.Second
 // the edge of the screen, while at four it has three more rows to travel. So it
 // is a setting rather than a number, and the default is the broadcast one it
 // has always been.
-const (
-	rollGapBroadcast = 1200 * time.Millisecond
-	rollGapBrisk     = 600 * time.Millisecond
-	rollGapInstant   = 0
-)
-
-// rollGapFor maps the page's roll speed onto that floor. Anything unrecognized,
-// including the empty string a configuration written before this setting
-// existed will have, is the broadcast pace it was already running at.
-func rollGapFor(speed string) time.Duration {
-	switch speed {
-	case "brisk":
-		return rollGapBrisk
-	case "instant":
-		return rollGapInstant
-	}
-	return rollGapBroadcast
-}
+const ()
 
 // waiting reports whether anything is queued behind the carriage return at the
 // head — that is, whether holding the roll is holding words back.
@@ -3031,15 +3012,29 @@ func ccMinOnScreen(rows int) time.Duration {
 	}
 }
 
-// rollGapFloor raises a chosen roll gap to whatever keeps a line on screen for
-// ccMinOnScreen. Immediate becomes the fastest the guidance allows rather than
-// no gap at all.
-func rollGapFloor(gap time.Duration, rows int) time.Duration {
+// captionOnScreen is what the page offers for the least time a line stays
+// readable, in seconds. The guidance minimum for three rows is two; the rest is
+// room for anybody who wants longer.
+var captionOnScreen = []float64{2, 3, 4, 5, 6, 8}
+
+// rollGapFor turns a wanted time on screen into the gap between rolls.
+//
+// A roll-up does not put lines up together — each row is added and the oldest
+// scrolls away — so a row is readable for the gap between rolls multiplied by
+// the number of rows above it. Asking for six seconds at three rows is a two
+// second gap.
+//
+// Floored at the guidance whatever is asked for: a minimum of one second for a
+// single line, one and a half for two, two for three. Time on screen is taste
+// above that floor and not below it, because a line leaving before it can be
+// read is not a preference, it is a caption nobody got to have.
+func rollGapFor(want float64, rows int) time.Duration {
 	if rows < 1 {
 		rows = 1
 	}
+	gap := time.Duration(want * float64(time.Second) / float64(rows))
 	if min := ccMinOnScreen(rows) / time.Duration(rows); gap < min {
-		return min
+		gap = min
 	}
 	return gap
 }
@@ -3075,7 +3070,13 @@ func (c *cea608) next() [2]byte {
 	// Metered at speaking speed unless there is a real backlog, in which case
 	// being current matters more than reading evenly and the channel is used
 	// for what it is worth.
-	if rate := c.pairRate(); rate > 0 && !c.waiting() {
+	//
+	// Characters only. A control code is sent twice and a decoder is only
+	// guaranteed to drop the repeat when the two arrive back to back — so
+	// withholding between them turns one carriage return into two, which rolls
+	// twice and leaves a blank row between every pair of lines. The meter is
+	// about how fast words appear; it has no business inside a control pair.
+	if rate := c.pairRate(); rate > 0 && !c.waiting() && !c.headIsControl() {
 		c.credit += c.pace / rate
 		if c.credit > c.pace {
 			c.credit = c.pace
@@ -3116,6 +3117,12 @@ func (c *cea608) next() [2]byte {
 	p := c.queue[0]
 	c.queue = c.queue[1:]
 	return p
+}
+
+// headIsControl reports whether the next thing out is a control code rather
+// than text. Callers hold the lock.
+func (c *cea608) headIsControl() bool {
+	return len(c.queue) > 0 && c.queue[0][0] == odd608(ccCtrlCC1)
 }
 
 func (c *cea608) backlog() int {
@@ -6551,7 +6558,7 @@ type captionEngine struct {
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
 		quirks:  quirksFor(m),
-		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed, cfg.SpeedWPM),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
@@ -8714,8 +8721,10 @@ type captionStatus struct {
 	// Recognizer is the measured throughput, so the page can answer "will this
 	// keep up" without anybody reading a log.
 	Recognizer recognizerReport `json:"recognizer"`
-	// Speeds is what the page offers for caption speed, in words a minute.
-	Speeds []int `json:"speeds"`
+	// Speeds is what the page offers for caption speed, in words a minute, and
+	// OnScreen what it offers for the least time a line stays readable.
+	Speeds   []int     `json:"speeds"`
+	OnScreen []float64 `json:"onScreen"`
 	// Streaming is how many tuners are busy, so the page can refuse to switch
 	// captions on in the middle of a recording.
 	Streaming      int    `json:"streaming"`
@@ -9281,6 +9290,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeURL:     engineURL,
 		Recognizer:     recog,
 		Speeds:         captionSpeeds,
+		OnScreen:       captionOnScreen,
 		Streaming:      tunersStreaming(),
 		Persistent:     persistent,
 		PersistWarning: persistWarning,

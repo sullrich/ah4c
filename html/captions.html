@@ -215,18 +215,15 @@
                 then catch up by dropping a phrase.
             </p>
             <div class="field-row">
-                <label for="roll">Roll-up speed</label>
-                <select id="roll">
-                    <option value="broadcast">Broadcast pace (a finished line rests before it rolls)</option>
-                    <option value="brisk">Brisk (half the rest)</option>
-                    <option value="instant">As soon as allowed</option>
-                </select>
+                <label for="onscreen">Time on screen</label>
+                <select id="onscreen"></select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                None of these can take a line off the screen before it can be read. Captioning guidance is a
-                second for one line, a second and a half for two and two for three, and a roll-up shows a row
-                for as many rolls as there are rows &mdash; so whatever is chosen here is raised if it would
-                fall short of that. Fewer rows need a longer rest to reach the same figure.
+                The least time a line stays readable before it is allowed to leave. A roll-up does not put
+                lines up together &mdash; each row is added and the oldest scrolls away &mdash; so this is
+                shared out between the rows above it, and more rows means each roll waits less.
+                Captioning guidance is a second for one line, a second and a half for two and two for three;
+                nothing here goes below that, whatever is chosen.
             </p>
             <div class="field-row">
                 <label for="case">Letter case</label>
@@ -236,9 +233,16 @@
                 </select>
             </div>
             <div class="field-row">
-                <label for="offset">Extra delay</label>
+                <label for="offset">Hold captions back</label>
                 <select id="offset"></select>
             </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                Shifts every caption later by a fixed amount, for when they run ahead of the picture on your
+                setup. It is not a speed or a length: it moves the whole track without changing how fast words
+                appear or how much is said at once. The video is never delayed either way &mdash; only the
+                caption bytes are held &mdash; so a tune is exactly as quick with captions on as off. Leave it
+                at none unless the words are visibly early.
+            </p>
         </div>
 
         <div class="card">
@@ -551,7 +555,10 @@ function render() {
     const spd = document.getElementById('speed');
     spd.innerHTML = speeds.map(w =>
         `<option value="${w}" ${w === (cfg.speedWPM || 150) ? 'selected' : ''}>${w} words a minute${w === 150 ? ' (default)' : ''}</option>`).join('');
-    document.getElementById('roll').value = cfg.rollSpeed || 'broadcast';
+    const onscreens = state.onScreen || [];
+    const osel = document.getElementById('onscreen');
+    osel.innerHTML = onscreens.map(v =>
+        `<option value="${v}" ${v === (cfg.onScreenSec || 3) ? 'selected' : ''}>${v} seconds${v === 3 ? ' (default)' : ''}</option>`).join('');
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     // How far ahead a streaming model looks before committing a word. It costs
@@ -582,7 +589,7 @@ function collect() {
         model: state.config.model,
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
-        rollSpeed: document.getElementById('roll').value,
+        onScreenSec: parseFloat(document.getElementById('onscreen').value) || 0,
         offsetSec: parseInt(document.getElementById('offset').value, 10),
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',
