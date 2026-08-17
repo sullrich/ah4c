@@ -807,6 +807,9 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"version": buildVersion()})
+	})
 	r.GET("/captions", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "captions.html", nil)
 	})
