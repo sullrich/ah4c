@@ -173,7 +173,7 @@ and five gigabytes across ten; Moonshine is about 160 MB per stream. The page wo
 total out for your own setup, but the shape of it is worth knowing before you pick: the
 accurate model gets cheaper per tuner and the quick ones get dearer.
 
-One copy is all Cohere loads unless you ask for more. If it cannot keep pace with the
+One copy is all Cohere loads, however many tuners are on it. If it cannot keep pace with the
 streams feeding it, captions thin themselves to stay current and the log says so — memory
 is never spent to cover for a slow setting on its own.
 
@@ -193,33 +193,25 @@ Read yours rather than that one. It moves with the model, the quantization, the 
 the hardware — the same model on the same machine ranges from four to seven times real time
 across quantizations alone — so it is worth a look before deciding anything below.
 
-**Recognizers** — a setting, never automatic, and the one here that can take a machine
-down if it is set without looking. Past about five captioned tuners on integrated graphics
-one recognizer saturates: the log shows streams running seconds behind with *nothing
-dropped*, which is a queue that no longer drains as fast as it fills. More recognizers is
-the only way past that, because the engine allows one transcription in flight per loaded
-copy of a model — the rule that makes a single shared copy worth having in the first place.
+**One recognizer, and there is no setting for it.** There was one — up to eight copies of
+the weights, chosen on the page — and it is gone because it was measured and it made
+transcription slower every time it was raised. Not slower per copy: slower outright,
+further behind real time with four than with one.
 
-What a second one actually does: nothing on its own, and everything under load. All the
-recognizers read the same queue of phrases, and whichever is free takes the next batch — so
-one is exactly as fast as it ever was, and two are two phrases at a time instead of one.
-The reason it has to be a whole second copy rather than a second thread on the first is
-that the engine allows one transcription in flight per loaded copy, which is also why the
-encoder inside a batch runs serially and why batching relieves the decode without relieving
-the encode.
+Three reasons, all pushing the same way. Batching is the largest: the engine runs several
+phrases in a single dispatch much faster than the same phrases one at a time, and splitting
+the queue across copies meant nothing ever batched — the `recognizer split` line in the log
+prints both figures side by side and the gap is not small. Threads are the second: the
+thread allowance is a figure for the machine, not for a copy, and every copy took all of
+it, so four copies asked for four times the cores the machine has — and the engine
+spin-waits its threads rather than sleeping them, so they fought each other and the tuners
+for the same cores instead of interleaving politely. The device is the third: one graphics
+chip does one piece of arithmetic at a time however much is queued on it, and each copy
+holds its own 2.2 GB of weights in the same system memory an integrated chip reads through.
 
-So **each recognizer is another complete copy of the weights**, 2.2 GB apiece for Cohere
-Transcribe, held for as long as any tuner is being captioned. Changing the setting takes effect at
-once: recognizers are added to a model that is already loaded, and one that is no longer
-wanted gives its weights back between batches rather than waiting for every stream to
-stop. The page offers every number
-the model allows, up to eight, and prints the running total in gigabytes beside each one
-with a warning above the list once it is past one. Check that figure against what the
-machine actually has free. Nothing here is chosen for you: a graphics chip runs two
-transcriptions at a time and the rest wait their turn still holding their memory, while a
-processor really does run them at once — which is where a larger number earns itself. The
-log says so when you pick a number the graphics chip will not use, and then runs the number
-you asked for anyway.
+So the queue has one server, it takes every phrase waiting, and it batches them. When it
+cannot keep pace the freshness rules thin the phrases to stay current and the log says so.
+Memory is never spent to cover for it, because spending memory did not help.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.

@@ -157,7 +157,6 @@ var cohereQuirks = modelQuirks{
 	// copies mostly wait. On the processor they do not — threads are shared out
 	// there and it really does run things at the same time — which is where a
 	// larger number earns itself.
-	MaxWorkers: 8,
 }
 
 // cohereSuppresses reports a phrase that is this model answering a question
