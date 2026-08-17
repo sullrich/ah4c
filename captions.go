@@ -5475,28 +5475,36 @@ func txGoString(p *byte) string {
 // a human stenographer typing what they just heard, and there is no reason a
 // machine that has already finished thinking should wait around to match them.
 //
-// Two seconds is the operating point now. It roughly halves the wait at the
-// front and costs two things, both real and both affordable here. The model
-// sees less of a sentence at once, which is a genuine loss for a phrase model
-// and shows up first in punctuation rather than in words. And the per-phrase
-// cost is paid more often: the encoder runs once per dispatch whatever the
-// dispatch holds, so half the audio per phrase is not half the work. Measured
-// on the machine this was cut for — four tenths of a second of compute per
-// three seconds of audio, seven times real time on an integrated graphics
-// chip — there is room for that several times over.
+// Three seconds is the operating point, and it is chosen against what the
+// model actually documents rather than against a number that sounded brave.
 //
-// There is a floor somewhere below this where a phrase model starts returning
-// fragments rather than short sentences, and fragments read worse than waiting
-// does. Where exactly is a judgement rather than a measurement — it depends on
-// the model, and this one has not been tested against phrase length — so the
-// cut is set where sentences still look like sentences and the number is left
-// somewhere obvious for whoever wants to argue with it by watching.
+// Its card gives no minimum duration at all. What length guidance it does give
+// points the other way: audio past thirty-five seconds is split into
+// overlapping chunks, and the chunk length worth experimenting with is twenty
+// to sixty seconds. This is a model built to be given plenty of context, and
+// every second taken off the front is taken off that.
+//
+// The card is specific about how it fails, and the failure is not fragments.
+// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The model
+// thus benefits from prepending a noise gate or VAD in order to prevent
+// low-volume, floor noise from turning into hallucinations." Shortening the
+// window does not just shorten each phrase, it doubles how many there are, and
+// every one of them is another chance to hand the model something that is
+// mostly room tone. That is what vadMinSpeech and the noise floor above are
+// for, and it is why they are not relaxed to match.
+//
+// So: three rather than four, which is a second off the front of every phrase
+// and still inside what the model is comfortable with, rather than two, which
+// would have been a guess dressed as a measurement. The numbers are left
+// somewhere obvious. If it reads clean at three, it can be tried lower — and
+// the thing to watch for is not clipped sentences but confident ones that
+// nobody said.
 //
 // If genuinely sub-second captions are wanted, the answer is not a smaller
 // number here but a streaming model, which emits as the audio arrives instead
 // of waiting for a phrase at all. A phrase model cannot be real time; it can
 // only be quick.
-const captionPhraseWindow = 2.0
+const captionPhraseWindow = 3.0
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
@@ -6439,10 +6447,10 @@ func (e *captionEngine) pumpAudio() {
 const (
 	vadFrame     = asrSampleRate / 50 // 20 ms
 	vadMinSpeech = 0.6                // ignore blips shorter than this
-	vadMinPhrase = 1.2                // past this, a word gap is enough to cut
+	vadMinPhrase = 1.5                // past this, a word gap is enough to cut
 	vadWordGap   = 0.15               // the gap between two spoken words
 	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 2.0                // backstop, so captions never fall this far behind
+	vadMaxPhrase = 3.0                // backstop, so captions never fall this far behind
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
