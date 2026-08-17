@@ -3990,11 +3990,24 @@ type modelQuirks struct {
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
+	// KVType is the precision of the attention cache, from transcribe.h.
+	// Zero is the engine's own choice and is right for almost everything; a
+	// model asks for something else only when its accuracy has been measured
+	// to want it.
+	KVType int32
 }
 
 // modelDefaults is what is asked of a model nobody has written notes about:
 // nothing. A new model starts here and earns its entry by misbehaving.
 var modelDefaults = modelQuirks{PhraseWindow: 4.0}
+
+// mustFindModel is findCaptionModel for callers that hold a configuration
+// rather than a model and only want its handling. An unknown key gets the
+// zero model, which quirksFor answers for with the defaults.
+func mustFindModel(key string) captionModel {
+	m, _ := findCaptionModel(key)
+	return m
+}
 
 // quirksFor is the single place a model's name is turned into its handling.
 func quirksFor(m captionModel) modelQuirks {
@@ -4123,6 +4136,12 @@ func cleanRecognized(text string) string {
 const (
 	// Backends, from transcribe.h. The processor is asked for by name rather
 	// than left to AUTO so that choosing it on the page actually means it.
+	// K/V activation precision, from transcribe.h. Auto is f16 whenever the
+	// weights are quantized, which ours always are.
+	txKVAuto = 0
+	txKVF32  = 1
+	txKVF16  = 2
+
 	txBackendAuto   = 0
 	txBackendCPU    = 1
 	txBackendVulkan = 3
@@ -4899,8 +4918,10 @@ type txBatchService struct {
 	path    string
 	backend int32
 	// lang mirrors transcribeModel.lang: NUL-terminated, heap-resident.
-	lang     []byte
-	onGPU    bool
+	lang  []byte
+	onGPU bool
+	// kvType is the attention cache precision this model asked for.
+	kvType   int32
 	requests chan txBatchRequest
 	refs     int
 	closed   chan struct{}
@@ -4959,6 +4980,7 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 		threads = captionGPUThreads()
 	}
 	sp.nThreads = int32(threads)
+	sp.kvType = svc.kvType
 	// The decoder window stays at the model's own maximum. The engine's header
 	// warns that for families where audio tokens share the decoder window,
 	// capping it constrains the run — and capping it was another unmeasured
@@ -5003,6 +5025,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 	svc := &txBatchService{
 		path:     path,
 		backend:  backend,
+		kvType:   quirksFor(mustFindModel(cfg.Model)).KVType,
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
 		refs:     1,
@@ -5631,6 +5654,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		streamThreads = gpuThreadShare(streamThreads)
 	}
 	sp.nThreads = int32(streamThreads)
+	sp.kvType = quirksFor(m).KVType
 	var session uintptr
 	if st := txSessionInit(shared.handle, unsafe.Pointer(&sp), unsafe.Pointer(&session)); st != txOK || session == 0 {
 		releaseTxModel(key, shared)

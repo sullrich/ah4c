@@ -76,6 +76,26 @@ var cohereQuirks = modelQuirks{
 	// And for what gets past the gate, because applause and a music bed vary
 	// enough to look like speech.
 	Suppress: cohereSuppresses,
+
+	// Full precision for the attention cache, which is the one accuracy knob
+	// the engine actually exposes and the only one it documents in those
+	// terms. Its header: F32 is "full-precision KV. Maximum accuracy, highest
+	// bandwidth", against the default of F16, "minimal precision loss (~3
+	// decimal digits). Best for bandwidth-bound backends (integrated GPUs,
+	// CPU)".
+	//
+	// The default is the right general advice and the wrong trade here. This
+	// model is chosen for being the most accurate there is, on a machine that
+	// runs it seven times faster than real time — so it is spending its
+	// precision to buy speed it already has. Three decimal digits is not
+	// nothing when a word turns on the difference between two vowels.
+	//
+	// It costs bandwidth on an integrated GPU, where bandwidth is the scarce
+	// thing, and the attention cache is only part of the work — the encoder
+	// dominates, a second against a fifth for the decode. If the real-time
+	// factor in the log falls somewhere it matters, this is the line to
+	// reconsider, and the streaming models do not use it at all.
+	KVType: txKVF32,
 }
 
 // cohereSuppresses reports a phrase that is this model answering a question
