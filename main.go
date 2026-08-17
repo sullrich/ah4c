@@ -1785,29 +1785,7 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
-	// Confirmation is bimodal, so a long timeout buys nothing.
-	//
-	// Every confirmation that has succeeded in these logs arrived in about two
-	// and a half seconds — 2.362s, 2.45s. The ones that fail do not arrive
-	// late; they never arrive at all. The app was already playing when the
-	// baseline was taken, because prebmitune's readiness gate waits for
-	// PlaybackState{state=3} before returning, so switching channels reuses the
-	// audio player and no new id is ever created for heldNewID to find.
-	// Waiting longer cannot turn one of those into a success. It only delays
-	// the motion fallback that would have saved the tune.
-	//
-	// The whole budget belongs to the DVR, which abandons a tune at thirty
-	// seconds. The scripts take two to three and a half, this waits, and the
-	// keyframe gate may take eight more after it. At forty that is fifty-one
-	// seconds, and the recording is lost before anything else can go wrong —
-	// which is what three tunes died of tonight, at 50.4s, 51.6s and 52.9s.
-	//
-	// This was twenty for exactly that reason and was put back to forty six
-	// minutes later. Twenty was not low enough either: twenty plus eight plus
-	// the scripts is thirty-one, still over. Ten is four times the longest
-	// confirmation that has ever worked here and leaves the fallback nine
-	// seconds of margin under the DVR's limit.
-	playbackTimeout = 10 * time.Second
+	playbackTimeout = 40 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
 	riseFactor      = 4
@@ -2153,9 +2131,40 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
+// playbackBudget is how long to wait for confirmation, from PLAYBACK_TIMEOUT if
+// it is set and playbackTimeout otherwise.
+//
+// The default is left exactly where it is. This exists because the whole tune
+// budget belongs to the DVR, which abandons a request at about thirty seconds,
+// and the sum on a machine where confirmation never arrives is the pre and
+// start scripts, plus this, plus up to keyframeWait for the motion fallback to
+// find a frame. At the default that is around fifty-one seconds, and three
+// tunes were lost to it at 50.4s, 51.6s and 52.9s — forty seconds of waiting
+// followed by a fallback that worked, delivered to a DVR that had already hung
+// up.
+//
+// Whether that sum fits depends on the boxes. Confirmation looks bimodal here:
+// the ones that succeed arrive in about two and a half seconds, and the ones
+// that fail never arrive, because the app was already playing when the baseline
+// was taken and a channel change reuses the audio player rather than creating a
+// new id for heldNewID to find. Somewhere that holds, a much smaller number
+// loses nothing and saves the tune. Somewhere it does not, the default stands.
+//
+// So it is a setting rather than a new constant, and it is unset by default.
+func playbackBudget() time.Duration {
+	if s := os.Getenv("PLAYBACK_TIMEOUT"); s != "" {
+		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		logger("[PLAYBACK] PLAYBACK_TIMEOUT %q is not a positive number of seconds, using %v", s, playbackTimeout)
+	}
+	return playbackTimeout
+}
+
 func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
 	t0 := time.Now()
-	deadline := t0.Add(playbackTimeout)
+	budget := playbackBudget()
+	deadline := t0.Add(budget)
 	held := map[string]int{}
 	fails := 0
 	for time.Now().Before(deadline) {
@@ -2179,7 +2188,7 @@ func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{})
 		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone", tunerip, playbackTimeout)
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone", tunerip, budget)
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
