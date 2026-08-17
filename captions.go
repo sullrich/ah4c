@@ -2966,7 +2966,7 @@ func (c *cea708) backlog() int {
 // buildCCData assembles the cc_data() structure from A/53 Part 4. ccCount is
 // fixed by the frame rate: the caption channel runs at 9600 bits per second, so
 // each frame carries 600/fps constructs of two bytes each.
-func buildCCData(dtv []dtvccPair, ccCount int) []byte {
+func buildCCData(pair [2]byte, dtv []dtvccPair, ccCount int) []byte {
 	if ccCount < 2 {
 		ccCount = 2
 	}
@@ -2988,13 +2988,19 @@ func buildCCData(dtv []dtvccPair, ccCount int) []byte {
 		// marker_bits(5)=11111, cc_valid(1), cc_type(2)
 		switch {
 		case i == 0:
-			// Field 1, marked not valid. The line 21 service is not carried
-			// any more: everything it could say, the digital service says on a
-			// wider row and in the letters the words were actually written
-			// with. Its construct stays in the block because that is where the
-			// format puts the two analogue fields, and a decoder counting its
-			// way along expects to find them.
-			b = append(b, 0xF8, 0x00, 0x00)
+			// Field 1: the line 21 service, carried as a fallback.
+			//
+			// The digital service is the one worth watching — wider rows, the
+			// letters the words were written with — and on a television it is
+			// what gets picked. But not everything downstream of here is a
+			// television. Tools that read captions out of a recording largely
+			// decode line 21 and stop there, so dropping it means a stream
+			// that captions beautifully on screen and appears to have no
+			// captions at all to anything that reads it later.
+			//
+			// It costs one construct of the ten this picture has and no
+			// thought at all, and it is what a broadcast stream carries.
+			b = append(b, 0xFC, pair[0], pair[1])
 		case i == 1:
 			// Field 2, likewise. Claiming a field carries something it does not
 			// makes a player offer a caption track with nothing in it.
@@ -3050,8 +3056,8 @@ func seiPayloadSize(n int) []byte {
 
 // buildCaptionSEI produces a complete Annex-B NAL, start code included, that
 // carries the frame's caption bytes as registered ITU-T T.35 user data.
-func buildCaptionSEI(dtv []dtvccPair, ccCount int, hevc bool) []byte {
-	payload := buildCCData(dtv, ccCount)
+func buildCaptionSEI(pair [2]byte, dtv []dtvccPair, ccCount int, hevc bool) []byte {
+	payload := buildCCData(pair, dtv, ccCount)
 
 	rbsp := make([]byte, 0, len(payload)+8)
 	rbsp = append(rbsp, 0x04) // payloadType 4, user_data_registered_itu_t_t35
@@ -3442,20 +3448,23 @@ func mpegCRC(b []byte) uint32 {
 // looking for caption messages finds out captions exist from this and nothing
 // else, which is why some show none without it.
 var captionDescriptor = []byte{
-	0x86, 0x07, // tag, length
-	0xE1, // reserved, one service
+	0x86, 0x0D, // tag, length
+	0xE2, // reserved, two services
 
 	// The digital service, number one, which is the one a television offers
 	// first. Announcing it is not optional decoration: a player that reads
 	// this table and does not find it has been told the digital channel
 	// carries nothing, and will not go looking however much is in it.
-	//
-	// It is the only service announced. Line 21 is not offered because it is
-	// not carried, and announcing a track that turns out to be empty is worse
-	// than announcing nothing — the viewer picks it, sees silence, and
-	// concludes the captions are broken.
 	'e', 'n', 'g', // language
 	0xC1, // digital service, caption service number 1
+	0x7F, // not easy reader, wide aspect
+	0xFF, // reserved
+
+	// And line 21, which is carried too. Both are announced because both are
+	// there; announcing a track that turns out to be empty is the thing worth
+	// avoiding, and neither of these is.
+	'e', 'n', 'g', // language
+	0x7F, // analogue service on field 1
 	0x7F, // not easy reader, wide aspect
 	0xFF, // reserved
 }
@@ -3669,7 +3678,7 @@ func (ci *captionInjector) flush() error {
 	if ci.enc708 != nil && ci.ccCount > 2 {
 		dtv = ci.enc708.next(ci.ccCount - 2)
 	}
-	sei := buildCaptionSEI(dtv, ci.ccCount, ci.hevc)
+	sei := buildCaptionSEI(ci.enc.next(), dtv, ci.ccCount, ci.hevc)
 	newES := injectSEI(es, sei, ci.hevc)
 	if len(newES) == len(es) {
 		// No slice NAL found; leave this access unit alone.
@@ -6640,6 +6649,7 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 // write puts a phrase into both caption formats. They carry the same words to
 // the same viewer; which one a television reads is the television's business.
 func (e *captionEngine) write(text string, breakAfter bool) {
+	e.enc.pushText(text, breakAfter)
 	if e.enc708 != nil {
 		e.enc708.pushText(text, breakAfter)
 	}
