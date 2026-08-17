@@ -232,17 +232,6 @@
                     <option value="mixed">As recognized</option>
                 </select>
             </div>
-            <div class="field-row">
-                <label for="offset">Hold captions back</label>
-                <select id="offset"></select>
-            </div>
-            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                Shifts every caption later by a fixed amount, for when they run ahead of the picture on your
-                setup. It is not a speed or a length: it moves the whole track without changing how fast words
-                appear or how much is said at once. The video is never delayed either way &mdash; only the
-                caption bytes are held &mdash; so a tune is exactly as quick with captions on as off. Leave it
-                at none unless the words are visibly early.
-            </p>
         </div>
 
         <div class="card">
@@ -562,9 +551,6 @@ function render() {
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     // How far ahead a streaming model looks before committing a word. It costs
-    const off = document.getElementById('offset');
-    off.innerHTML = Array.from({length: 16}, (_, i) =>
-        `<option value="${i}" ${i === cfg.offsetSec ? 'selected' : ''}>${i === 0 ? 'None' : i + ' second' + (i > 1 ? 's' : '')}</option>`).join('');
 
     // Tuners
     const picked = cfg.tuners || [];
@@ -590,7 +576,6 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         onScreenSec: parseFloat(document.getElementById('onscreen').value) || 0,
-        offsetSec: parseInt(document.getElementById('offset').value, 10),
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',
         gpuRuntime: state.config.gpuRuntime || '',
