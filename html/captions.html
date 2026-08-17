@@ -313,10 +313,13 @@ function render() {
     // of what the number is for. It used to be printed in the log every half
     // minute; it lives here instead, where it is looked at when it is wanted.
     const rec = state.recognizer || {};
+    const lag = rec.lagSec > 0 ? rec.lagSec : 0;
     document.getElementById('recogStat').innerHTML = rec.measured
-        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)} — keeps pace with about
-           <b>${rec.streams} captioned ${rec.streams === 1 ? 'tuner' : 'tuners'}</b>, at ${rec.phrases.toFixed(1)} phrases a go.
-           <span class="muted">Measured here, not estimated${rec.ageSec > 90 ? `, ${Math.round(rec.ageSec / 60)} min ago` : ''}.</span>`
+        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)},
+           ${rec.streams === 1 ? 'with one stream captioned' : `with ${rec.streams} streams captioned`}.
+           Phrases wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
+           <span class="muted">The wait is the one that matters: under a second is keeping up, and climbing is not.
+           Both are measured here, not estimated${rec.ageSec > 90 ? `, ${Math.round(rec.ageSec / 60)} min ago` : ''}.</span>`
         : (cfg.enabled
             ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
             : '');

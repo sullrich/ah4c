@@ -5196,6 +5196,11 @@ func (t *transcribeModel) leaveGPU(held bool) {
 type txBatchRequest struct {
 	pcm   []float32
 	reply chan txBatchReply
+	// at is when the phrase was handed over. The gap between this and the
+	// moment it is transcribed is the only honest answer to "is the recognizer
+	// keeping up": it needs no assumption about how much of a stream is speech,
+	// and it does not change meaning when the stream count does.
+	at time.Time
 }
 
 type txBatchReply struct {
@@ -5231,6 +5236,7 @@ type txBatchService struct {
 	// Telemetry.
 	telMu       sync.Mutex
 	tDispatches int64
+	tLag        time.Duration
 	// tWinN is dispatches inside the current window, for the page's average.
 	tWinN    int64
 	tPhrases int64
@@ -5263,10 +5269,20 @@ const telemetryWindow = 100
 type recognizerReport struct {
 	Measured bool    `json:"measured"`
 	Speed    float64 `json:"speed"`
-	Streams  int     `json:"streams"`
 	Phrases  float64 `json:"phrases"`
 	Backend  string  `json:"backend"`
 	AgeSec   int     `json:"ageSec"`
+	// Streams is how many captioned streams were feeding this recognizer when
+	// the figure was taken. Reported, never used to derive anything: measuring
+	// four streams at the same speed as one is what proved the old arithmetic
+	// wrong, and the figure is here so that comparison stays possible.
+	Streams int `json:"streams"`
+	// LagSec is how long a phrase waited between being cut and being
+	// transcribed, averaged. This is the number that answers "is it keeping
+	// up", and unlike a stream count it is measured rather than modelled.
+	LagSec float64 `json:"lagSec"`
+	// Waiting is how many phrases were in the queue at the last dispatch.
+	Waiting int `json:"waiting"`
 }
 
 var recogStat struct {
@@ -5276,9 +5292,10 @@ var recogStat struct {
 }
 
 // noteRecognizerSpeed publishes the latest measurement for the page.
-func noteRecognizerSpeed(speed, phrases float64, backend string) {
+func noteRecognizerSpeed(r recognizerReport) {
+	r.Measured = true
 	recogStat.Lock()
-	recogStat.r = recognizerReport{Measured: true, Speed: speed, Streams: int(speed), Phrases: phrases, Backend: backend}
+	recogStat.r = r
 	recogStat.at = time.Now()
 	recogStat.Unlock()
 }
@@ -5729,7 +5746,15 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	for _, l := range lens {
 		audio += time.Duration(float64(l) / asrSampleRate * float64(time.Second))
 	}
+	var lag time.Duration
+	for _, r := range batch {
+		if !r.at.IsZero() {
+			lag += began.Sub(r.at)
+		}
+	}
+	waiting := len(svc.requests)
 	svc.telMu.Lock()
+	svc.tLag += lag / time.Duration(len(batch))
 	if !svc.advised && svc.backend != txBackendCPU {
 		svc.advN++
 		svc.advCompute += compute
@@ -5757,38 +5782,50 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	// to mean in practice. The log wants a settled average over a long window;
 	// the page wants the current answer. They are different needs and they now
 	// have different cadences instead of sharing the log's.
+	txServiceLock.Lock()
+	streams := svc.refs
+	txServiceLock.Unlock()
 	if svc.tCompute > 0 {
-		noteRecognizerSpeed(float64(svc.tAudio)/float64(svc.tCompute),
-			float64(svc.tPhrases)/float64(svc.tWinN), txBackendName(svc.backend))
+		noteRecognizerSpeed(recognizerReport{
+			Speed:   float64(svc.tAudio) / float64(svc.tCompute),
+			Phrases: float64(svc.tPhrases) / float64(svc.tWinN),
+			Backend: txBackendName(svc.backend),
+			Streams: streams,
+			LagSec:  svc.tLag.Seconds() / float64(svc.tWinN),
+			Waiting: waiting,
+		})
 	}
 	if svc.tDispatches%telemetryWindow == 0 {
 		speed := float64(svc.tAudio) / float64(svc.tCompute)
-		// The multiplier is also the answer to "how many tuners will this
-		// carry", and saying so saves everyone the arithmetic.
+		// What this number is, and what it is not.
 		//
-		// A captioned stream produces one second of audio for every second it
-		// runs. A recognizer working at four times real time gets through four
-		// seconds of audio a second. So it keeps pace with about four streams,
-		// and the fifth is where the queue stops draining as fast as it fills —
-		// which is exactly where this machine found it.
+		// It is the real-time factor: seconds of audio transcribed per second of
+		// compute. It is a property of the model, the quantization, the backend
+		// and the machine, and it is measured here rather than looked up.
 		//
-		// Approximate, and honestly so: batching lifts it a little, because
-		// several phrases share one decode, and the encoder runs serially
-		// across a batch so it lifts it less than one would hope. Read it as
-		// the number to compare against how many tuners are actually being
-		// captioned, not as a guarantee.
-		phrases := float64(svc.tPhrases) / telemetryWindow
-		// The page carries this continuously, so the log only marks the shape of
-		// it now and then. It used to print every 25 dispatches, which on three
-		// captioned streams is a line every half minute for a figure that barely
-		// moves — and beside it a second line breaking the same number down by
-		// batch size, which answered a question that no longer exists now that
-		// there is one recognizer and no setting to spend on another.
-		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, "+
-			"%.1fx real time — about %d streams' worth — over the last %d dispatches",
-			phrases, svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
-			speed, int(speed), telemetryWindow)
-		svc.tPhrases, svc.tCompute, svc.tAudio, svc.tWinN = 0, 0, 0, 0
+		// It said "about N streams' worth" as well, on the reasoning that a
+		// captioned stream makes a second of audio for every second it runs, so a
+		// recognizer at N times real time carries about N streams. That was
+		// arithmetic on an assumption nobody had checked, and it is wrong twice
+		// over. A stream does not submit a second of audio a second — only speech
+		// is ever queued, and television has pauses, music and stretches with
+		// nobody talking. And the factor itself does not move with the stream
+		// count: four streams measured the same 4.6x as one, which is exactly
+		// what should have been expected of a figure that is per second of
+		// compute, and which no derived stream count survives.
+		//
+		// So the stream count is gone and the wait is here instead. How long a
+		// phrase sits between being cut and being transcribed is the actual
+		// question — it needs no assumption about how much of a broadcast is
+		// speech, and it says the same thing whatever the stream count is. Under
+		// a second is keeping up. Climbing is not.
+		logger("[CC] recognizer: %.1fx real time, %.1f phrases per dispatch, %.2fs compute for %.1fs of audio, "+
+			"phrases waited %.2fs, %d in the queue, %d %s captioned — over the last %d dispatches",
+			speed, float64(svc.tPhrases)/telemetryWindow,
+			svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
+			svc.tLag.Seconds()/telemetryWindow, waiting, streams, plural(int64(streams), "stream", "streams"),
+			telemetryWindow)
+		svc.tPhrases, svc.tCompute, svc.tAudio, svc.tWinN, svc.tLag = 0, 0, 0, 0, 0
 	}
 	svc.telMu.Unlock()
 }
@@ -5811,7 +5848,7 @@ func (b *batchClient) transcribe(pcm []float32) (string, error) {
 	}
 	reply := make(chan txBatchReply, 1)
 	select {
-	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply}:
+	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply, at: time.Now()}:
 	default:
 		return "", fmt.Errorf("the shared recognizer is full; this phrase is dropped")
 	}
@@ -5837,7 +5874,7 @@ func (b *batchClient) submit(pcm []float32) (<-chan txBatchReply, error) {
 	}
 	reply := make(chan txBatchReply, 1)
 	select {
-	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply}:
+	case b.svc.requests <- txBatchRequest{pcm: pcm, reply: reply, at: time.Now()}:
 		return reply, nil
 	default:
 		return nil, fmt.Errorf("the shared recognizer is full")
