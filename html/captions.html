@@ -22,6 +22,13 @@
             border: 1px solid var(--border-soft);
             border-radius: var(--radius-sm);
         }
+        /* A grid item's automatic minimum size is the widest thing in it that
+           cannot be broken, so a single model URL with no spaces sets the
+           floor for the whole column — 507px of row inside a 393px phone,
+           with the card and every line in it dragged off the right edge.
+           Letting the column go narrower than its contents is what makes the
+           wrapping below take effect. */
+        .model-row > * { min-width: 0; }
         .model-row.selected { border-color: var(--accent); background: var(--accent-soft); }
         .model-row input[type="radio"] { width: 15px; height: 15px; accent-color: var(--accent); }
         .model-name { font-weight: 600; font-size: 0.88rem; }
