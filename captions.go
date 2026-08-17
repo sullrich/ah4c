@@ -5469,8 +5469,22 @@ func txGoString(p *byte) string {
 // a human stenographer typing what they just heard, and there is no reason a
 // machine that has already finished thinking should wait around to match them.
 //
-// Three seconds is the operating point, and it is chosen against what the
-// model actually documents rather than against a number that sounded brave.
+// Four seconds, put back after three was tried and the accuracy went with it.
+//
+// The loss showed worst in commercials, which is the case that has the least
+// speech per second of anything on television — music beds, effects, a line at
+// a time between them — and therefore the least to spare when the window
+// shortens. A phrase model has only what is inside the phrase to work with, and
+// a second is a lot to take away from a sentence that was already sharing its
+// audio with a jingle.
+//
+// The rest of the delay was worth chasing and has been: the recognizer answers
+// in four tenths of a second, the display queue is empty, the roll happens when
+// the line arrives. This second is the one that was not worth it. Everything
+// else stays.
+//
+// The reasoning that follows is why three seemed safe, and it still reads
+// correctly — it simply weighed the cost too lightly.
 //
 // Its card gives no minimum duration at all. What length guidance it does give
 // points the other way: audio past thirty-five seconds is split into
@@ -5498,7 +5512,7 @@ func txGoString(p *byte) string {
 // number here but a streaming model, which emits as the audio arrives instead
 // of waiting for a phrase at all. A phrase model cannot be real time; it can
 // only be quick.
-const captionPhraseWindow = 3.0
+const captionPhraseWindow = 4.0
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
@@ -6434,10 +6448,10 @@ func (e *captionEngine) pumpAudio() {
 const (
 	vadFrame     = asrSampleRate / 50 // 20 ms
 	vadMinSpeech = 0.6                // ignore blips shorter than this
-	vadMinPhrase = 1.5                // past this, a word gap is enough to cut
+	vadMinPhrase = 1.8                // past this, a word gap is enough to cut
 	vadWordGap   = 0.15               // the gap between two spoken words
 	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 3.0                // backstop, so captions never fall this far behind
+	vadMaxPhrase = 3.5                // backstop, so captions never fall this far behind
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
