@@ -35,14 +35,33 @@ var cohereTranscribe = captionModel{
 	Hardware:  "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/cohere-transcribe-03-2026-gguf",
-	// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
-	// accuracy (1.27% vs 1.26% word error), but Q4_K_M is a quant the
-	// engine's author benchmarks on GPU — eight times real time on an
-	// integrated-graphics machine of the same class where Q5_K_M, never
-	// benchmarked there, measured a third of that. GPU shader quality is
-	// per-quant, and the certified path is the one worth shipping.
-	File:        "cohere-transcribe-03-2026-Q4_K_M.gguf",
-	SizeMB:      1550,
+	// Q8_0, and it is worth being exact about why, because the published
+	// numbers do not say what one would expect.
+	//
+	// The model's own table gives word error by quantization: BF16 and F16 at
+	// 1.26%, Q8_0 and Q6_K at 1.27%, Q5_K_M and Q4_K_M at 1.25%. The four bit
+	// quant is not the least accurate of them — on that measurement it is tied
+	// for the best, and the whole spread is two hundredths of a point, which is
+	// noise. Nobody should choose between these on that table.
+	//
+	// What the table does not cover is the backend. It was measured on
+	// LibriSpeech with greedy decoding, and every one of those figures comes
+	// from a reference run rather than from Vulkan. The engine's own author
+	// found the quants behave differently on a graphics chip — that is why this
+	// was Q4_K_M in the first place, after Q5_K_M measured a third of the speed
+	// on integrated graphics — and if shader quality varies by quant for speed
+	// there is no reason it cannot vary for arithmetic too. Nobody has
+	// published an accuracy measurement for this model on Vulkan at all.
+	//
+	// So this is a test of that, not an upgrade justified by the vendor's
+	// numbers. Q8_0 has the simplest dequantization of the set, which is the
+	// least room for a shader to be subtly wrong. It costs 2.41 GB on disk
+	// against 1.56, and about the same again in memory — once, since a phrase
+	// model is shared by every tuner. If the substitutions on proper nouns stop,
+	// the hypothesis was right. If they do not, this reverts to one filename
+	// and a number, and the answer is that the model does not know the word.
+	File:        "cohere-transcribe-03-2026-Q8_0.gguf",
+	SizeMB:      2410,
 	Punctuation: true,
 	Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 }
