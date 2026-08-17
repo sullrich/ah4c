@@ -5405,62 +5405,28 @@ func (w *txWorker) confidence(batchIndex int, batched bool) (float64, int, bool)
 	return tokenConfidence(int(txNTokens(w.session)), read)
 }
 
-// noteConfidence prints what the engine thought of a phrase beside the phrase.
+// The per-phrase measurement that was here has been taken out, having answered
+// both of its questions with a no.
 //
-// Deliberately one line per phrase, and deliberately temporary. It is here to
-// find out whether the separation exists at all before anything is built on it:
-// the hallucination this is aimed at arrives over music and commercials, and if
-// those phrases do not score below ordinary speech on this audio then there is
-// nothing here and the line comes out again along with the idea.
-func noteConfidence(mean float64, counted int, ok bool, pcm []float32, text string) {
-	if text == "" {
-		return
-	}
-	rms, peak, crest := phraseLevel(pcm)
-	conf := "none"
-	if ok {
-		conf = fmt.Sprintf("%.3f over %d tokens", mean, counted)
-	}
-	logger("[CC] phrase: confidence %s, rms %.4f, peak %.4f, crest %.2f, %.1fs: %q",
-		conf, rms, peak, crest, float64(len(pcm))/asrSampleRate, text)
-}
-
-// phraseLevel measures a phrase the way the gate measures one, after the fact.
+// The engine's confidence was one of them. transcribe_token::p is documented as
+// NaN when the architecture does not produce a probability, and Cohere does not:
+// every phrase printed "confidence none". The binding above stays because it is
+// the engine's own accessor and another family may well fill it in, but nothing
+// here can be built on it today.
 //
-// Reported beside the text and beside the engine's confidence so that a phrase
-// that should never have been transcribed can be told apart from one that
-// should, on evidence rather than on which explanation sounds better. A
-// commercial with a quiet vocal bed under it went through and came out as
-// lyrics: that phrase and the dialogue either side of it differ in some number,
-// and this prints the candidates rather than guessing which.
+// Level was the other, and it failed more interestingly. The idea was that a
+// quiet music bed transcribed as lyrics would sit below ordinary speech in rms
+// or crest. It does not. A commercial's sung vocals measured rms 0.019 to 0.033
+// at crest 3.7 to 6.9, and the dialogue either side of them measured rms 0.017
+// to 0.039 at crest 3.3 to 8.4 — the same audio by every number available here.
+// Singing is speech, mixed and mastered to the same loudness as speech, because
+// a broadcaster wants both heard.
 //
-// Level matters because the bar this gate uses is not absolute. It follows the
-// noise floor, and it is pulled down further when the recent peak is low — so a
-// uniformly quiet passage lowers the bar until whatever is in it counts as
-// speech. That is deliberate for a distant or quiet speaker and it is exactly
-// how a quiet music bed becomes a caption. Which of the two is happening is a
-// question about numbers on real audio.
-func phraseLevel(pcm []float32) (rms, peak, crest float64) {
-	if len(pcm) == 0 {
-		return 0, 0, 0
-	}
-	var acc float64
-	for _, v := range pcm {
-		f := float64(v)
-		acc += f * f
-		if f < 0 {
-			f = -f
-		}
-		if f > peak {
-			peak = f
-		}
-	}
-	rms = math.Sqrt(acc / float64(len(pcm)))
-	if rms > 0 {
-		crest = peak / rms
-	}
-	return rms, peak, crest
-}
+// So neither number separates them, and printing a line per phrase to keep
+// looking was noise. What would separate them is something that measures
+// spectral shape over time rather than amplitude — the 4 Hz syllable-rate
+// modulation speech has and music does not — or a trained voice-activity model.
+// Both were considered and set aside; the choice sits with whoever picks it up.
 
 // txWorker is one copy of the weights and the session that runs it.
 type txWorker struct {
@@ -5764,8 +5730,6 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	if len(batch) == 1 {
 		// The direct call fills the single-result accessors, not the batch ones.
 		text := cleanRecognized(txFullText(w.session))
-		mean, counted, have := w.confidence(0, false)
-		noteConfidence(mean, counted, have, batch[0].pcm, text)
 		batch[0].reply <- txBatchReply{text: text}
 	} else {
 		nres := int(txBatchNResults(w.session))
@@ -5779,8 +5743,6 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 				continue
 			}
 			text := cleanRecognized(txBatchFullText(w.session, int32(i)))
-			mean, counted, have := w.confidence(i, true)
-			noteConfidence(mean, counted, have, r.pcm, text)
 			r.reply <- txBatchReply{text: text}
 		}
 	}

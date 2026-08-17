@@ -209,14 +209,27 @@ func cohereSuppresses(text string) bool {
 	return cohereStockPhrases[t]
 }
 
+// Only phrases that are never dialogue.
+//
+// The rule this list needs is not "the model sometimes says this over silence"
+// — it is "a person on television never says this". The two are different and
+// the difference cost real captions: "Thank you." was dropped twice in one
+// commercial break at rms 0.024 and crest 4.8, which is ordinary speech by every
+// number beside it in the log, because somebody had ordinarily said it.
+//
+// So the generic conversational ones are gone: thank you, thanks, you, bye,
+// okay, and I'm sorry with them. Every one is something a person says, and a
+// caption filter that deletes them deletes conversation. That the model also
+// produces them over silence is true and is not enough — a rule that cannot
+// tell the two apart should not be the one deciding, and the noise gate the
+// model's card actually recommends is what stands between silence and the
+// recognizer.
+//
+// What is left is the sign-off a broadcaster never reads out: an appeal to
+// subscribe, a thank-you for watching, a subtitling credit. Those come from the
+// training material rather than from the audio, and hearing one on a network
+// feed would be more surprising than the hallucination.
 var cohereStockPhrases = map[string]bool{
-	"thank you": true, "thanks": true,
 	"thanks for watching": true, "thank you for watching": true,
-	"you": true, "bye": true, "okay": true,
 	"please subscribe": true, "subtitles by the amara.org community": true,
-	// The apology. Reported against this model on this machine, 2026-08-17.
-	// "i am sorry", "i'm so sorry" and a bare "sorry" were in here briefly and
-	// have been taken out: nobody saw those, I guessed at them, and a bare
-	// "sorry" is an entirely ordinary line of dialogue to throw away on a guess.
-	"i'm sorry": true,
 }
