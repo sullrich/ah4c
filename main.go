@@ -491,8 +491,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			if ready != nil {
 				body = newGateReader(body, ready)
 			}
-			// Captions wrap the outermost reader so they see the same bytes the
-			// DVR will, after any stall filling or playback gating.
+			// Captions wrap the outermost reader to see the bytes the DVR will.
 			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
@@ -843,8 +842,7 @@ func run() error {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
-		// The model is optional: without it the engine for the saved model is
-		// fetched, with it the engine that model would need.
+		// The model is optional; without it the saved model's engine is fetched.
 		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -1785,10 +1783,6 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
-	// Twenty-five, not the forty this shipped with. The tune budget belongs to
-	// the DVR, which gives up at about thirty seconds, and forty spends more
-	// than all of it before the motion fallback has been asked for anything.
-	// PLAYBACK_TIMEOUT overrides this per machine.
 	playbackTimeout = 25 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
@@ -2135,26 +2129,7 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
-// playbackBudget is how long to wait for confirmation, from PLAYBACK_TIMEOUT if
-// it is set and playbackTimeout otherwise.
-//
-// The default is left exactly where it is. This exists because the whole tune
-// budget belongs to the DVR, which abandons a request at about thirty seconds,
-// and the sum on a machine where confirmation never arrives is the pre and
-// start scripts, plus this, plus up to keyframeWait for the motion fallback to
-// find a frame. At the default that is around fifty-one seconds, and three
-// tunes were lost to it at 50.4s, 51.6s and 52.9s — forty seconds of waiting
-// followed by a fallback that worked, delivered to a DVR that had already hung
-// up.
-//
-// Whether that sum fits depends on the boxes. Confirmation looks bimodal here:
-// the ones that succeed arrive in about two and a half seconds, and the ones
-// that fail never arrive, because the app was already playing when the baseline
-// was taken and a channel change reuses the audio player rather than creating a
-// new id for heldNewID to find. Somewhere that holds, a much smaller number
-// loses nothing and saves the tune. Somewhere it does not, the default stands.
-//
-// So it is a setting rather than a new constant, and it is unset by default.
+// PLAYBACK_TIMEOUT (seconds): override playbackTimeout per machine.
 func playbackBudget() time.Duration {
 	if s := os.Getenv("PLAYBACK_TIMEOUT"); s != "" {
 		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
