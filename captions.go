@@ -3152,18 +3152,7 @@ func buildCCData(pair [2]byte, ccCount int) []byte {
 		// marker_bits(5)=11111, cc_valid(1), cc_type(2)
 		switch {
 		case i == 0:
-			// Field 1: the line 21 service, carried as a fallback.
-			//
-			// The digital service is the one worth watching — wider rows, the
-			// letters the words were written with — and on a television it is
-			// what gets picked. But not everything downstream of here is a
-			// television. Tools that read captions out of a recording largely
-			// decode line 21 and stop there, so dropping it means a stream
-			// that captions beautifully on screen and appears to have no
-			// captions at all to anything that reads it later.
-			//
-			// It costs one construct of the ten this picture has and no
-			// thought at all, and it is what a broadcast stream carries.
+			// Field 1, which carries the captions.
 			b = append(b, 0xFC, pair[0], pair[1])
 		case i == 1:
 			// Field 2, likewise. Claiming a field carries something it does not
@@ -3592,13 +3581,12 @@ func mpegCRC(b []byte) uint32 {
 	return crc
 }
 
-// captionDescriptor announces line 21, which is what is carried.
+// captionDescriptor announces the one service this stream carries.
 //
 // A player that does not decode the video looking for caption messages finds
 // out captions exist from this and nothing else, which is why some show none
-// without it. It announced a digital service as well while one was being sent;
-// announcing one now would tell a television the channel it offers first is
-// empty, and it would show a blank rather than falling back to line 21.
+// without it. Announcing a service that turns out to be empty is the thing to
+// avoid: a decoder told it is there and finding nothing shows a blank.
 var captionDescriptor = []byte{
 	0x86, 0x07, // tag, length
 	0xE1, // reserved, one service
@@ -7437,7 +7425,7 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 	e.write(text, breakAfter)
 }
 
-// write puts a phrase on line 21.
+// write puts a phrase into the caption encoder.
 func (e *captionEngine) write(text string, breakAfter bool) {
 	e.enc.pushText(text, breakAfter)
 }
