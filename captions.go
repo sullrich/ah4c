@@ -2674,6 +2674,8 @@ type cea608 struct {
 	// minRollGap is the least time between two rolls, from the page's roll
 	// speed setting.
 	minRollGap time.Duration
+	// credit is the pacing allowance, in characters, accrued per picture.
+	credit float64
 	// pendingBreak is a carriage return the last phrase finished with and this
 	// one has yet to spend. See pushText.
 	pendingBreak bool
@@ -2966,10 +2968,45 @@ func behindOnRoll(queued int, catchUp float64) bool {
 const cc608NominalRate = 29.97
 
 // next returns the pair of bytes to attach to the next video frame.
+// cc608Pace is how fast characters are let onto the screen, per second.
+//
+// Line 21 field 1 carries one pair per picture — sixty characters a second on a
+// sixty hertz stream, four times the rate anybody speaks. So a phrase emptied
+// onto the display in a quarter of the time it took to say, the display then sat
+// idle until the next phrase arrived, and the carriage return dwell added
+// another pause on top of that. Text flew, then stopped, then flew. It is the
+// channel's rate rather than the model's, which is why it looked the same
+// whichever model was running.
+//
+// Broadcast captioning runs at roughly a hundred and fifty to a hundred and
+// eighty words a minute because that is how fast people talk. Fifteen
+// characters a second is the middle of that with spaces counted, and pacing to
+// it makes the display fill at the speed the words were said — which is what
+// makes real roll-up readable rather than any dwell.
+//
+// It cannot fall behind on its own: the words arrive at speaking speed, so a
+// pace set to speaking speed matches them over any window longer than one
+// phrase. What it cannot absorb is a genuine backlog, and that is what the
+// catch-up below is for.
+const cc608Pace = 15.0
+
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.countDrain()
+	// Metered at speaking speed unless there is a real backlog, in which case
+	// being current matters more than reading evenly and the channel is used
+	// for what it is worth.
+	if rate := c.pairRate(); rate > 0 && !c.waiting() {
+		c.credit += cc608Pace / rate
+		if c.credit > cc608Pace {
+			c.credit = cc608Pace
+		}
+		if c.credit < 1 {
+			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+		}
+		c.credit--
+	}
 	if len(c.queue) == 0 {
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
