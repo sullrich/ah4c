@@ -5219,20 +5219,71 @@ type txBatchService struct {
 	err   error
 
 	// Telemetry.
-	telMu        sync.Mutex
-	tDispatches  int64
-	tPhrases     int64
-	tCompute     time.Duration
-	tAudio       time.Duration
-	tSoloN       int64
-	tSoloCompute time.Duration
-	tSoloAudio   time.Duration
+	telMu       sync.Mutex
+	tDispatches int64
+	tPhrases    int64
+	tCompute    time.Duration
+	tAudio      time.Duration
 	// advise-once bookkeeping: the first dispatches decide whether this
 	// backend is pulling its weight.
 	advN       int64
 	advCompute time.Duration
 	advAudio   time.Duration
 	advised    bool
+}
+
+// telemetryWindow is how many dispatches the throughput figure averages over
+// before it is published and the counters reset.
+//
+// A hundred rather than twenty-five, because the page shows this continuously
+// now and the log only has to leave a trail. At twenty-five, three captioned
+// streams produced a line every half minute reporting a number that had not
+// moved.
+const telemetryWindow = 100
+
+// recognizerReport is the measured throughput of the shared recognizer, in the
+// form the page asks about it: how much faster than real time it is running, and
+// therefore roughly how many captioned tuners it will carry.
+//
+// Measured, never estimated. It depends on the model, the quantization, the
+// backend and the machine, and there is no figure that is true of everybody's —
+// so the page shows this one or shows nothing.
+type recognizerReport struct {
+	Measured bool    `json:"measured"`
+	Speed    float64 `json:"speed"`
+	Streams  int     `json:"streams"`
+	Phrases  float64 `json:"phrases"`
+	Backend  string  `json:"backend"`
+	AgeSec   int     `json:"ageSec"`
+}
+
+var recogStat struct {
+	sync.Mutex
+	r  recognizerReport
+	at time.Time
+}
+
+// noteRecognizerSpeed publishes the latest measurement for the page.
+func noteRecognizerSpeed(speed, phrases float64, backend string) {
+	recogStat.Lock()
+	recogStat.r = recognizerReport{Measured: true, Speed: speed, Streams: int(speed), Phrases: phrases, Backend: backend}
+	recogStat.at = time.Now()
+	recogStat.Unlock()
+}
+
+// recognizerSnapshot is the last measurement, with its age.
+//
+// The age is shown rather than hidden because a stale figure and a fresh one
+// mean different things: one recognizer that stopped being asked anything an
+// hour ago is not evidence about what is happening now.
+func recognizerSnapshot() recognizerReport {
+	recogStat.Lock()
+	defer recogStat.Unlock()
+	r := recogStat.r
+	if r.Measured {
+		r.AgeSec = int(time.Since(recogStat.at).Seconds())
+	}
+	return r
 }
 
 // txWorker is one copy of the weights and the session that runs it.
@@ -5575,12 +5626,7 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	svc.tPhrases += int64(len(batch))
 	svc.tCompute += compute
 	svc.tAudio += audio
-	if len(batch) == 1 {
-		svc.tSoloN++
-		svc.tSoloCompute += compute
-		svc.tSoloAudio += audio
-	}
-	if svc.tDispatches%25 == 0 {
+	if svc.tDispatches%telemetryWindow == 0 {
 		speed := float64(svc.tAudio) / float64(svc.tCompute)
 		// The multiplier is also the answer to "how many tuners will this
 		// carry", and saying so saves everyone the arithmetic.
@@ -5596,25 +5642,19 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		// across a batch so it lifts it less than one would hope. Read it as
 		// the number to compare against how many tuners are actually being
 		// captioned, not as a guarantee.
+		phrases := float64(svc.tPhrases) / telemetryWindow
+		// The page carries this continuously, so the log only marks the shape of
+		// it now and then. It used to print every 25 dispatches, which on three
+		// captioned streams is a line every half minute for a figure that barely
+		// moves — and beside it a second line breaking the same number down by
+		// batch size, which answered a question that no longer exists now that
+		// there is one recognizer and no setting to spend on another.
 		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, "+
-			"%.1fx real time — about %d streams' worth — over the last 25 dispatches",
-			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed, int(speed))
-		// Split by batch size, because the two tell different stories: solo
-		// dispatches slow means the backend itself is slow here, and the gap
-		// between solo and batched is what a second copy of the weights would
-		// have thrown away. It was measured at a factor worth keeping.
-		if svc.tSoloN > 0 && svc.tSoloN < 25 {
-			solo := float64(svc.tSoloAudio) / float64(svc.tSoloCompute)
-			batchN := 25 - svc.tSoloN
-			bAudio := svc.tAudio - svc.tSoloAudio
-			bCompute := svc.tCompute - svc.tSoloCompute
-			if bCompute > 0 {
-				logger("[CC] recognizer split: %d solo dispatches at %.1fx real time, %d batched at %.1fx",
-					svc.tSoloN, solo, batchN, float64(bAudio)/float64(bCompute))
-			}
-		}
+			"%.1fx real time — about %d streams' worth — over the last %d dispatches",
+			phrases, svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
+			speed, int(speed), telemetryWindow)
+		noteRecognizerSpeed(speed, phrases, txBackendName(svc.backend))
 		svc.tPhrases, svc.tCompute, svc.tAudio = 0, 0, 0
-		svc.tSoloN, svc.tSoloCompute, svc.tSoloAudio = 0, 0, 0
 	}
 	svc.telMu.Unlock()
 }
@@ -8399,13 +8439,16 @@ type captionStatus struct {
 	// can show what a model would need before it has been saved. Picking a
 	// radio button is browsing, not a decision, and must not change what a tune
 	// starting right now will do.
-	Engines        map[string][]captionStatusEngine `json:"engines"`
-	Drivers        []captionStatusDriver            `json:"drivers"`
-	Accel          accelReport                      `json:"accel"`
-	DriverInstall  gpuInstallState                  `json:"driverInstall"`
-	Persistent     bool                             `json:"persistent"`
-	PersistWarning string                           `json:"persistWarning"`
-	Tuners         int                              `json:"tuners"`
+	Engines       map[string][]captionStatusEngine `json:"engines"`
+	Drivers       []captionStatusDriver            `json:"drivers"`
+	Accel         accelReport                      `json:"accel"`
+	DriverInstall gpuInstallState                  `json:"driverInstall"`
+	// Recognizer is the measured throughput, so the page can answer "will this
+	// keep up" without anybody reading a log.
+	Recognizer     recognizerReport `json:"recognizer"`
+	Persistent     bool             `json:"persistent"`
+	PersistWarning string           `json:"persistWarning"`
+	Tuners         int              `json:"tuners"`
 	// MemoryWarning is spelled out when the current choice could use a lot of
 	// memory, worked out for the tuners actually being captioned rather than
 	// left as arithmetic for the reader.
@@ -8855,6 +8898,7 @@ func captionStatusPayload() captionStatus {
 	engineURL, _, _ := engineAsset()
 	needed := findSpeechRuntime(neededRuntime())
 	curVariant, _ := findEngineVariant(cur)
+	recog := recognizerSnapshot()
 	persistent, dir := captionDirPersistent()
 	persistWarning := ""
 	if !persistent {
@@ -8936,6 +8980,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeList:    speechRuntimes,
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
+		Recognizer:     recog,
 		Persistent:     persistent,
 		PersistWarning: persistWarning,
 		MemoryWarning:  memoryWarning(cfg),

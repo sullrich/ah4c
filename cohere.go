@@ -168,16 +168,27 @@ var cohereQuirks = modelQuirks{
 // from the same place: captioned video writes a stretch of music in brackets,
 // so a stretch of music is what it writes.
 //
-// Both are matched against the whole phrase and never part of one. Somebody
-// saying thank you mid-sentence keeps it, and a real sentence containing an
-// aside in brackets keeps the aside. What is being caught is a caption that is
-// entirely a stage direction, not a caption with one in it.
+// The apology is the third, and it is the one that shows up over broadcast
+// rather than over silence: handed a stretch it cannot make words out of, the
+// model says it is sorry. It is not a transcription of anything — the audio
+// underneath is music, or a crowd, or an announcer under a mix — and it arrives
+// alone, as the whole of a caption, which is what makes it safe to catch.
+//
+// All three are matched against the whole phrase and never part of one. Somebody
+// saying thank you mid-sentence keeps it, an actor apologizing in a scene keeps
+// it, and a real sentence containing an aside in brackets keeps the aside. What
+// is being caught is a caption that is entirely a stage direction, not a caption
+// with one in it.
 func cohereSuppresses(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	if isSoundEventTag(t) {
 		return true
 	}
 	t = strings.Trim(t, " .,!?-—’'\"")
+	// Typographic apostrophes fold to the plain one before the lookup. The model
+	// writes "I’m" and a map key spelled "i'm" never matches it — every entry
+	// here with an apostrophe in it was dead on arrival until this line existed.
+	t = strings.ReplaceAll(t, "’", "'")
 	return cohereStockPhrases[t] || cohereStockPhrases[t+"."]
 }
 
@@ -186,4 +197,7 @@ var cohereStockPhrases = map[string]bool{
 	"thanks for watching": true, "thank you for watching": true,
 	"you": true, "bye": true, "bye.": true, "okay": true,
 	"please subscribe": true, "subtitles by the amara.org community": true,
+	// The apology, in the spellings it has actually been seen in.
+	"i'm sorry": true, "i am sorry": true, "sorry": true,
+	"i'm sorry.": true, "i'm so sorry": true,
 }
