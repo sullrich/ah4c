@@ -6660,6 +6660,66 @@ func plural(n int64, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
+// heldBackAsNoise decides whether a phrase is a stretch of room tone rather
+// than something somebody said.
+//
+// It is a function so that it can be tested, and it is tested because this rule
+// has been wrong twice and the second time it was wrong silently: the
+// restriction below was written into a commit message and never into the code,
+// so for a while the gate ran on every phrase of every model. A whole
+// advertisement came back with no captions at all, which is what that looks
+// like from a sofa — a music bed is flat, every phrase under it measured flat,
+// and every one of them was thrown away.
+//
+// Three things have to agree before anything is discarded. The model has to be
+// one that hallucinates on silence, because this exists for that and no other
+// reason. The audio has to be flat, which is what room tone is and speech is
+// not. And there has to be barely any speech in it, because a phrase with a
+// sentence's worth of talking in it is not room tone whatever its shape.
+func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64) bool {
+	return q.NoiseGate && !isSpeech && speechLen < vadGateBelow
+}
+
+// vadCutSearch is how far back a forced cut looks for somewhere better to land.
+// Long enough to contain a gap between words at any ordinary speaking rate,
+// short enough that the phrase does not lose a meaningful amount of its end.
+const vadCutSearch = 0.7
+
+// quietestCut finds the best place to end a phrase that has run out of time,
+// and returns the sample index to cut at, or zero if there is nowhere better
+// than where it already is.
+//
+// It looks over the last stretch of audio a frame at a time and takes the
+// quietest one. A gap between words is the quietest thing in running speech, so
+// that is usually what it finds. It insists the dip is a real one — half the
+// average of the stretch it searched — because a level passage has a quietest
+// frame too, and cutting at it would be no better than cutting at the end.
+func quietestCut(audio []float32) int {
+	span := int(vadCutSearch * asrSampleRate)
+	if len(audio) < span+vadFrame {
+		return 0
+	}
+	start := len(audio) - span
+	best, bestRMS, sum, n := 0, math.MaxFloat64, 0.0, 0
+	for i := start; i+vadFrame <= len(audio); i += vadFrame {
+		var acc float64
+		for _, v := range audio[i : i+vadFrame] {
+			acc += float64(v) * float64(v)
+		}
+		rms := math.Sqrt(acc / float64(vadFrame))
+		sum, n = sum+rms, n+1
+		if rms < bestRMS {
+			best, bestRMS = i, rms
+		}
+	}
+	if n == 0 || best == 0 || bestRMS > (sum/float64(n))*0.5 {
+		return 0
+	}
+	// Cut after the quiet frame, so the silence belongs to the phrase ending
+	// rather than opening the next one.
+	return best + vadFrame
+}
+
 // vadBar is the level at which audio counts as somebody talking. It follows the
 // noise floor upwards, but only so far: see vadBarMax for why the ceiling
 // matters more than the adaptation does.
@@ -6995,13 +7055,34 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		audio, carried := pending, carryNext
 		carryNext = false
 		if forced {
-			// Carry a little audio forward so a mid-word cut is not lost.
-			lead := int(vadLead * asrSampleRate)
-			if len(audio) > lead {
-				pending = append([]float32(nil), audio[len(audio)-lead:]...)
-				carryNext = true
+			// Cut where the speaker drew breath, not where the timer expired.
+			//
+			// The backstop lands wherever four seconds happens to fall, and
+			// four seconds of continuous speech usually falls inside a word.
+			// Carrying a fifth of a second forward saves the word for the next
+			// phrase but does nothing for this one, which still ends on a
+			// fragment — and a fragment is not dropped, it is transcribed. Half
+			// of "implants" came back as an "s" on the end of the word before
+			// it, and nothing in the log had gone wrong.
+			//
+			// So the last stretch is searched for the quietest moment and the
+			// cut is made there. A gap between words is the quietest thing in
+			// running speech, so that is usually where it lands, and both
+			// phrases then begin and end on whole words. Nothing is duplicated
+			// either, because this splits the audio rather than overlapping it.
+			if at := quietestCut(audio); at > 0 {
+				pending = append([]float32(nil), audio[at:]...)
+				audio = audio[:at]
 			} else {
-				pending = nil
+				// No dip to be found, which means speech straight through.
+				// Fall back to overlapping, and to trimming the repeat.
+				lead := int(vadLead * asrSampleRate)
+				if len(audio) > lead {
+					pending = append([]float32(nil), audio[len(audio)-lead:]...)
+					carryNext = true
+				} else {
+					pending = nil
+				}
 			}
 			silenceRun = 0
 		} else {
@@ -7011,11 +7092,11 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		if speechLen < vadMinSpeech {
 			continue
 		}
-		if crest, ok := phraseCrest(loudest, levelSum, levelN); !ok {
+		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
 			n := atomic.AddInt64(&e.gated, 1)
 			if n == 1 || n%25 == 0 {
-				logger("[CC] %s held back %s of steady noise that was not speech (peak %.1f times the average, floor is %.1f)",
-					e.label, plural(n, "stretch", "stretches"), crest, vadCrestMin)
+				logger("[CC] %s held back %s of steady noise that was not speech (%.1fs of it, peak %.1f times the average, floor is %.1f)",
+					e.label, plural(n, "stretch", "stretches"), speechLen, crest, vadCrestMin)
 			}
 			speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 			continue
