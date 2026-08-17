@@ -6719,6 +6719,9 @@ type captionEngine struct {
 	// gated counts stretches the noise gate held back: loud enough to pass a
 	// level test, too steady to be somebody talking.
 	gated int64
+	// harvest carries a sample of what the noise gate threw away, for the
+	// hallucination file. Nil when captions are not running.
+	harvest chan harvestItem
 	// tooShort counts stretches passed over for having too little speech in
 	// them, and audioLost counts reads dropped because the decoder was behind.
 	// Both used to happen in silence.
@@ -6757,6 +6760,7 @@ func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*caption
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
+		harvest: make(chan harvestItem, harvestDepth),
 		phrases: make(chan phraseItem, 3),
 		closed:  make(chan struct{}),
 		done:    make(chan struct{}),
@@ -6781,6 +6785,7 @@ func (e *captionEngine) begin() {
 	e.startOnce.Do(func() {
 		atomic.StoreInt64(&e.begun, 1)
 		go e.start(e.cfg2, e.model2)
+		go e.runHarvest()
 	})
 }
 
@@ -7836,6 +7841,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
 			n := atomic.AddInt64(&e.gated, 1)
+			e.offerHarvest(audio, crest, n)
 			if n == 1 || n%25 == 0 {
 				logger("[CC] %s held back %s of steady noise that was not speech (%.1fs of it, peak %.1f times the average, floor is %.1f)",
 					e.label, plural(n, "stretch", "stretches"), speechLen, crest, vadCrestMin)
@@ -7846,6 +7852,126 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 		cutThisMinute++
 		e.queue(audio, carried, ended)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Hallucination harvest
+// ---------------------------------------------------------------------------
+
+// The right way to build a phrase filter, from the literature rather than from
+// anybody's intuition.
+//
+// Whisper's non-speech hallucinations have been studied, and the measured answer
+// is that a voice-activity gate and a phrase list are complementary rather than
+// alternatives: on Common Voice, a gate alone took about 1.5% absolute off word
+// error rate, a phrase list alone about 2.5%, and the two together about 3.5%.
+// The list is not a hack around a missing gate, it is the other half of the
+// method — Cohere's own card recommends the gate half and says nothing about
+// this one.
+//
+//	Investigation of Whisper ASR Hallucinations Induced by Non-Speech Audio
+//	https://arxiv.org/pdf/2501.11378
+//
+// The part that matters here is how the list is built. In the paper it is
+// assembled by feeding the model audio that is known not to be speech and
+// collecting whatever it emits; nothing goes in by hand. Ours was assembled the
+// other way — folklore from another model, and single sightings — which is
+// exactly why it could be expected to delete real speech, and why "thank you"
+// and "I'm sorry" were argued about twice tonight with no evidence either way.
+//
+// This supplies the evidence. The noise gate above is already deciding, many
+// times an hour, that a stretch of audio is not speech, and throwing it away. A
+// sample of those stretches is transcribed here instead — off the tune path,
+// only when nothing is tuning and nothing else is queued — and whatever comes
+// back is written down. By construction every line of it is the model talking
+// over audio that is not speech, which is the definition the method needs.
+//
+// It decides nothing on its own. It fills a file; the list is still a human
+// choice, made from a page of real output rather than from an argument.
+const (
+	// harvestEvery samples one rejected stretch in this many. The gate rejects
+	// often, and transcribing all of them would spend real recognizer time on
+	// audio nobody is waiting for.
+	harvestEvery = 20
+	// harvestDepth is how many may wait at once. Each is a few seconds of
+	// 16 kHz mono, so this is a fraction of a megabyte.
+	harvestDepth = 3
+	harvestFile  = "captions/hallucinations.txt"
+)
+
+// offerHarvest keeps a sample of what the gate threw away. Never blocks: a full
+// queue means the recognizer is busy, and this is the lowest priority work in
+// the program.
+func (e *captionEngine) offerHarvest(pcm []float32, crest float64, n int64) {
+	if e.harvest == nil || n%harvestEvery != 0 {
+		return
+	}
+	cp := make([]float32, len(pcm))
+	copy(cp, pcm)
+	select {
+	case e.harvest <- harvestItem{pcm: cp, crest: crest}:
+	default:
+	}
+}
+
+type harvestItem struct {
+	pcm   []float32
+	crest float64
+}
+
+// phraseLevel measures a rejected stretch, so the file says how loud the model
+// was hallucinating over as well as what it said.
+func phraseLevel(pcm []float32) (rms, peak float64) {
+	if len(pcm) == 0 {
+		return 0, 0
+	}
+	var acc float64
+	for _, v := range pcm {
+		f := float64(v)
+		acc += f * f
+		if f < 0 {
+			f = -f
+		}
+		if f > peak {
+			peak = f
+		}
+	}
+	return math.Sqrt(acc / float64(len(pcm))), peak
+}
+
+// runHarvest transcribes the samples when the machine has nothing better to do.
+func (e *captionEngine) runHarvest() {
+	for {
+		var it harvestItem
+		select {
+		case <-e.closed:
+			return
+		case it = <-e.harvest:
+		}
+		// Behind everything. A tune outranks it, live captions outrank it, and
+		// there is no hurry whatsoever: the audio is already thrown away and
+		// the only reader is somebody looking at a file tomorrow.
+		if !waitTuneQuiet(2 * time.Minute) {
+			continue
+		}
+		if atomic.LoadInt64(&e.ready) == 0 || e.model == nil {
+			continue
+		}
+		text, err := e.model.transcribe(it.pcm)
+		if err != nil || strings.TrimSpace(text) == "" {
+			continue
+		}
+		rms, peak := phraseLevel(it.pcm)
+		line := fmt.Sprintf("%s\t%.1fs\trms %.4f\tpeak %.4f\tcrest %.2f\t%q\n",
+			time.Now().Format(time.RFC3339), float64(len(it.pcm))/asrSampleRate, rms, peak, it.crest, text)
+		f, ferr := os.OpenFile(harvestFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if ferr != nil {
+			continue
+		}
+		f.WriteString(line)
+		f.Close()
+		logger("[CC] %s the model said %q over audio the gate called noise; written to %s", e.label, text, harvestFile)
 	}
 }
 
