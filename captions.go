@@ -6946,6 +6946,11 @@ type captionStream struct {
 	pr     *io.PipeReader
 	pw     *io.PipeWriter
 	once   sync.Once
+	// wrapped is when this stream was handed to the injector, so the one thing
+	// captions could possibly cost a tune — the gap between a byte arriving
+	// from the encoder and the same byte reaching the DVR — is a measurement
+	// in the log rather than an argument about whether it exists.
+	wrapped time.Time
 }
 
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
@@ -7002,7 +7007,7 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 		return src
 	}
 
-	cs := &captionStream{src: src, engine: engine}
+	cs := &captionStream{src: src, engine: engine, wrapped: time.Now()}
 	cs.pr, cs.pw = io.Pipe()
 	go cs.run()
 	return cs
@@ -7043,9 +7048,14 @@ func (cs *captionStream) inject() {
 	bw := bufio.NewWriterSize(cs.pw, 64*1024)
 	inj := newCaptionInjector(bw, cs.engine.enc, cs.engine.label)
 	buf := make([]byte, 64*1024)
+	var firstIn time.Time
+	said := false
 	for {
 		n, err := cs.src.Read(buf)
 		if n > 0 {
+			if firstIn.IsZero() {
+				firstIn = time.Now()
+			}
 			cs.engine.feed(buf[:n])
 			if _, werr := inj.Write(buf[:n]); werr != nil {
 				cs.pw.CloseWithError(werr)
@@ -7054,6 +7064,19 @@ func (cs *captionStream) inject() {
 			if werr := bw.Flush(); werr != nil {
 				cs.pw.CloseWithError(werr)
 				return
+			}
+			// One line, once, at the only moment captions can be blamed for a
+			// tune: the first byte the DVR could have had. Everything upstream
+			// of this — the pre script, the encoder, the playback gate — has
+			// already happened, and everything captions do afterwards happens
+			// on other goroutines. If the DVR gave up before this line was
+			// printed, the seconds were spent before the wrap, not inside it.
+			if !said {
+				said = true
+				logger("[CC] %s first bytes passed through %s after the stream was wrapped (%s inside the injector); captions add nothing beyond this",
+					cs.engine.label,
+					time.Since(cs.wrapped).Round(time.Millisecond),
+					time.Since(firstIn).Round(time.Millisecond))
 			}
 		}
 		if err != nil {
