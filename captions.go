@@ -5450,6 +5450,13 @@ type recognizerReport struct {
 	Phrases  float64 `json:"phrases"`
 	Backend  string  `json:"backend"`
 	AgeSec   int     `json:"ageSec"`
+	// Model and Mode are what is actually running, which is not always what was
+	// chosen: a streaming model whose session will not open falls back to a
+	// phrase at a time, and from the sofa that is indistinguishable from having
+	// picked the sentence model. Degraded says it happened.
+	Model    string `json:"model"`
+	Mode     string `json:"mode"`
+	Degraded bool   `json:"degraded"`
 	// Streams is how many captioned streams were feeding this recognizer when
 	// the figure was taken. Reported, never used to derive anything: measuring
 	// four streams at the same speed as one is what proved the old arithmetic
@@ -5469,10 +5476,18 @@ var recogStat struct {
 	at time.Time
 }
 
+// noteCaptionMode records what is actually running, for the page.
+func noteCaptionMode(model, mode string, degraded bool) {
+	recogStat.Lock()
+	recogStat.r.Model, recogStat.r.Mode, recogStat.r.Degraded = model, mode, degraded
+	recogStat.Unlock()
+}
+
 // noteRecognizerSpeed publishes the latest measurement for the page.
 func noteRecognizerSpeed(r recognizerReport) {
 	r.Measured = true
 	recogStat.Lock()
+	r.Model, r.Mode, r.Degraded = recogStat.r.Model, recogStat.r.Mode, recogStat.r.Degraded
 	recogStat.r = r
 	recogStat.at = time.Now()
 	recogStat.Unlock()
@@ -7010,6 +7025,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if e.streaming {
 		mode = "continuous"
 	}
+	noteCaptionMode(m.Key, mode, m.Streaming && !e.streaming)
 	where := currentEngineVariant()
 	if where == "cpu" {
 		where = "processor"
