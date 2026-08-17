@@ -188,6 +188,24 @@
                 </select>
             </div>
             <div class="field-row">
+                <label for="workers">Recognizers</label>
+                <select id="workers">
+                    <option value="1">One (default)</option>
+                    <option value="2">Two — another copy of the model in memory</option>
+                    <option value="3">Three — a third copy, processor only</option>
+                </select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                Only for the model that reads a phrase at a time; the streaming ones already
+                load a copy per tuner. Leave this at one until the log says the recognizer has
+                run out: streams reporting they are seconds behind with nothing dropped is a
+                queue that no longer drains as fast as it fills. A second recognizer is the
+                only way past it, because the engine allows one transcription in flight per
+                copy of the model — so a second copy is what it costs, in full. A graphics
+                chip runs two at once and holds the rest, so a third only helps when the
+                processor is doing the work.
+            </p>
+            <div class="field-row">
                 <label for="roll">Roll-up speed</label>
                 <select id="roll">
                     <option value="broadcast">Broadcast pace (a finished line rests before it rolls)</option>
@@ -419,6 +437,7 @@ function render() {
 
     document.getElementById('style').value = cfg.style || 'rollup3';
     document.getElementById('roll').value = cfg.rollSpeed || 'broadcast';
+    document.getElementById('workers').value = String(cfg.workers || 1);
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     // How far ahead a streaming model looks before committing a word. It costs
@@ -448,6 +467,7 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         rollSpeed: document.getElementById('roll').value,
+        workers: parseInt(document.getElementById('workers').value, 10),
         offsetSec: parseInt(document.getElementById('offset').value, 10),
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',

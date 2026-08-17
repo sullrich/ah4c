@@ -173,9 +173,18 @@ and five gigabytes across ten; Moonshine is about 160 MB per stream. The page wo
 total out for your own setup, but the shape of it is worth knowing before you pick: the
 accurate model gets cheaper per tuner and the quick ones get dearer.
 
-One copy is all Cohere ever loads. If it cannot keep pace with the streams feeding it,
-captions thin themselves to stay current and the log says which backend would do better —
-memory is never spent to cover for a slow setting.
+One copy is all Cohere loads unless you ask for more. If it cannot keep pace with the
+streams feeding it, captions thin themselves to stay current and the log says so — memory
+is never spent to cover for a slow setting on its own.
+
+**Recognizers.** Past about five captioned tuners on integrated graphics, one recognizer
+saturates: the log shows streams running seconds behind with nothing dropped, which is a
+queue that no longer drains as fast as it fills. The Recognizers setting runs a second or
+third alongside it. The engine allows one transcription in flight per loaded copy of a
+model — that rule is why a single copy is shared in the first place — so each extra
+recognizer is another full copy of the weights, 2.4 GB apiece. A graphics chip runs two at
+a time and queues the rest, so a third only helps when the processor is doing the work.
+Leave it at one until the log says otherwise.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.
