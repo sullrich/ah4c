@@ -3933,6 +3933,147 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 }
 
 // ---------------------------------------------------------------------------
+// What a model needs from us
+// ---------------------------------------------------------------------------
+
+// Everything on this page is a concession to one particular speech model, and
+// it is gathered here so that swapping the model means reading one section
+// rather than hunting through the file.
+//
+// The pattern this replaces was bolting each fix on where it was noticed: a
+// phrase length inside the audio splitter, a noise gate inside the voice
+// detector, a suppression list inside the result handler. Each was correct and
+// none of them said which model it was for, so the day this model is replaced
+// somebody has to work out, three places apart, which of those rules were about
+// speech recognition in general and which were about this recognizer in
+// particular. The answer is: all of the ones below, and none of the ones
+// anywhere else.
+//
+// A model with no entry gets modelDefaults, which asks for nothing.
+
+// modelQuirks is what one model asks of the code around it.
+type modelQuirks struct {
+	// PhraseWindow is how long a phrase may run before it is cut, in seconds.
+	// Phrase-at-a-time models have an operating point; streaming models run
+	// their family's own and ignore this.
+	PhraseWindow float64
+	// NoiseGate says this model will confidently transcribe things that are
+	// not speech, and wants stretches of steady noise held back from it.
+	NoiseGate bool
+	// Suppress reports text this model produces when nothing was said. It is
+	// given a whole phrase and answers about the whole phrase.
+	Suppress func(string) bool
+}
+
+// modelDefaults is what is asked of a model nobody has written notes about:
+// nothing. A new model starts here and earns its entry by misbehaving.
+var modelDefaults = modelQuirks{PhraseWindow: 4.0}
+
+// quirksFor is the single place a model's name is turned into its handling.
+func quirksFor(m captionModel) modelQuirks {
+	switch m.Key {
+	case "cohere-transcribe":
+		return cohereQuirks
+	}
+	return modelDefaults
+}
+
+// ---------------------------------------------------------------------------
+// Cohere Transcribe 03-2026
+// ---------------------------------------------------------------------------
+
+// Three things, and the model's own card asks for two of them.
+//
+// Delete this block and its entry in quirksFor and nothing else has to change:
+// the recognizer, the caption encoders, the injector and the tune gate have no
+// idea which model they are serving.
+var cohereQuirks = modelQuirks{
+	// Four seconds. Three was tried and the accuracy went with it, worst over
+	// advertisements — the thinnest speech on television, and so the least
+	// able to spare a second of context. The card points the same way: it
+	// gives no minimum duration and its only length guidance is about long
+	// audio, thirty-five second splits and chunks of twenty to sixty. This is
+	// a model built to be handed plenty at once.
+	PhraseWindow: 4.0,
+
+	// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The
+	// model thus benefits from prepending a noise gate or VAD in order to
+	// prevent low-volume, floor noise from turning into hallucinations." Its
+	// words, and the reason the gate exists. There is nothing on the engine's
+	// side to use instead: its run parameters carry a task, a language,
+	// punctuation and inverse text normalisation, and no threshold of any kind.
+	NoiseGate: true,
+
+	// And for what gets past the gate, because applause and a music bed vary
+	// enough to look like speech.
+	Suppress: cohereSuppresses,
+}
+
+// cohereSuppresses reports a phrase that is this model answering a question
+// nobody asked.
+//
+// Two kinds. The stock phrases it reaches for when handed silence, which come
+// from the hours of video it was trained on whose closing seconds are somebody
+// thanking an audience. And the sound it names when handed music, which comes
+// from the same place: captioned video writes a stretch of music in brackets,
+// so a stretch of music is what it writes.
+//
+// Both are matched against the whole phrase and never part of one. Somebody
+// saying thank you mid-sentence keeps it, and a real sentence containing an
+// aside in brackets keeps the aside. What is being caught is a caption that is
+// entirely a stage direction, not a caption with one in it.
+func cohereSuppresses(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if isSoundEventTag(t) {
+		return true
+	}
+	t = strings.Trim(t, " .,!?-—’'\"")
+	return cohereStockPhrases[t] || cohereStockPhrases[t+"."]
+}
+
+var cohereStockPhrases = map[string]bool{
+	"thank you": true, "thanks": true, "thank you.": true,
+	"thanks for watching": true, "thank you for watching": true,
+	"you": true, "bye": true, "bye.": true, "okay": true,
+	"please subscribe": true, "subtitles by the amara.org community": true,
+}
+
+// isSoundEventTag reports whether a phrase is a model describing a noise
+// rather than repeating a word. Shape rather than words, because the words are
+// endless and a list of them would be out of date by the next advertisement: a
+// whole phrase wrapped in brackets is the captioning convention for a sound,
+// and nothing anybody says out loud is wrapped in brackets from beginning to
+// end. Musical notes are the same idea with no words in it at all.
+//
+// Not Cohere-specific — any model trained on captioned video does this — so it
+// sits outside the block above and is called from it.
+func isSoundEventTag(t string) bool {
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return false
+	}
+	if (strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")")) ||
+		(strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]")) ||
+		(strings.HasPrefix(t, "*") && strings.HasSuffix(t, "*")) {
+		// Only when the brackets enclose the whole thing, rather than opening
+		// and closing again inside a longer sentence.
+		inner := t[1 : len(t)-1]
+		return !strings.ContainsAny(inner, "()[]")
+	}
+	notes := false
+	for _, r := range t {
+		switch {
+		case r == '♪' || r == '♫' || r == '♬' || r == '♩':
+			notes = true
+		case r == ' ' || r == '.' || r == ',' || r == '-' || r == '—':
+		default:
+			return false
+		}
+	}
+	return notes
+}
+
+// ---------------------------------------------------------------------------
 // Speech recognition
 // ---------------------------------------------------------------------------
 
@@ -5455,64 +5596,6 @@ func txGoString(p *byte) string {
 	return string(unsafe.Slice(p, n))
 }
 
-// captionPhraseWindow is how long a phrase may run before it is cut, on the
-// phrase-at-a-time path.
-//
-// This is the whole of what a viewer waits for now. Everything downstream has
-// been taken apart — the recognizer answers in about four tenths of a second on
-// the graphics chip, the display queue is empty, the roll happens when the line
-// arrives — so what is left is the front: a word spoken at the start of a
-// phrase waits for the phrase to end before anything begins.
-//
-// It was four seconds, chosen to sit where live broadcast captioning sits, two
-// to four seconds behind the picture. Broadcast is not the target. Broadcast is
-// a human stenographer typing what they just heard, and there is no reason a
-// machine that has already finished thinking should wait around to match them.
-//
-// Four seconds, put back after three was tried and the accuracy went with it.
-//
-// The loss showed worst in commercials, which is the case that has the least
-// speech per second of anything on television — music beds, effects, a line at
-// a time between them — and therefore the least to spare when the window
-// shortens. A phrase model has only what is inside the phrase to work with, and
-// a second is a lot to take away from a sentence that was already sharing its
-// audio with a jingle.
-//
-// The rest of the delay was worth chasing and has been: the recognizer answers
-// in four tenths of a second, the display queue is empty, the roll happens when
-// the line arrives. This second is the one that was not worth it. Everything
-// else stays.
-//
-// The reasoning that follows is why three seemed safe, and it still reads
-// correctly — it simply weighed the cost too lightly.
-//
-// Its card gives no minimum duration at all. What length guidance it does give
-// points the other way: audio past thirty-five seconds is split into
-// overlapping chunks, and the chunk length worth experimenting with is twenty
-// to sixty seconds. This is a model built to be given plenty of context, and
-// every second taken off the front is taken off that.
-//
-// The card is specific about how it fails, and the failure is not fragments.
-// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The model
-// thus benefits from prepending a noise gate or VAD in order to prevent
-// low-volume, floor noise from turning into hallucinations." Shortening the
-// window does not just shorten each phrase, it doubles how many there are, and
-// every one of them is another chance to hand the model something that is
-// mostly room tone. That is what vadMinSpeech and the noise floor above are
-// for, and it is why they are not relaxed to match.
-//
-// So: three rather than four, which is a second off the front of every phrase
-// and still inside what the model is comfortable with, rather than two, which
-// would have been a guess dressed as a measurement. The numbers are left
-// somewhere obvious. If it reads clean at three, it can be tried lower — and
-// the thing to watch for is not clipped sentences but confident ones that
-// nobody said.
-//
-// If genuinely sub-second captions are wanted, the answer is not a smaller
-// number here but a streaming model, which emits as the audio arrives instead
-// of waiting for a phrase at all. A phrase model cannot be real time; it can
-// only be quick.
-const captionPhraseWindow = 4.0
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
@@ -5954,7 +6037,11 @@ func txGoStringN(p *byte, n uint64) string {
 // audio, a voice activity check cuts it into phrases, and each phrase is
 // recognized and handed to the CEA-608 encoder.
 type captionEngine struct {
-	enc *cea608
+	// quirks is what this stream's model asks of the code around it; see the
+	// "What a model needs from us" section. Everything model-specific arrives
+	// through here and nowhere else.
+	quirks modelQuirks
+	enc    *cea608
 	// enc708 is the digital caption window, carrying the same words in the
 	// format that has room for them.
 	enc708  *cea708
@@ -6037,6 +6124,7 @@ type captionEngine struct {
 // seconds of captions on a cold start and nothing at all on a warm one.
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
+		quirks:  quirksFor(m),
 		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed),
 		enc708:  newCEA708(cfg.Style, cfg.Uppercase, cfg.RollSpeed),
 		label:   label,
@@ -6505,79 +6593,6 @@ const (
 	framesPerMinute = 60 * asrSampleRate / vadFrame
 )
 
-// stockHallucinations are the phrases this family of model reaches for when it
-// is handed audio with nothing in it. They come from the data it was trained
-// on — hours of video whose closing seconds are somebody thanking an audience
-// — and they arrive with the same confidence as a real sentence, because the
-// engine offers no confidence to tell them apart by.
-//
-// The gate above is the first defence and the one the documentation asks for.
-// This is the second, for what gets past it: applause, music and a crowd all
-// vary enough to look like speech, and what the model makes of them is this.
-//
-// Matched against the whole phrase and never against part of one. Somebody on
-// television saying "thank you" in the middle of a sentence keeps it; a phrase
-// that is nothing but a thank-you, from three seconds of audio, is the model
-// filling a silence. That trade loses the occasional real one-word thanks and
-// is worth it.
-var stockHallucinations = map[string]bool{
-	"thank you": true, "thanks": true, "thank you.": true,
-	"thanks for watching": true, "thank you for watching": true,
-	"you": true, "bye": true, "bye.": true, "okay": true,
-	"please subscribe": true, "subtitles by the amara.org community": true,
-}
-
-func isStockHallucination(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if isSoundEventTag(t) {
-		return true
-	}
-	t = strings.Trim(t, " .,!?-\u2014\u2019'\"")
-	return stockHallucinations[t] || stockHallucinations[t+"."]
-}
-
-// isSoundEventTag reports whether a phrase is the model describing a noise
-// rather than repeating a word.
-//
-// Over an advertisement this is most of what comes back. The model was trained
-// on captioned video, where the convention for a stretch of music is to say so
-// in brackets, so a stretch of music is what it says: "(upbeat music)",
-// "[MUSIC PLAYING]", a row of quavers. It is not wrong, exactly. It is
-// answering a question nobody asked, in a caption track meant to be carrying
-// speech, and it arrives with the same confidence as a sentence.
-//
-// The rule is about shape rather than words, because the words are endless. A
-// whole phrase wrapped in brackets is the captioning convention for a sound,
-// and nothing anybody says out loud is wrapped in brackets from beginning to
-// end. Musical notes are the same idea with no words at all. Part of a phrase
-// is left alone: a real sentence that happens to contain an aside keeps it.
-func isSoundEventTag(t string) bool {
-	t = strings.TrimSpace(t)
-	if t == "" {
-		return false
-	}
-	if (strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")")) ||
-		(strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]")) ||
-		(strings.HasPrefix(t, "*") && strings.HasSuffix(t, "*")) {
-		// Only when the brackets enclose the whole thing, rather than opening
-		// and closing again inside a longer sentence.
-		inner := t[1 : len(t)-1]
-		return !strings.ContainsAny(inner, "()[]")
-	}
-	// Nothing but music symbols, spaces and punctuation.
-	notes := false
-	for _, r := range t {
-		switch {
-		case r == '\u266a' || r == '\u266b' || r == '\u266c' || r == '\u2669':
-			notes = true
-		case r == ' ' || r == '.' || r == ',' || r == '-' || r == '\u2014':
-		default:
-			return false
-		}
-	}
-	return notes
-}
-
 // phraseIsSpeech is the noise gate the model's own documentation asks for.
 //
 // The card is explicit about how this model fails: "Cohere Transcribe is eager
@@ -6865,7 +6880,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	peak := 0.0
 	decoderTries := 0
 	var frames, cutThisMinute int
-	maxPhrase := captionPhraseWindow
+	maxPhrase := e.quirks.PhraseWindow
 	if maxPhrase <= 0 {
 		maxPhrase = vadMaxPhrase
 	}
@@ -7239,7 +7254,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	if text == "" {
 		return
 	}
-	if isStockHallucination(text) {
+	if e.quirks.Suppress != nil && e.quirks.Suppress(text) {
 		n := atomic.AddInt64(&e.gated, 1)
 		if n == 1 || n%25 == 0 {
 			logger("[CC] %s dropped %q; nothing was said (%d suppressed so far)", e.label, text, n)
