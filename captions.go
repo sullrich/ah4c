@@ -2984,8 +2984,9 @@ const cc608NominalRate = 29.97
 // next returns the pair of bytes to attach to the next video frame.
 // cc608Pace is how fast characters are let onto the screen, per second.
 //
-// Line 21 field 1 carries one pair per picture — sixty characters a second on a
-// sixty hertz stream, four times the rate anybody speaks. So a phrase emptied
+// The caption channel carries one character pair per picture — sixty characters
+// a second on a sixty hertz stream, four times the rate anybody speaks. So a
+// phrase emptied
 // onto the display in a quarter of the time it took to say, the display then sat
 // idle until the next phrase arrived, and the carriage return dwell added
 // another pause on top of that. Text flew, then stopped, then flew. It is the

@@ -96,7 +96,7 @@ var cohereQuirks = modelQuirks{
 	// The short end is there for continuous speech — a news anchor reading copy
 	// never pauses, so every phrase runs to the full length and the display is
 	// handed a burst per phrase with no gap to drain in. Smaller phrases arrive
-	// more evenly and line 21 keeps up.
+	// more evenly and the display keeps up.
 	Windows: []float64{2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0},
 
 	// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The
