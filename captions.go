@@ -6529,8 +6529,53 @@ var stockHallucinations = map[string]bool{
 
 func isStockHallucination(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
+	if isSoundEventTag(t) {
+		return true
+	}
 	t = strings.Trim(t, " .,!?-\u2014\u2019'\"")
 	return stockHallucinations[t] || stockHallucinations[t+"."]
+}
+
+// isSoundEventTag reports whether a phrase is the model describing a noise
+// rather than repeating a word.
+//
+// Over an advertisement this is most of what comes back. The model was trained
+// on captioned video, where the convention for a stretch of music is to say so
+// in brackets, so a stretch of music is what it says: "(upbeat music)",
+// "[MUSIC PLAYING]", a row of quavers. It is not wrong, exactly. It is
+// answering a question nobody asked, in a caption track meant to be carrying
+// speech, and it arrives with the same confidence as a sentence.
+//
+// The rule is about shape rather than words, because the words are endless. A
+// whole phrase wrapped in brackets is the captioning convention for a sound,
+// and nothing anybody says out loud is wrapped in brackets from beginning to
+// end. Musical notes are the same idea with no words at all. Part of a phrase
+// is left alone: a real sentence that happens to contain an aside keeps it.
+func isSoundEventTag(t string) bool {
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return false
+	}
+	if (strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")")) ||
+		(strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]")) ||
+		(strings.HasPrefix(t, "*") && strings.HasSuffix(t, "*")) {
+		// Only when the brackets enclose the whole thing, rather than opening
+		// and closing again inside a longer sentence.
+		inner := t[1 : len(t)-1]
+		return !strings.ContainsAny(inner, "()[]")
+	}
+	// Nothing but music symbols, spaces and punctuation.
+	notes := false
+	for _, r := range t {
+		switch {
+		case r == '\u266a' || r == '\u266b' || r == '\u266c' || r == '\u2669':
+			notes = true
+		case r == ' ' || r == '.' || r == ',' || r == '-' || r == '\u2014':
+		default:
+			return false
+		}
+	}
+	return notes
 }
 
 // phraseIsSpeech is the noise gate the model's own documentation asks for.
