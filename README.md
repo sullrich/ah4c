@@ -177,14 +177,22 @@ One copy is all Cohere loads unless you ask for more. If it cannot keep pace wit
 streams feeding it, captions thin themselves to stay current and the log says so — memory
 is never spent to cover for a slow setting on its own.
 
-**Recognizers.** Past about five captioned tuners on integrated graphics, one recognizer
-saturates: the log shows streams running seconds behind with nothing dropped, which is a
-queue that no longer drains as fast as it fills. The Recognizers setting runs a second or
-third alongside it. The engine allows one transcription in flight per loaded copy of a
-model — that rule is why a single copy is shared in the first place — so each extra
-recognizer is another full copy of the weights, 2.4 GB apiece. A graphics chip runs two at
-a time and queues the rest, so a third only helps when the processor is doing the work.
-Leave it at one until the log says otherwise.
+**Recognizers** — a setting, never automatic, and the one here that can take a machine
+down if it is set without looking. Past about five captioned tuners on integrated graphics
+one recognizer saturates: the log shows streams running seconds behind with *nothing
+dropped*, which is a queue that no longer drains as fast as it fills. More recognizers is
+the only way past that, because the engine allows one transcription in flight per loaded
+copy of a model — the rule that makes a single shared copy worth having in the first place.
+
+So **each recognizer is another complete copy of the weights**, 2.4 GB apiece for Cohere
+Transcribe, held for as long as any tuner is being captioned. The page offers every number
+the model allows, up to eight, and prints the running total in gigabytes beside each one
+with a warning above the list once it is past one. Check that figure against what the
+machine actually has free. Nothing here is chosen for you: a graphics chip runs two
+transcriptions at a time and the rest wait their turn still holding their memory, while a
+processor really does run them at once — which is where a larger number earns itself. The
+log says so when you pick a number the graphics chip will not use, and then runs the number
+you asked for anyway.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.

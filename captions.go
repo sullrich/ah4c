@@ -8174,6 +8174,10 @@ type captionStatusModel struct {
 	Why         string `json:"why"`
 	Runnable    bool   `json:"runnable"`
 	Blocked     string `json:"blocked"`
+	// MaxWorkers is how many recognizers this model may be run with, so the
+	// page offers that many and no more. Zero means one, which is every model
+	// that has not been measured for it.
+	MaxWorkers int `json:"maxWorkers"`
 	// Memory is what one simultaneous stream costs in RAM, and Reuse says what
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
@@ -8445,11 +8449,16 @@ func captionWorkers(cfg captionConfig, m captionModel) int {
 	if n < 1 {
 		n = 1
 	}
+	// The model's ceiling is a real limit and is enforced. Everything else is
+	// advice, and advice is said rather than applied: a number the page offered
+	// and the machine then quietly halved is worse than either honest answer.
 	if max := quirksFor(m).MaxWorkers; max > 0 && n > max {
 		n = max
 	}
 	if n > cap(gpuGate) && txBackend(currentEngineVariant()) != txBackendCPU {
-		n = cap(gpuGate)
+		logger("[CC] %d recognizers asked for, and the graphics chip runs %d transcriptions at a time — "+
+			"the rest will hold a copy of the weights and wait their turn. That helps on the processor and "+
+			"costs memory here.", n, cap(gpuGate))
 	}
 	return n
 }
@@ -8586,6 +8595,7 @@ func captionStatusPayload() captionStatus {
 		models = append(models, captionStatusModel{
 			captionModel:  m,
 			Installed:     modelInstalled(m),
+			MaxWorkers:    quirksFor(m).MaxWorkers,
 			Engine:        rt,
 			EngineName:    findSpeechRuntime(rt).Name,
 			EngineReady:   runtimeInstalled(rt, cur),
