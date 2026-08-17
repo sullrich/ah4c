@@ -1782,18 +1782,19 @@ func (s *stallTolerantReader) Close() error {
 }
 
 const (
-	adbTimeout      = 5 * time.Second
-	adbGiveUp       = 3
-	playbackPoll    = 250 * time.Millisecond
-	playbackConfirm = 2
-	playbackStatic  = 8
-	playbackTimeout = 12 * time.Second
-	keyframeWait    = 8 * time.Second
-	riseWindow      = 250 * time.Millisecond
-	riseFactor      = 4
-	riseWait        = time.Second
-	minWindow       = 8 * 188
-	busyWindow      = 46875
+	adbTimeout           = 5 * time.Second
+	adbGiveUp            = 3
+	playbackPoll         = 250 * time.Millisecond
+	playbackConfirm      = 2
+	playbackStaticFor    = 2 * time.Second
+	playbackSessionEvery = time.Second
+	playbackTimeout      = 12 * time.Second
+	keyframeWait         = 8 * time.Second
+	riseWindow           = 250 * time.Millisecond
+	riseFactor           = 4
+	riseWait             = time.Second
+	minWindow            = 8 * 188
+	busyWindow           = 46875
 )
 
 type gateReader struct {
@@ -2153,8 +2154,12 @@ func mediaSignature(tunerip string) string {
 	if err != nil {
 		return ""
 	}
+	return parseMediaSignature(string(out))
+}
+
+func parseMediaSignature(dump string) string {
 	var parts []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(dump, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.Contains(line, "description=") || strings.Contains(line, "metadata:") ||
 			strings.Contains(line, "PlaybackState {") {
@@ -2192,7 +2197,8 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 	held := map[string]int{}
 	last := map[string]bool{}
 	fails := 0
-	static := 0
+	var staticSince, sigAt time.Time
+	nowSig := sig
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
@@ -2205,32 +2211,41 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 				logger("[PLAYBACK] %s unreachable over adb, gating on motion alone", tunerip)
 				return
 			}
+			time.Sleep(playbackPoll)
+			continue
+		}
+		fails = 0
+		last = audioPiids(string(out))
+		if heldNewID(base, last, held) {
+			logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
+			return
+		}
+		if sig != "" && time.Since(sigAt) >= playbackSessionEvery {
+			nowSig, sigAt = mediaSignature(tunerip), time.Now()
+			if nowSig != "" && nowSig != sig {
+				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
+				return
+			}
+		}
+		if sig != "" && nowSig == sig && samePiids(base, last) {
+			if staticSince.IsZero() {
+				staticSince = time.Now()
+			} else if time.Since(staticSince) >= playbackStaticFor {
+				logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
+					tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
+				return
+			}
 		} else {
-			fails = 0
-			last = audioPiids(string(out))
-			if heldNewID(base, last, held) {
-				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-				return
-			}
-			now := mediaSignature(tunerip)
-			if now != "" && sig != "" && now != sig {
-				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-				return
-			}
-			if sig != "" && samePiids(base, last) && now == sig {
-				if static++; static >= playbackStatic {
-					logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
-						tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
-					return
-				}
-			} else {
-				static = 0
-			}
+			staticSince = time.Time{}
 		}
 		time.Sleep(playbackPoll)
 	}
+	session := "not readable"
+	if sig != "" {
+		session = map[bool]string{true: "unchanged", false: "changed"}[nowSig == sig]
+	}
 	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
-		tunerip, budget, piidList(base), piidList(last), map[bool]string{true: "unchanged", false: "changed"}[mediaSignature(tunerip) == sig])
+		tunerip, budget, piidList(base), piidList(last), session)
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
