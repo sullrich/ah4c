@@ -127,6 +127,7 @@
                 <span class="badge badge-idle" id="stateBadge">Off</span>
             </div>
             <div id="busyWarn"></div>
+            <div id="restartNote"></div>
             <p class="footnote">
                 Transcribed on this machine and carried in the stream as ordinary CC1 captions —
                 no sidecar files, no re-encoding, no change to tune speed.
@@ -283,6 +284,26 @@ function render() {
     const cfg = state.config;
     document.getElementById('enabled').checked = cfg.enabled;
     applyBusy();
+    // Said only when it is true: captions are on and a driver is saved but not
+    // loaded, which is the state switching them on has just created. Startup is
+    // the only stretch where nothing can be tuning, so a restart puts the whole
+    // thing in at once; without one it goes in a package at a time between
+    // tunes, which is slower and takes effect at the next start anyway, because
+    // the engine scans for backends once per process.
+    const pending = cfg.enabled && (state.drivers || []).some(d => d.downloaded && !d.active);
+    document.getElementById('restartNote').innerHTML = pending
+        ? `<div class="warn" style="margin:0.6rem 0 0;">
+             <span class="dot"></span>
+             <div>
+               <div class="h">Restart the container to finish setting up the graphics driver</div>
+               <div class="d">Startup is the only time nothing can be tuning, so a restart puts the driver in
+               at once and captions use it straight away. Leave it running instead and it still goes in — a
+               package at a time, waiting for gaps between tunes so it never interrupts one — but it will not
+               be used until the next start, because the speech engine looks for its backends once per
+               process. Nothing is lost either way; a restart is just the quick road.</div>
+             </div>
+           </div>`
+        : '';
     document.getElementById('runtime').textContent = state.runtime === 'ready' ? '' : state.runtime;
 
     const badge = document.getElementById('stateBadge');
