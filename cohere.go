@@ -83,6 +83,21 @@ var cohereQuirks = modelQuirks{
 	// audio, thirty-five second splits and chunks of twenty to sixty. This is
 	// a model built to be handed plenty at once.
 	PhraseWindow: 4.0,
+	// What the page may offer for the phrase length.
+	//
+	// This is the one setting that trades the two things this model is chosen
+	// for against each other, so it belongs to this model and to no other: a
+	// streaming model has no phrase to lengthen. Longer means more of the
+	// sentence in hand before it is transcribed, which is where the accuracy
+	// comes from, and a caption that cannot appear before the sentence has
+	// finished. Shorter means the words reach the screen sooner and the model
+	// guesses at anything that needed the end of the sentence to resolve.
+	//
+	// The short end is there for continuous speech — a news anchor reading copy
+	// never pauses, so every phrase runs to the full length and the display is
+	// handed a burst per phrase with no gap to drain in. Smaller phrases arrive
+	// more evenly and line 21 keeps up.
+	Windows: []float64{2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0},
 
 	// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The
 	// model thus benefits from prepending a noise gate or VAD in order to

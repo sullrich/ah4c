@@ -563,6 +563,9 @@ type captionConfig struct {
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
+	// PhraseSec is how long a phrase model may listen before it cuts, chosen on
+	// the page from what the model offers. Zero means the model's own figure.
+	PhraseSec float64 `json:"phraseSec"`
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
@@ -624,6 +627,21 @@ func saveCaptionConfig(cfg captionConfig) error {
 	// switching to the processor for an evening does not throw it away.
 	if v, ok := findEngineVariant(cfg.Engine); ok && v.Key == "vulkan" {
 		cfg.GPURuntime = "vulkan"
+	}
+	// A phrase length the chosen model does not offer is not saved. It comes
+	// from a config written for a different model, and the model's own figure
+	// is a better answer than the nearest number to somebody else's setting.
+	if m, ok := findCaptionModel(cfg.Model); ok {
+		q := quirksFor(m)
+		keep := false
+		for _, w := range q.Windows {
+			if cfg.PhraseSec == w {
+				keep = true
+			}
+		}
+		if !keep {
+			cfg.PhraseSec = 0
+		}
 	}
 	if err := os.MkdirAll(captionDir, 0o755); err != nil {
 		return err
@@ -4372,7 +4390,30 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 // where a new one starts; it earns an entry by misbehaving.
 
 // modelQuirks is what one model asks of the code around it.
+// phraseWindowFor is how long a phrase may run: the page's choice when the model
+// offers one and the choice is among the values it offers, the model's own
+// figure otherwise.
+//
+// Checked against the model's list rather than clamped to a range, because a
+// value the page never offered is a saved config from another model or another
+// version, and the model's own default is a better answer than the nearest
+// number to somebody else's setting.
+func phraseWindowFor(q modelQuirks, cfg captionConfig) float64 {
+	for _, w := range q.Windows {
+		if cfg.PhraseSec == w {
+			return w
+		}
+	}
+	if q.PhraseWindow > 0 {
+		return q.PhraseWindow
+	}
+	return vadMaxPhrase
+}
+
 type modelQuirks struct {
+	// Windows is the set of phrase lengths this model may be run with, for the
+	// page to offer. Empty means the length is not a choice for this model.
+	Windows []float64
 	// PhraseWindow is how long a phrase may run before it is cut, in seconds.
 	// Phrase-at-a-time models have an operating point; streaming models run
 	// their family's own and ignore this.
@@ -7728,10 +7769,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var frames, cutThisMinute int
 	// carryNext is set by a forced cut and consumed by the phrase after it.
 	carryNext := false
-	maxPhrase := e.quirks.PhraseWindow
-	if maxPhrase <= 0 {
-		maxPhrase = vadMaxPhrase
-	}
+	maxPhrase := phraseWindowFor(e.quirks, e.cfg)
 
 	for {
 		select {
@@ -8987,10 +9025,15 @@ type captionStatusModel struct {
 	// MemoryMB is one stream's cost and MemoryTotalMB the ceiling across the
 	// tuners actually being captioned, worked out here so the page never asks
 	// anyone to multiply anything.
-	MemoryMB      int    `json:"memoryMB"`
-	MemoryTotalMB int    `json:"memoryTotalMB"`
-	MemoryTotal   string `json:"memoryTotal"`
-	URL           string `json:"url"`
+	MemoryMB      int `json:"memoryMB"`
+	MemoryTotalMB int `json:"memoryTotalMB"`
+	// Windows is the phrase lengths this model offers and Window the one in
+	// force. Empty means the page shows no choice, which is every streaming
+	// model: there is no phrase to lengthen.
+	Windows     []float64 `json:"windows"`
+	Window      float64   `json:"window"`
+	MemoryTotal string    `json:"memoryTotal"`
+	URL         string    `json:"url"`
 }
 
 // memoryWarning says, in gigabytes, what the current settings could use, when
@@ -9395,6 +9438,8 @@ func captionStatusPayload() captionStatus {
 			MemoryMB:      perMB,
 			MemoryTotalMB: totalMB,
 			MemoryTotal:   total,
+			Windows:       quirksFor(m).Windows,
+			Window:        phraseWindowFor(quirksFor(m), cfg),
 			URL:           modelURL(m),
 		})
 	}
