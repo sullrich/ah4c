@@ -55,6 +55,25 @@ Each of these cost a recording before it was written down.
    entirely. The answer is not to bound the gate — it is to release the waiter
    and let the gated work keep waiting.
 
+8. **Every gate is bounded and every gate has a voice.** `for
+   !waitTuneQuietHeld(...) {}` waits for a stretch of quiet a three-tuner
+   machine does not reliably produce, and says nothing while it waits — so the
+   driver never installed, captions never started, and from outside it looked
+   like a build that had stopped working. A gate that expires is a decision the
+   log has to be able to explain afterwards; that is what `awaitQuiet` is for.
+   Rule 2 forbids overriding a gate on a timer and still does: a gate may expire
+   and proceed only when the work behind it has already been made divided or
+   polite, never as a way of getting an un-pausable job started.
+
+9. **When a gate says no, the unit of work waits — it is never skipped.** The
+   per-package install wrote `i--; continue` inside a `for i, deb := range`,
+   where the next iteration assigns `i` from the range anyway. The decrement did
+   nothing and the package was dropped instead, quietly, on exactly the busy
+   machines the gate exists for. A driver missing most of its libraries installs
+   cleanly, loads cleanly and offers no device: not a failure, a silent partial
+   success, which is the hardest kind to see. Deferring and dropping look
+   identical in a loop and are opposites in effect.
+
 ## Working here
 
 - **Do not change `main.go`.** Its diff against upstream is kept purely
