@@ -944,3 +944,31 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   grid-template-columns: repeat(2, minmax(104px, 1fr));
   gap: 5px;
 }
+
+/* Build stamp in the page bar: present, readable, and not competing with the
+   navigation for attention. */
+.build-version {
+	margin-left: auto;
+	padding-left: 0.75rem;
+	font-size: 0.72rem;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+	opacity: 0.55;
+	white-space: nowrap;
+}
+.pagebar .nav.push-right ~ .build-version {
+	margin-left: 0.75rem;
+}
+
+/* Where the stamp goes when the bar is too narrow to carry it. theme.js moves
+   the one element in here at the same 760px this file collapses the bar at,
+   so this is only ever occupied on a narrow screen. */
+.build-footer {
+	display: none;
+	padding: 0 1.25rem 1.5rem;
+	text-align: center;
+}
+@media (max-width: 760px) {
+	.build-footer { display: block; }
+	.build-footer .build-version { margin-left: 0; padding-left: 0; }
+}

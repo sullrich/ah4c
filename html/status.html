@@ -386,12 +386,9 @@
 		                statTile('Net In (rate)', `${networkInMegabits}<small> Mbps</small>`) +
 		                statTile('Net Out (rate)', `${networkOutMegabits}<small> Mbps</small>`);
 
-					if(data.GPUCPUUsage) {
-						systemStatsHtml +=
-						    statTile('GPU', `${data.GPUCPUUsage}<small>%</small>`) +
-						    statTile('GPU Memory', `${data.GPUMemUsage}<small>%</small>`) +
-						    statTile('GPU Power', `${data.GPUPowerUsage}<small>%</small>`);
-					}
+					if (data.GPUCPUUsage) systemStatsHtml += statTile('GPU', `${data.GPUCPUUsage}<small>%</small>`);
+					if (data.GPUMemUsage) systemStatsHtml += statTile('GPU Memory', `${data.GPUMemUsage}<small>%</small>`);
+					if (data.GPUPowerUsage) systemStatsHtml += statTile('GPU Power', `${data.GPUPowerUsage}<small>%</small>`);
 
 		            $('#systemStats').html(systemStatsHtml);
 
@@ -576,9 +573,10 @@
 					networkOutData.push([currentTimestamp, networkOutMegabits]); // Using currentTimestamp as the x-axis value
 
                     // GPU data
-                    gpuCPUData.push([currentTimestamp, data.GPUCPUUsage]);
-                    gpuMemData.push([currentTimestamp, data.GPUMemUsage]);
-                    gpuPowerData.push([currentTimestamp, data.GPUPowerUsage]);
+                    const gpuNum = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+                    if (gpuNum(data.GPUCPUUsage) !== null) gpuCPUData.push([currentTimestamp, gpuNum(data.GPUCPUUsage)]);
+                    if (gpuNum(data.GPUMemUsage) !== null) gpuMemData.push([currentTimestamp, gpuNum(data.GPUMemUsage)]);
+                    if (gpuNum(data.GPUPowerUsage) !== null) gpuPowerData.push([currentTimestamp, gpuNum(data.GPUPowerUsage)]);
 
 					// Limit the size of the arrays to avoid memory issues
 					if (cpuData.length > 50) cpuData.shift();
@@ -589,12 +587,13 @@
                     if (gpuMemData.length > 50) gpuMemData.shift();
                     if (gpuPowerData.length > 50) gpuPowerData.shift();
 
-                    // plot GPU graph
-                    $.plot("#gpu-usage", [
-                        { data: gpuCPUData, label: "GPU CPU %" },
+                    const gpuSeries = [
+                        { data: gpuCPUData, label: "GPU %" },
                         { data: gpuMemData, label: "GPU Mem %" },
                         { data: gpuPowerData, label: "GPU Power %" }
-                    ], GPUoptions);
+                    ].filter(x => x.data.length);
+                    $("#gpu-usage").closest(".card").toggle(gpuSeries.length > 0);
+                    if (gpuSeries.length) $.plot("#gpu-usage", gpuSeries, GPUoptions);
 
 					// Plot the data
 					$.plot("#cpu-usage", [

@@ -563,6 +563,9 @@ type captionConfig struct {
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
+	// PhraseSec is how long a phrase model may listen before it cuts, chosen on
+	// the page from what the model offers. Zero means the model's own figure.
+	PhraseSec float64 `json:"phraseSec"`
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
@@ -624,6 +627,21 @@ func saveCaptionConfig(cfg captionConfig) error {
 	// switching to the processor for an evening does not throw it away.
 	if v, ok := findEngineVariant(cfg.Engine); ok && v.Key == "vulkan" {
 		cfg.GPURuntime = "vulkan"
+	}
+	// A phrase length the chosen model does not offer is not saved. It comes
+	// from a config written for a different model, and the model's own figure
+	// is a better answer than the nearest number to somebody else's setting.
+	if m, ok := findCaptionModel(cfg.Model); ok {
+		q := quirksFor(m)
+		keep := false
+		for _, w := range q.Windows {
+			if cfg.PhraseSec == w {
+				keep = true
+			}
+		}
+		if !keep {
+			cfg.PhraseSec = 0
+		}
 	}
 	if err := os.MkdirAll(captionDir, 0o755); err != nil {
 		return err
@@ -1143,6 +1161,33 @@ type gpuInstallState struct {
 	Finished bool   `json:"finished"`
 	Err      string `json:"err"`
 	Log      string `json:"log"`
+	// Step names what is happening and Done of Total how far through it is, so
+	// the page can show a bar rather than the word "Installing" for a minute
+	// and a half while somebody wonders whether it has hung.
+	Step  string `json:"step"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
+}
+
+// driverUrgent is set while somebody is waiting at the page for this.
+//
+// The per-package quiet wait exists for work nobody asked for — the restore at
+// startup, which is free anyway because it runs before the port is bound. On a
+// button press it is the wrong trade entirely: up to fifteen seconds of waiting
+// in front of each of thirty-seven packages is nine minutes of somebody staring
+// at a page, to protect tunes that the person pressing the button knows about.
+//
+// So an explicit press goes straight through. It is still one dpkg at a time
+// and still behind nice and ionice, so a tune that does arrive loses only the
+// package in flight rather than the whole set.
+var driverUrgent atomic.Bool
+
+// noteDriverStep publishes progress for the page. Called from the download and
+// the install, which are the two parts long enough to need one.
+func noteDriverStep(step string, done, total int) {
+	gpuLock.Lock()
+	gpuState.Step, gpuState.Done, gpuState.Total = step, done, total
+	gpuLock.Unlock()
 }
 
 var (
@@ -1175,13 +1220,21 @@ func startDriverDownload(kind string) error {
 	gpuLock.Unlock()
 
 	go func() {
-		// This one keeps a gate, because apt and dpkg are the only work here
-		// that cannot yield mid-flight. It is bounded and it is not obeyed
-		// absolutely: both halves below are divided a package at a time now, so
-		// the worst a bad start can cost is one package rather than the whole
-		// set. Preferring a quiet start is worth a minute of waiting; refusing
-		// to start at all is how a driver never installs.
-		awaitQuiet("The graphics driver setup", 10*time.Second, time.Minute)
+		// Somebody is at the page waiting for this, so it goes now.
+		//
+		// There was a wait for a quiet minute in front of it and a wait for a
+		// quiet moment in front of each of thirty-seven packages behind it,
+		// which on a machine with tuners running is minutes of a progress bar
+		// not moving. Those gates are for the restore at startup, which nobody
+		// asked for and which is free anyway because it runs before the port is
+		// bound. A button press is somebody who knows what they are doing and
+		// what it costs.
+		//
+		// It is still one dpkg at a time and still behind nice and ionice, so a
+		// tune arriving in the middle loses the package in flight rather than
+		// the whole set.
+		driverUrgent.Store(true)
+		defer driverUrgent.Store(false)
 		log, err := fetchDriver(g)
 		if err == nil {
 			var l2 string
@@ -1191,6 +1244,7 @@ func startDriverDownload(kind string) error {
 		gpuLock.Lock()
 		gpuState.Active = false
 		gpuState.Finished = true
+		gpuState.Step, gpuState.Done, gpuState.Total = "", 0, 0
 		gpuState.Log = tailLines(log, 12)
 		if err != nil {
 			gpuState.Err = err.Error()
@@ -1348,8 +1402,9 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		// can be in anybody's way is one package, and it stands aside between
 		// them.
 		warned := false
+		noteDriverStep("Fetching packages", 0, len(c))
 		for i, p := range c {
-			if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+			if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 				warned = true
 				logger("[CC] %s is being fetched through a busy machine, one package at a time", g.Name)
 			}
@@ -1357,6 +1412,7 @@ func fetchDriver(g gpuRuntime) (string, error) {
 				aptErr = fmt.Errorf("fetching %s: %w", p, aptErr)
 				break
 			}
+			noteDriverStep("Fetching packages", i+1, len(c))
 			if i == len(c)-1 || (i+1)%10 == 0 {
 				logger("[CC] %s: %d of %d packages fetched", g.Name, i+1, len(c))
 			}
@@ -1709,10 +1765,13 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// polite work, which is a smaller thing to risk against a tune than an
 	// incomplete driver is against every tune afterwards.
 	var out []byte
+	var failed []string
+	in := 0
 	err = nil
 	warned := false
+	noteDriverStep("Installing packages", 0, len(debs))
 	for i, deb := range debs {
-		if !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
+		if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
@@ -1722,11 +1781,35 @@ func applyDriver(g gpuRuntime) (string, error) {
 		out = append(out, b...)
 		if e != nil {
 			err = e
+			failed = append(failed, filepath.Base(deb))
+		} else {
+			in++
 		}
+		noteDriverStep("Installing packages", in, len(debs))
 		if i == len(debs)-1 || (i+1)%10 == 0 {
-			logger("[CC] %s: %d of %d packages in", g.Name, i+1, len(debs))
+			// Packages that went in, not loops that were run. This counted the
+			// index, so it read "37 of 37 packages in" whatever dpkg had made
+			// of them — a line that says the same thing on success and on total
+			// failure is worse than no line, because it is believed.
+			logger("[CC] %s: %d of %d packages in", g.Name, in, len(debs))
 		}
 	}
+	if len(failed) > 0 {
+		logger("[CC] %s: %d packages would not install: %s", g.Name, len(failed), strings.Join(failed, " "))
+	}
+	// Ask the loader again rather than reading back what was true before.
+	//
+	// driverActive goes through the same answer-store the engine probe uses,
+	// and that store was emptied before this install and not after it. The
+	// install takes the better part of a minute, and the Closed Captions page
+	// polls every second and a half — so a poll during the install asked
+	// whether libvulkan.so.1 loads, was told no because it genuinely did not
+	// yet, and stored it. The check below then read that back and reported a
+	// driver that had installed perfectly as one that will not load.
+	//
+	// Which is why it was reported by somebody watching the page and not by
+	// somebody who pressed the button and walked away.
+	forgetEngineUsable()
 	if err != nil && !driverActive(g) {
 		return string(out), fmt.Errorf("installing the saved packages: %w", err)
 	}
@@ -4307,7 +4390,30 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 // where a new one starts; it earns an entry by misbehaving.
 
 // modelQuirks is what one model asks of the code around it.
+// phraseWindowFor is how long a phrase may run: the page's choice when the model
+// offers one and the choice is among the values it offers, the model's own
+// figure otherwise.
+//
+// Checked against the model's list rather than clamped to a range, because a
+// value the page never offered is a saved config from another model or another
+// version, and the model's own default is a better answer than the nearest
+// number to somebody else's setting.
+func phraseWindowFor(q modelQuirks, cfg captionConfig) float64 {
+	for _, w := range q.Windows {
+		if cfg.PhraseSec == w {
+			return w
+		}
+	}
+	if q.PhraseWindow > 0 {
+		return q.PhraseWindow
+	}
+	return vadMaxPhrase
+}
+
 type modelQuirks struct {
+	// Windows is the set of phrase lengths this model may be run with, for the
+	// page to offer. Empty means the length is not a choice for this model.
+	Windows []float64
 	// PhraseWindow is how long a phrase may run before it is cut, in seconds.
 	// Phrase-at-a-time models have an operating point; streaming models run
 	// their family's own and ignore this.
@@ -7663,10 +7769,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var frames, cutThisMinute int
 	// carryNext is set by a forced cut and consumed by the phrase after it.
 	carryNext := false
-	maxPhrase := e.quirks.PhraseWindow
-	if maxPhrase <= 0 {
-		maxPhrase = vadMaxPhrase
-	}
+	maxPhrase := phraseWindowFor(e.quirks, e.cfg)
 
 	for {
 		select {
@@ -8922,10 +9025,15 @@ type captionStatusModel struct {
 	// MemoryMB is one stream's cost and MemoryTotalMB the ceiling across the
 	// tuners actually being captioned, worked out here so the page never asks
 	// anyone to multiply anything.
-	MemoryMB      int    `json:"memoryMB"`
-	MemoryTotalMB int    `json:"memoryTotalMB"`
-	MemoryTotal   string `json:"memoryTotal"`
-	URL           string `json:"url"`
+	MemoryMB      int `json:"memoryMB"`
+	MemoryTotalMB int `json:"memoryTotalMB"`
+	// Windows is the phrase lengths this model offers and Window the one in
+	// force. Empty means the page shows no choice, which is every streaming
+	// model: there is no phrase to lengthen.
+	Windows     []float64 `json:"windows"`
+	Window      float64   `json:"window"`
+	MemoryTotal string    `json:"memoryTotal"`
+	URL         string    `json:"url"`
 }
 
 // memoryWarning says, in gigabytes, what the current settings could use, when
@@ -9330,6 +9438,8 @@ func captionStatusPayload() captionStatus {
 			MemoryMB:      perMB,
 			MemoryTotalMB: totalMB,
 			MemoryTotal:   total,
+			Windows:       quirksFor(m).Windows,
+			Window:        phraseWindowFor(quirksFor(m), cfg),
 			URL:           modelURL(m),
 		})
 	}

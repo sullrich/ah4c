@@ -807,6 +807,9 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"version": buildVersion()})
+	})
 	r.GET("/captions", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "captions.html", nil)
 	})
@@ -1487,6 +1490,18 @@ func apiStatusHandler(c *gin.Context) {
 				}
 			}
 
+		}
+	}
+	if gpuUtil == "" || memUsage == "" || GPUpowerUsagePercent == "" {
+		u, m, p := otherGPU()
+		if gpuUtil == "" {
+			gpuUtil = u
+		}
+		if memUsage == "" {
+			memUsage = m
+		}
+		if GPUpowerUsagePercent == "" {
+			GPUpowerUsagePercent = p
 		}
 	}
 	// Response with JSON
