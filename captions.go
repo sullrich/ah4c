@@ -804,7 +804,30 @@ func streamToFile(client *http.Client, url, dst string) error {
 	}
 	buf := make([]byte, 512*1024)
 	var done int64
+	paused := false
 	for {
+		// Yield to tunes for the whole download, not merely at the start of it.
+		//
+		// The caller waits for a quiet moment before beginning, which was the
+		// entire protection, and then this ran for minutes — half a gigabyte
+		// for a streaming model, a gigabyte and a half for the phrase one —
+		// over the same network and onto the same disk the tuners are using.
+		// A tune that started thirty seconds in was competing with a transfer
+		// that had no idea it existed, and lost: forty seconds without
+		// confirming playback, which is longer than the DVR waits.
+		//
+		// So the transfer stops while a tune is in flight and resumes when it
+		// settles. Tunes take seconds and the connection tolerates a pause of
+		// that order; if it does not, the download fails and is retried, which
+		// is a button rather than a recording.
+		for tunesPending() {
+			if !paused {
+				paused = true
+				logger("[CC] Pausing the download for a tune in progress")
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		paused = false
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
@@ -998,11 +1021,23 @@ func writeRuntimeFile(dir, rel string, r io.Reader) error {
 // countingReader reports download progress for a stream that is being
 // decompressed on the fly.
 type countingReader struct {
-	r    io.Reader
-	done int64
+	r      io.Reader
+	done   int64
+	paused bool
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
+	// The engine archive is smaller than a model but the reasoning is the
+	// same, and it is decompressed on the way in, so it costs processor as
+	// well as network. It waits for a tune exactly as the model download does.
+	for tunesPending() {
+		if !c.paused {
+			c.paused = true
+			logger("[CC] Pausing the download for a tune in progress")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	c.paused = false
 	n, err := c.r.Read(p)
 	if n > 0 {
 		c.done += int64(n)
