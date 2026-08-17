@@ -191,12 +191,6 @@
                 </select>
             </div>
             <div class="field-row">
-                <label for="workers">Recognizers</label>
-                <select id="workers"></select>
-            </div>
-            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="workersHelp"></p>
-            <div id="workersWarn"></div>
-            <div class="field-row">
                 <label for="roll">Roll-up speed</label>
                 <select id="roll">
                     <option value="broadcast">Broadcast pace (a finished line rests before it rolls)</option>
@@ -428,40 +422,6 @@ function render() {
 
     document.getElementById('style').value = cfg.style || 'rollup3';
     document.getElementById('roll').value = cfg.rollSpeed || 'broadcast';
-    // Recognizers. The list runs to whatever the chosen model says it can be run
-    // with, and each option carries what it costs, because the cost is the whole
-    // of the decision.
-    const chosen = state.models.find(m => m.key === cfg.model);
-    const maxW = (chosen && chosen.maxWorkers) || 1;
-    const perGB = chosen ? chosen.sizeMB / 1024 : 0;
-    const wsel = document.getElementById('workers');
-    wsel.innerHTML = Array.from({length: maxW}, (_, i) => {
-        const n = i + 1;
-        const cost = perGB ? ` — about ${(perGB * n).toFixed(1)} GB of memory` : '';
-        return `<option value="${n}" ${n === (cfg.workers || 1) ? 'selected' : ''}>${n}${n === 1 ? ' (default)' : ''}${cost}</option>`;
-    }).join('');
-    wsel.disabled = maxW <= 1;
-    // Memory is the whole of what this costs, so it is said loudly rather than
-    // left in a sentence, and it is said as a total rather than as a multiplier.
-    const warnW = document.getElementById('workersWarn');
-    if (maxW > 1 && (cfg.workers || 1) > 1) {
-        const n = cfg.workers;
-        warnW.innerHTML = `
-            <div class="warn" style="margin:0.5rem 0;">
-                <span class="dot"></span>
-                <div>
-                    <div class="h">${n} recognizers will hold about ${(perGB * n).toFixed(1)} GB of memory</div>
-                    <div class="d">Each one loads its own complete copy of the model — ${perGB.toFixed(1)} GB apiece — and holds
-                    it for as long as any tuner is being captioned. This is on top of everything else the machine is doing.
-                    Check the figure against what you actually have free before leaving it here.</div>
-                </div>
-            </div>`;
-    } else {
-        warnW.innerHTML = '';
-    }
-    document.getElementById('workersHelp').innerHTML = maxW <= 1
-        ? 'This model runs one recognizer. The streaming models already load a copy for every tuner being captioned, so there is nothing to share out.'
-        : 'All the recognizers read the same queue and whichever is free takes the next batch, so one is no faster than it ever was and two transcribe two phrases at once. It has to be a whole second copy rather than a second thread because the engine allows one transcription in flight per loaded copy. Changing this takes effect immediately, on whatever is already running. One recognizer carries roughly as many captioned tuners as its real-time factor. A captioned stream makes a second of audio every second, so a recognizer running at <b>N</b> times real time keeps pace with about <b>N</b> streams, and the next one is where the queue stops draining as fast as it fills. Your figure is measured and printed in the log every twenty-five dispatches with the stream count spelled out — it depends on the model, the quantization, the backend and the machine, so it is worth reading rather than assuming. Leave this at one until the log says the recognizer has run out — streams reporting they are seconds behind with <em>nothing dropped</em> is a queue that no longer drains as fast as it fills. More recognizers is the only way past that, because the engine allows one transcription in flight per copy of the model, so each one is another full copy of the weights. A graphics chip runs two at a time and the rest wait their turn holding memory; a processor really does run them at once, which is where a larger number earns itself.';
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
     // How far ahead a streaming model looks before committing a word. It costs
@@ -491,7 +451,6 @@ function collect() {
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
         rollSpeed: document.getElementById('roll').value,
-        workers: parseInt(document.getElementById('workers').value, 10),
         offsetSec: parseInt(document.getElementById('offset').value, 10),
         uppercase: document.getElementById('case').value === 'upper',
         engine: state.config.engine || 'cpu',

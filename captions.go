@@ -547,9 +547,6 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
-	// Workers is how many recognizers share one phrase model, each with its own
-	// copy of the weights. Zero and one both mean one.
-	Workers int `json:"workers"`
 	// RollSpeed is how long a finished line is held before the display rolls
 	// it up, when there is nothing waiting to take its place. Taste, eyesight
 	// and the number of rows all bear on it, so it is asked rather than
@@ -643,7 +640,6 @@ func saveCaptionConfig(cfg captionConfig) error {
 	captionCfgLock.Unlock()
 	// A loaded model is brought into line with the new setting rather than
 	// keeping the number it happened to start with.
-	go reconcileWorkers()
 	return nil
 }
 
@@ -4250,10 +4246,6 @@ type modelQuirks struct {
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
-	// MaxWorkers is how many recognizers may share the request queue for this
-	// model, each with its own copy of the weights. One unless a model has been
-	// measured to benefit from more; see the page setting.
-	MaxWorkers int
 	// PNC and ITN are the punctuation and number-formatting toggles the engine
 	// takes per call. Zero is the family's own default for both, which is what
 	// a model gets until somebody has a reason.
@@ -5214,12 +5206,9 @@ type txBatchService struct {
 	onGPU bool
 	// kvType is the attention cache precision this model asked for, and pnc and
 	// itn its punctuation and number formatting.
-	kvType int32
-	pnc    int32
-	itn    int32
-	// workers is how many recognizers serve this queue. Read and written under
-	// txServiceLock, because the setting can change while they are running.
-	workers  int
+	kvType   int32
+	pnc      int32
+	itn      int32
 	requests chan txBatchRequest
 	refs     int
 	closed   chan struct{}
@@ -5326,7 +5315,6 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		path:     path,
 		backend:  backend,
 		kvType:   quirksFor(mustFindModel(cfg.Model)).KVType,
-		workers:  captionWorkers(cfg, mustFindModel(cfg.Model)),
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
 		refs:     1,
@@ -5349,18 +5337,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			txServiceLock.Unlock()
 			return
 		}
-		go svc.run(w, 0)
-		// The rest come up behind the first, so the service is usable the moment
-		// one recognizer is ready and the others join as they load. Each is a
-		// whole copy of the weights and its own session, because the engine
-		// allows one transcription in flight per copy — which is the rule the
-		// shared service exists to obey, and the only way past it is to have
-		// more than one thing to be in flight on.
-		if svc.workers > 1 {
-			logger("[CC] Starting %d recognizers for %s; each loads its own copy of the weights",
-				svc.workers, filepath.Base(svc.path))
-		}
-		go svc.startExtraWorkers()
+		go svc.run(w)
 		// Every stream that wanted this may have timed out and moved on
 		// while the load ran. A live service nobody references would hold
 		// the weights until restart; reap it here, and a later stream simply
@@ -5399,123 +5376,39 @@ func (svc *txBatchService) release() {
 	close(svc.closed)
 }
 
-// wantWorkers is how many recognizers this service should have right now.
-func (svc *txBatchService) wantWorkers() int {
-	txServiceLock.Lock()
-	defer txServiceLock.Unlock()
-	return svc.workers
-}
-
-// startExtraWorkers brings the additional recognizers up, one at a time, and
-// only when the machine has nothing better to do.
+// One recognizer, and that is the measured answer rather than a simplification.
 //
-// One at a time and never in parallel, because loading one is two and a half
-// gigabytes read off the disk and pushed through memory, and four of those at
-// once is the heaviest thing this program can do to a machine. Turned loose
-// together they took the tunes with them: playback unconfirmed at forty
-// seconds, the DVR gone at forty-five, and every captioned stream dropping
-// phrases while it happened.
+// This was a setting on the page, up to eight copies of the weights, and it made
+// transcription slower every time it was raised — not slower per copy, slower
+// outright, further behind real time with four than with one. Three reasons, all
+// of them pushing the same way:
 //
-// And behind held quiet rather than the plain wait, because a recognizer is
-// pure optimization. A stream's first load is worth pushing for — without it
-// that tune has no captions at all — but an extra recognizer only makes
-// existing captions less late. Nothing about it justifies being in the way, so
-// it waits for a stretch where it is not, however long that takes.
+// Batching is the first and the largest. The engine runs several phrases in one
+// dispatch far faster than the same phrases one at a time, and the log has been
+// printing both numbers side by side since the telemetry went in. Splitting the
+// queue across workers meant nothing ever batched.
 //
-// The backoff is long for the same reason. Retrying every fifteen seconds meant
-// re-reading the whole file every fifteen seconds, since warming the page cache
-// comes before the quiet gate that turns the attempt away — so a machine too
-// busy to load a recognizer was being given the disk traffic of loading one,
-// over and over, for as long as it stayed busy.
-func (svc *txBatchService) startExtraWorkers() {
-	for n := 1; ; n++ {
-		for {
-			select {
-			case <-svc.closed:
-				return
-			default:
-			}
-			want := svc.wantWorkers()
-			if n >= want {
-				return
-			}
-			// Ten seconds of proven quiet before touching anything, which is
-			// what every other gate in this file asks for.
-			//
-			// It asked for a full minute, and a minute of continuous quiet is
-			// not something a machine with three tuners produces very often —
-			// so the extra recognizers a user had asked for and been warned
-			// about the memory cost of simply never appeared, and nothing said
-			// why. This is the one gate that still stands its ground when the
-			// answer is no, because loading a recognizer is a gigabyte and a
-			// half off the disk and cannot be divided; it just says so now
-			// instead of waiting in silence.
-			if !awaitQuiet(fmt.Sprintf("Recognizer %d", n+1), 10*time.Second, 2*time.Minute) {
-				continue
-			}
-			w, err := svc.makeWorker(nil)
-			if err == nil {
-				logger("[CC] Recognizer %d of %d is up", n+1, want)
-				go svc.run(w, n)
-				break
-			}
-			logger("[CC] Recognizer %d could not load yet (%v); waiting for a quieter moment", n+1, err)
-			select {
-			case <-svc.closed:
-				return
-			case <-time.After(2 * time.Minute):
-			}
-		}
-	}
-}
-
-// reconcileWorkers brings every loaded model into line with the setting.
+// Threads are the second. captionComputeThreads is a figure for the machine, not
+// for a worker, and it was never divided — so every copy took the full
+// allowance. Four copies asked for four times the machine's cores, and ggml
+// spin-waits its threads rather than sleeping them, so they did not politely
+// interleave: they fought each other, and the tuners, for the same cores.
 //
-// The count used to be fixed when the model loaded, which meant changing it did
-// nothing at all while anybody was being captioned — and being captioned is the
-// only time anybody would want to change it. It applied at the next load, which
-// on a machine that captions continuously is never.
-func reconcileWorkers() {
-	cfg := currentCaptionConfig()
-	txServiceLock.Lock()
-	svcs := make([]*txBatchService, 0, len(txServices))
-	for _, svc := range txServices {
-		svcs = append(svcs, svc)
-	}
-	txServiceLock.Unlock()
-	for _, svc := range svcs {
-		want := captionWorkers(cfg, mustFindModel(cfg.Model))
-		txServiceLock.Lock()
-		had := svc.workers
-		svc.workers = want
-		txServiceLock.Unlock()
-		if want == had {
-			continue
-		}
-		logger("[CC] Recognizers for %s: %d, was %d", filepath.Base(svc.path), want, had)
-		if want > had {
-			go svc.startExtraWorkers()
-		}
-	}
-}
-
-func (svc *txBatchService) run(w *txWorker, n int) {
+// The device is the third. One graphics chip does one piece of arithmetic at a
+// time whatever is queued on it, and each copy holds its own two gigabytes of
+// weights in the same system memory the iGPU reads through. Two copies buy no
+// parallelism and double the traffic through the bottleneck.
+//
+// So the queue has one server, it takes everything waiting, and it batches.
+func (svc *txBatchService) run(w *txWorker) {
 	defer func() {
 		if w.session != 0 {
 			txSessionFree(w.session)
 		}
 		releaseTxModel(svc.path+"|"+fmt.Sprint(svc.backend), w.shared)
-		logger("[CC] Recognizer %d released its copy of the weights", n+1)
+		logger("[CC] The recognizer released its copy of the weights")
 	}()
 	for {
-		// The count is live. A recognizer past the number now being asked for
-		// gives its weights back between batches rather than at the end of the
-		// last stream, so lowering the setting frees the memory while somebody
-		// is still watching.
-		if n >= svc.wantWorkers() {
-			logger("[CC] Recognizer %d is standing down; %d are wanted now", n+1, svc.wantWorkers())
-			return
-		}
 		var first txBatchRequest
 		select {
 		case <-svc.closed:
@@ -5563,20 +5456,17 @@ func (svc *txBatchService) run(w *txWorker, n int) {
 		// cost. What is gone is only the speculative part: waiting to find out
 		// whether somebody might be about to speak.
 		_ = audioCap
-		// Leave something for the others.
+		// One worker takes everything waiting, deliberately.
 		//
-		// One recognizer draining the queue is exactly right when it is the
-		// only one. With several it is the whole problem: the first to come
-		// free takes everything waiting — six phrases in one dispatch was
-		// measured — and the rest sit idle holding two and a half gigabytes
-		// each for nothing. Every extra copy paid for and none of them used.
-		//
-		// So a worker stops drawing once what is left would be one apiece for
-		// the others. Whichever is free still takes the next phrase
-		// immediately, which is the point of a shared queue; it just stops
-		// taking theirs as well.
-		spare := svc.wantWorkers() - 1
-		for len(batch) < 16 && audioSec < maxBatchAudioSec && len(svc.requests) > spare {
+		// There was rationing here — a worker stopped drawing once what was
+		// left would be one apiece for the others — written when the answer to
+		// a slow recognizer was thought to be more of them. It was the wrong
+		// answer and this was how it did its damage: batching several phrases
+		// into one dispatch is the single biggest speed-up the engine offers,
+		// and holding phrases back for other workers turned every batched
+		// dispatch into a solo one. The log printed both figures side by side
+		// the whole time.
+		for len(batch) < 16 && audioSec < maxBatchAudioSec && len(svc.requests) > 0 {
 			select {
 			case r := <-svc.requests:
 				batch = append(batch, r)
@@ -5710,9 +5600,9 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 			"%.1fx real time — about %d streams' worth — over the last 25 dispatches",
 			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed, int(speed))
 		// Split by batch size, because the two tell different stories: solo
-		// dispatches slow means the backend itself is slow here; solo quick
-		// but batches barely quicker means batching is not parallelising on
-		// this backend and a second worker is the better spend.
+		// dispatches slow means the backend itself is slow here, and the gap
+		// between solo and batched is what a second copy of the weights would
+		// have thrown away. It was measured at a factor worth keeping.
 		if svc.tSoloN > 0 && svc.tSoloN < 25 {
 			solo := float64(svc.tSoloAudio) / float64(svc.tSoloCompute)
 			batchN := 25 - svc.tSoloN
@@ -8563,10 +8453,6 @@ type captionStatusModel struct {
 	Why         string `json:"why"`
 	Runnable    bool   `json:"runnable"`
 	Blocked     string `json:"blocked"`
-	// MaxWorkers is how many recognizers this model may be run with, so the
-	// page offers that many and no more. Zero means one, which is every model
-	// that has not been measured for it.
-	MaxWorkers int `json:"maxWorkers"`
 	// Memory is what one simultaneous stream costs in RAM, and Reuse says what
 	// happens to that copy when the stream ends.
 	Memory string `json:"memory"`
@@ -8819,39 +8705,6 @@ func captionComputeThreads() int {
 	return n
 }
 
-// captionWorkers is how many recognizers serve one phrase model, from the page
-// setting, bounded by what the model says it can use and by what the machine
-// has to give.
-//
-// One is the default and is right until the recognizer saturates. The log says
-// when it has: the real-time factor stops improving and streams start reporting
-// that they are running behind while nothing is dropped, which is a queue that
-// no longer drains as fast as it fills. A second recognizer is the only way past
-// that, because the engine permits one compute in flight per loaded copy — so a
-// second copy is the cost, in full, every time.
-//
-// Bounded by the GPU gate as well, which lets two decodes at the accelerator at
-// once and holds the rest: recognizers past that number would queue on it rather
-// than run, having already paid for their weights.
-func captionWorkers(cfg captionConfig, m captionModel) int {
-	n := cfg.Workers
-	if n < 1 {
-		n = 1
-	}
-	// The model's ceiling is a real limit and is enforced. Everything else is
-	// advice, and advice is said rather than applied: a number the page offered
-	// and the machine then quietly halved is worse than either honest answer.
-	if max := quirksFor(m).MaxWorkers; max > 0 && n > max {
-		n = max
-	}
-	if n > cap(gpuGate) && txBackend(currentEngineVariant()) != txBackendCPU {
-		logger("[CC] %d recognizers asked for, and the graphics chip runs %d transcriptions at a time — "+
-			"the rest will hold a copy of the weights and wait their turn. That helps on the processor and "+
-			"costs memory here.", n, cap(gpuGate))
-	}
-	return n
-}
-
 // captionGPUThreads is the shared recognizer's allowance when the arithmetic
 // is happening on a graphics chip: half of what the processor path would get.
 //
@@ -8984,7 +8837,6 @@ func captionStatusPayload() captionStatus {
 		models = append(models, captionStatusModel{
 			captionModel:  m,
 			Installed:     modelInstalled(m),
-			MaxWorkers:    quirksFor(m).MaxWorkers,
 			Engine:        rt,
 			EngineName:    findSpeechRuntime(rt).Name,
 			EngineReady:   runtimeInstalled(rt, cur),
