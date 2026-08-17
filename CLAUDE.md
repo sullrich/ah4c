@@ -48,6 +48,13 @@ Each of these cost a recording before it was written down.
 
 ## Working here
 
+- **Do not change `main.go`.** Its diff against upstream is kept purely
+  additive, and `ui-refactor` is the pull request that carries it. Caption work
+  lives in `captions.go` and the model files. This holds even when `main.go`
+  looks like the right place: the playback gate there is 40s plus an 8s
+  keyframe wait against the DVR's 30, which is a real problem and still not a
+  reason to edit that file. Fix the contention instead, or raise it and wait to
+  be told.
 - **American spelling everywhere.** Code, comments, commit messages, log lines,
   user-facing text. See `~/.claude/CLAUDE.md`.
 - **Each speech model owns a file.** `cohere.go`, `nemotron.go`, `moonshine.go`
