@@ -4359,22 +4359,22 @@ var (
 	txStreamFinalize func(session uintptr, update unsafe.Pointer) int32
 	txStreamGetText  func(session uintptr, out unsafe.Pointer) int32
 
-	txSetAbortCallback   func(session uintptr, cb uintptr, userData unsafe.Pointer)
-	txBackendAvailable   func(kind int32) bool
+	txSetAbortCallback func(session uintptr, cb uintptr, userData unsafe.Pointer)
+	txBackendAvailable func(kind int32) bool
 	// Returns the backend's name — "cpu", "vulkan", "cuda" — not an enum.
-	txModelBackend       func(model uintptr) string
-	txRunBatch           func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
-	txBatchNResults      func(session uintptr) int32
-	txBatchStatus        func(session uintptr, i int32) int32
-	txBatchFullText      func(session uintptr, i int32) string
-	txLogSet             func(cb uintptr, userData unsafe.Pointer)
-	txWasAborted         func(session uintptr) bool
-	txLoadParamsInit     func(p unsafe.Pointer)
-	txSessionParamsInit  func(p unsafe.Pointer)
-	txRunParamsInit      func(p unsafe.Pointer)
-	txStreamParamsInit   func(p unsafe.Pointer)
-	txStreamUpdateInit   func(p unsafe.Pointer)
-	txStreamTextInit     func(p unsafe.Pointer)
+	txModelBackend      func(model uintptr) string
+	txRunBatch          func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
+	txBatchNResults     func(session uintptr) int32
+	txBatchStatus       func(session uintptr, i int32) int32
+	txBatchFullText     func(session uintptr, i int32) string
+	txLogSet            func(cb uintptr, userData unsafe.Pointer)
+	txWasAborted        func(session uintptr) bool
+	txLoadParamsInit    func(p unsafe.Pointer)
+	txSessionParamsInit func(p unsafe.Pointer)
+	txRunParamsInit     func(p unsafe.Pointer)
+	txStreamParamsInit  func(p unsafe.Pointer)
+	txStreamUpdateInit  func(p unsafe.Pointer)
+	txStreamTextInit    func(p unsafe.Pointer)
 )
 
 // initTranscribe opens the engine once per process and registers its backends.
@@ -6183,6 +6183,11 @@ type captionEngine struct {
 	// gated counts stretches the noise gate held back: loud enough to pass a
 	// level test, too steady to be somebody talking.
 	gated int64
+	// tooShort counts stretches passed over for having too little speech in
+	// them, and audioLost counts reads dropped because the decoder was behind.
+	// Both used to happen in silence.
+	tooShort  int64
+	audioLost int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -6623,10 +6628,29 @@ const (
 	vadFrame     = asrSampleRate / 50 // 20 ms
 	vadMinSpeech = 0.6                // ignore blips shorter than this
 	vadMinPhrase = 1.8                // past this, a word gap is enough to cut
-	vadWordGap   = 0.15               // the gap between two spoken words
-	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 3.5                // backstop, so captions never fall this far behind
-	vadLead      = 0.20               // audio kept before speech, so words are not clipped
+	// The gap between two spoken words — and it has to be a gap between words
+	// rather than a gap inside one.
+	//
+	// A fifth of a second sounds like a pause and is not. The closure of a stop
+	// consonant — the silence before the release of a p, t, k, b, d or g — runs
+	// from about fifty to a hundred and fifty milliseconds, which is to say a
+	// hundred and fifty is inside a word, not between two. An actual pause
+	// between words in fluent speech runs two hundred milliseconds and up.
+	//
+	// Cutting at a hundred and fifty therefore cut inside words, and did it
+	// from two seconds into every phrase. What came out was fragments: the
+	// model handed the front half of a word and then the back half of it as a
+	// separate phrase, writing a plausible word for each and the right one for
+	// neither. Whole short fragments then fell under the speech minimum and
+	// were passed over entirely, so words went missing with nothing dropped and
+	// nothing in the log. That is the stutter and the missing words, and they
+	// are the same fault.
+	//
+	// A quarter of a second is above the closures and below a real pause.
+	vadWordGap   = 0.25
+	vadSilence   = 0.45 // a real pause: end the phrase whatever its length
+	vadMaxPhrase = 3.5  // backstop, so captions never fall this far behind
+	vadLead      = 0.35 // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
 	// and left to itself that arrangement can talk the detector deaf.
@@ -7111,10 +7135,23 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				speaking = true
 				speechLen = 0
 				loudest, levelSum, levelN = 0, 0, 0
-				lead := int(vadLead * asrSampleRate)
-				if len(pending) > lead {
-					pending = pending[len(pending)-lead:]
-				}
+				// Everything held is kept. It used to trim back to the lead
+				// at this moment, throwing away a third of a pre-roll it had
+				// already collected, which is the one thing that cannot be
+				// recovered later.
+				//
+				// This is where words go missing without anything being
+				// dropped. A word does not start at the moment it crosses the
+				// detector's bar. It starts with the part that never crosses
+				// it: the s of seven, the th of thirty, the f of fifty, the
+				// breath before a stressed syllable. Those run a fifth of a
+				// second and more before the vowel arrives and the level test
+				// notices anybody is talking. Cut the pre-roll to a fifth of a
+				// second and the model is handed "even" and "irty", and what
+				// it writes is a plausible word that is not the one that was
+				// said — with nothing dropped anywhere, no counter moved and
+				// nothing in the log, because the audio simply never contained
+				// the beginning of the word.
 			}
 			silenceRun = 0
 			speechLen += float64(vadFrame) / asrSampleRate
@@ -7133,8 +7170,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 
 		if !speaking {
-			// Hold only the lead-in window while the channel is quiet.
-			keep := int((vadLead + 0.1) * asrSampleRate)
+			// Hold the lead-in window, and a little more than the lead, so the
+			// onset is already in hand whenever speech is finally noticed.
+			keep := int((vadLead + 0.15) * asrSampleRate)
 			if len(pending) > keep {
 				pending = pending[len(pending)-keep:]
 			}
@@ -7190,6 +7228,14 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			speaking = false
 		}
 		if speechLen < vadMinSpeech {
+			// Counted, because it was not. Every other way audio is discarded
+			// says so, and a path that throws away sound in silence is a place
+			// words can go with nothing in the log to show for it.
+			n := atomic.AddInt64(&e.tooShort, 1)
+			if n == 1 || n%50 == 0 {
+				logger("[CC] %s passed over %s too short to be worth transcribing (%d so far)",
+					e.label, plural(n, "stretch", "stretches"), n)
+			}
 			continue
 		}
 		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
@@ -7776,7 +7822,16 @@ func (e *captionEngine) feed(b []byte) {
 	copy(cp, b)
 	select {
 	case e.audioCh <- cp:
-	default: // recognizer is behind; drop rather than stall the stream
+	default:
+		// Dropped rather than stalling the stream, which is the right trade —
+		// but said out loud, because this is transport stream bytes going
+		// missing from the middle of a decode and the words in them go with
+		// them. It was silent, so it could never be the answer to "where did
+		// that word go".
+		n := atomic.AddInt64(&e.audioLost, 1)
+		if n == 1 || n%50 == 0 {
+			logger("[CC] %s dropped audio the decoder could not keep up with (%d times)", e.label, n)
+		}
 	}
 }
 
