@@ -4499,30 +4499,23 @@ func (svc *txBatchService) run(w *txWorker) {
 		}
 		batch := []txBatchRequest{first}
 		audioSec := float64(len(first.pcm)) / asrSampleRate
-		// Streams cut phrases on their own clocks, so at any instant usually
-		// one request is waiting — and a batch of one pays the per-call cost
-		// per phrase, which is exactly the economics batching exists to fix. A
-		// short gather holds the door for the other active streams; a lone
-		// stream waits for nobody.
-		txServiceLock.Lock()
-		active := svc.refs
-		txServiceLock.Unlock()
-		if active > 1 {
-			gather := time.NewTimer(150 * time.Millisecond)
-		gathering:
-			for len(batch) < active && len(batch) < 16 && audioSec < audioCap {
-				select {
-				case r := <-svc.requests:
-					batch = append(batch, r)
-					audioSec += float64(len(r.pcm)) / asrSampleRate
-				case <-gather.C:
-					break gathering
-				case <-svc.closed:
-					break gathering
-				}
-			}
-			gather.Stop()
-		}
+		// Take everything already waiting; wait for nothing that is not.
+		//
+		// There was a hundred and fifty millisecond gather here, holding the
+		// door open in case another stream was about to cut a phrase. The
+		// measurements say it was not worth the wait: one and a tenth phrases
+		// to a dispatch with three streams running, so nearly every gather
+		// waited the full time and got nobody, and paid for it on the one
+		// phrase it did have. A wait that usually comes back empty is a
+		// latency charge on every phrase in exchange for an occasional saving
+		// on one.
+		//
+		// Nothing is given up by dropping it. Streams cut phrases on their own
+		// clocks, and when those clocks do line up the requests are already in
+		// the channel — the loop below takes them, in the same dispatch, at no
+		// cost. What is gone is only the speculative part: waiting to find out
+		// whether somebody might be about to speak.
+		_ = audioCap
 		for len(batch) < 16 && audioSec < maxBatchAudioSec {
 			select {
 			case r := <-svc.requests:
