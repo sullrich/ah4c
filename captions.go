@@ -8025,28 +8025,44 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 // transcription error; it is punctuation applied to a boundary the speaker never
 // made, and on screen it is the ugliest thing captions do.
 //
-// So a phrase that did not end at a pause gives up its closing full stop. The
+// So a phrase that did not end at a pause gives up its closing punctuation. The
 // comma that belongs there instead is not put in: the model did not offer one
 // and inventing punctuation is a worse habit than omitting it. In roll-up caps,
 // which is the default, running the two fragments together reads correctly.
 //
-// Only the full stop, and only one of them. A question mark or an exclamation
-// mark is a claim about the sentence's shape that a mid-sentence cut is unlikely
-// to produce by accident, and an ellipsis is a trailing-off the model meant.
+// Every sentence-ending mark, not just the full stop.
 //
-// The capitalization of the next fragment is left alone. Lowercasing it would
-// read better in mixed case and would eventually lowercase a proper noun, which
-// is a worse error than a capital in the middle of a sentence — and in the
-// default all-caps presentation there is nothing to see either way.
+// This took the full stop and deliberately left the question mark and the
+// exclamation mark, on the reasoning that those are claims about a sentence's
+// shape that a mid-sentence cut is unlikely to make by accident. That was a
+// guess dressed up as a rule, and it was wrong: handed "and what about the"
+// with nothing after it, a model will happily decide it was a question. With
+// the full stops gone the stray question marks were all that was left, which is
+// how they came to be noticed.
+//
+// The argument never depended on which mark it was. At a boundary this code
+// invented, every terminal mark is punctuation applied to a fragment, because
+// the speaker was still talking. So all three go.
+//
+// The cost is a real question that happens to end on a word gap rather than a
+// pause, which loses its mark. That is the smaller error by a distance: a
+// question without its mark reads as a sentence, while a question mark in the
+// middle of one reads as a fault — which it is.
+//
+// An ellipsis is left alone. The model wrote three of them on purpose.
 func trimFalseStop(text string, atPause bool) string {
 	if atPause {
 		return text
 	}
 	t := strings.TrimRight(text, " ")
-	if !strings.HasSuffix(t, ".") || strings.HasSuffix(t, "..") {
+	if t == "" || strings.HasSuffix(t, "..") {
 		return text
 	}
-	return strings.TrimRight(t[:len(t)-1], " ")
+	switch t[len(t)-1] {
+	case '.', '?', '!':
+		return strings.TrimRight(t[:len(t)-1], " ")
+	}
+	return text
 }
 
 // trimOverlap drops the beginning of a phrase where it repeats the end of the
