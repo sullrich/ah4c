@@ -140,32 +140,48 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — two. Cohere Transcribe is the one to pick; the tiny one is for hardware
-that cannot run it. Every recommendation is guidance, never a gate, and both run anywhere.
+**Models** — three, and the choice between them is really a choice about delay. Cohere
+Transcribe is the one to pick if you want the words right. Nemotron is the one to pick if
+you want them now. Moonshine is for hardware that cannot run either. Every recommendation
+is guidance, never a gate, and all three run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU. Each concurrent stream adds about a second of caption delay | Best — 1.3% | Set by the delay setting | 1.6 GB | 8 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Two to four seconds, like broadcast | 1.6 GB | 8 |
+| **Nemotron 3.5 ASR Streaming 0.6B** — transcribes as the audio arrives | Anyone the delay bothers, with the memory to spend on it | Very good | About a second | 496 MB | 25 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
 Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
 television is harder than clean read speech for every model.
 
-**Memory.** Cohere Transcribe reads a phrase at a time, so one copy — about 2.2 GB
-resident — is shared by every tuner captioning at once, and freed when the last of them
-ends. One copy is all it ever loads: if it cannot keep pace with the streams feeding it,
+The thing to understand before choosing is that phrase models and streaming models are
+different shapes, not fast and slow versions of one thing. A phrase model waits for a
+sentence to finish and then transcribes all of it, so it has the whole phrase to reason
+over and cannot be quicker than the phrase is long. A streaming model keeps a running
+state and commits words as they settle, so it is about a second behind whatever is being
+said and can never see what comes next. That is where the accuracy difference comes from,
+and it is why no setting closes the gap in either direction.
+
+**Memory**, and this is where the choice bites hardest. A phrase model is loaded once and
+shared: Cohere Transcribe costs about 2.2 GB resident however many tuners are captioning,
+and it is freed when the last of them ends. A streaming model cannot be shared, because
+the running state that makes it streaming belongs to one stream — so every captioned tuner
+loads its own copy. Nemotron is roughly 500 MB per stream, which is comfortable for three
+and five gigabytes across ten; Moonshine is about 160 MB per stream. The page works the
+total out for your own setup, but the shape of it is worth knowing before you pick: the
+accurate model gets cheaper per tuner and the quick ones get dearer.
+
+One copy is all Cohere ever loads. If it cannot keep pace with the streams feeding it,
 captions thin themselves to stay current and the log says which backend would do better —
-memory is never spent to cover for a slow setting. Moonshine holds its session open for
-the whole tune, so each tuner runs its own copy — about 160 MB per stream. The page works
-the numbers out for your own setup.
+memory is never spent to cover for a slow setting.
 
 Nothing is loaded until a tune is already playing, so captions can delay themselves but
 never a tune; a start that fails says why in the log and retries while the stream plays.
 
 **Timing** is not a setting: each model runs at the operating point it prefers. Cohere
 Transcribe reads phrases of up to four seconds and lands captions two to four seconds
-behind the picture — what live broadcast captioning runs; Moonshine streams at its own
-trained cadence and lands under a second behind. The recognizer reports its throughput in
+behind the picture — what live broadcast captioning runs. Nemotron and Moonshine stream at
+their own trained cadences and land about a second behind. The recognizer reports its throughput in
 the log, so whether your hardware is keeping up is a measurement, not a guess. The display
 is paced too: a finished caption line stays on screen a beat before the next one rolls it
 up, the way broadcast roll-up reads. If you want captions later — to match a delayed
