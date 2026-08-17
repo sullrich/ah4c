@@ -307,11 +307,11 @@ function render() {
               (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
             : '';
 
-    // Transcription speed, measured here rather than guessed. A captioned
-    // stream makes a second of audio every second it runs, so a recognizer at
-    // N times real time keeps pace with about N of them — which is the whole
-    // of what the number is for. It used to be printed in the log every half
-    // minute; it lives here instead, where it is looked at when it is wanted.
+    // Both figures are measured rather than guessed, and the wait is the one
+    // that answers "will it keep up". The real-time factor beside it is seconds
+    // of audio per second of compute — how fast the hardware is, not how many
+    // streams it carries. This once claimed it was the second thing, and four
+    // streams measuring the same factor as one is what settled that.
     const rec = state.recognizer || {};
     const lag = rec.lagSec > 0 ? rec.lagSec : 0;
     document.getElementById('recogStat').innerHTML = rec.measured
