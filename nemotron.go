@@ -3,10 +3,19 @@ package main
 // Nemotron 3.5 ASR Streaming 0.6B: the model, and everything it asks of the
 // code around it.
 //
-// The quick one. It transcribes as the audio arrives rather than waiting for a
-// sentence to finish, so words land about a second behind the speaker instead
-// of four — and it can never see what is said next, which is where its accuracy
-// goes against the phrase model.
+// The multilingual one, and the quick one.
+//
+// Cohere Transcribe reads eight languages and this reads thirty-two, which
+// makes it the only real answer for most of the world rather than a compromise
+// for people in a hurry. It also transcribes as the audio arrives instead of
+// waiting for a sentence to finish, so words land about a second behind the
+// speaker instead of four.
+//
+// It was measured against the phrase model on a graphics chip and keeps up with
+// it, so the second it saves costs nothing in throughput. What it costs is
+// context: it can never see what is said next, which is where its accuracy goes
+// against Cohere in English — and memory, because a streaming model cannot be
+// shared between tuners and loads a copy for each.
 //
 // The engine handles it as a parakeet family model, which is worth knowing
 // because that is the name that appears in the log when it picks a backend.
@@ -17,15 +26,15 @@ package main
 var nemotronStreaming = captionModel{
 	Key:  "nemotron-streaming",
 	Name: "Nemotron 3.5 ASR Streaming 0.6B",
-	Role: "Best when the captions have to keep up with the picture",
-	Desc: "Transcribes as the audio arrives instead of waiting for a phrase to finish, so the words appear about a second behind the speaker rather than four. Writes punctuation and sentence case, and does it in twenty-five languages. The one to pick if the delay is what bothers you.",
+	Role: "Best for anything but English, and as quick as the picture",
+	Desc: "Thirty-two languages, transcribed as the audio arrives rather than a phrase at a time, so the words appear about a second behind the speaker instead of four. Writes punctuation and sentence case. This is the one to pick for anything that is not English — and on a GPU it keeps up with the phrase model, so the second it saves is free.",
 	// Streaming is a different shape of model, not a faster one: it keeps a
 	// running encoder state and commits words as they settle, so latency is
 	// a property of the architecture rather than a setting. The phrase
 	// window does not apply to it.
 	Latency:   "About a second behind the picture",
-	Accuracy:  "Very good, short of the phrase model",
-	Benchmark: "Between the other two; not measured here",
+	Accuracy:  "Very good; the phrase model is better in English",
+	Benchmark: "Between the other two in English; the only real choice elsewhere",
 	// The memory is the thing to know about this one, and it is not the
 	// download.
 	//
