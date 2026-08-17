@@ -177,6 +177,22 @@ One copy is all Cohere loads unless you ask for more. If it cannot keep pace wit
 streams feeding it, captions thin themselves to stay current and the log says so — memory
 is never spent to cover for a slow setting on its own.
 
+**How many tuners one recognizer carries** is measured on your machine and printed in the
+log, because there is no number that is true of everybody's. The rule behind it is simple
+enough to check by eye: a captioned stream makes a second of audio for every second it
+runs, so a recognizer working at *N* times real time keeps pace with about *N* streams, and
+the next one is where the queue stops draining as fast as it fills. The recognizer line
+says the multiplier and the stream count it implies:
+
+```
+[CC] recognizer: 2.9 phrases per dispatch, 2.21s compute for 9.1s of audio per dispatch,
+     4.1x real time — about 4 streams' worth — over the last 25 dispatches
+```
+
+Read yours rather than that one. It moves with the model, the quantization, the backend and
+the hardware — the same model on the same machine ranges from four to seven times real time
+across quantizations alone — so it is worth a look before deciding anything below.
+
 **Recognizers** — a setting, never automatic, and the one here that can take a machine
 down if it is set without looking. Past about five captioned tuners on integrated graphics
 one recognizer saturates: the log shows streams running seconds behind with *nothing

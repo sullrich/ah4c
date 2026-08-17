@@ -5383,8 +5383,23 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	}
 	if svc.tDispatches%25 == 0 {
 		speed := float64(svc.tAudio) / float64(svc.tCompute)
-		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, %.1fx real time, over the last 25 dispatches",
-			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed)
+		// The multiplier is also the answer to "how many tuners will this
+		// carry", and saying so saves everyone the arithmetic.
+		//
+		// A captioned stream produces one second of audio for every second it
+		// runs. A recognizer working at four times real time gets through four
+		// seconds of audio a second. So it keeps pace with about four streams,
+		// and the fifth is where the queue stops draining as fast as it fills —
+		// which is exactly where this machine found it.
+		//
+		// Approximate, and honestly so: batching lifts it a little, because
+		// several phrases share one decode, and the encoder runs serially
+		// across a batch so it lifts it less than one would hope. Read it as
+		// the number to compare against how many tuners are actually being
+		// captioned, not as a guarantee.
+		logger("[CC] recognizer: %.1f phrases per dispatch, %.2fs compute for %.1fs of audio per dispatch, "+
+			"%.1fx real time — about %d streams' worth — over the last 25 dispatches",
+			float64(svc.tPhrases)/25, svc.tCompute.Seconds()/25, svc.tAudio.Seconds()/25, speed, int(speed))
 		// Split by batch size, because the two tell different stories: solo
 		// dispatches slow means the backend itself is slow here; solo quick
 		// but batches barely quicker means batching is not parallelising on
