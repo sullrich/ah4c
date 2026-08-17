@@ -5169,9 +5169,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			logger("[CC] Starting %d recognizers for %s; each loads its own copy of the weights",
 				svc.workers, filepath.Base(svc.path))
 		}
-		for i := 1; i < svc.workers; i++ {
-			go svc.startWorker(i)
-		}
+		go svc.startExtraWorkers()
 		// Every stream that wanted this may have timed out and moved on
 		// while the load ran. A live service nobody references would hold
 		// the weights until restart; reap it here, and a later stream simply
@@ -5217,33 +5215,55 @@ func (svc *txBatchService) wantWorkers() int {
 	return svc.workers
 }
 
-// startWorker brings one up and keeps trying until it does. Loading weights
-// goes behind the same gates as every load here, and those gates fail fast
-// because their usual caller is a stream with a retry loop behind it; a
-// recognizer needs its own.
-func (svc *txBatchService) startWorker(n int) {
-	for attempt := 1; ; attempt++ {
-		select {
-		case <-svc.closed:
-			return
-		default:
-		}
-		if n >= svc.wantWorkers() {
-			return
-		}
-		w, err := svc.makeWorker(nil)
-		if err == nil {
-			logger("[CC] Recognizer %d of %d is up", n+1, svc.wantWorkers())
-			svc.run(w, n)
-			return
-		}
-		if attempt == 1 || attempt%10 == 0 {
-			logger("[CC] Recognizer %d is still waiting to load (%v); trying again at the next quiet moment", n+1, err)
-		}
-		select {
-		case <-svc.closed:
-			return
-		case <-time.After(15 * time.Second):
+// startExtraWorkers brings the additional recognizers up, one at a time, and
+// only when the machine has nothing better to do.
+//
+// One at a time and never in parallel, because loading one is two and a half
+// gigabytes read off the disk and pushed through memory, and four of those at
+// once is the heaviest thing this program can do to a machine. Turned loose
+// together they took the tunes with them: playback unconfirmed at forty
+// seconds, the DVR gone at forty-five, and every captioned stream dropping
+// phrases while it happened.
+//
+// And behind held quiet rather than the plain wait, because a recognizer is
+// pure optimization. A stream's first load is worth pushing for — without it
+// that tune has no captions at all — but an extra recognizer only makes
+// existing captions less late. Nothing about it justifies being in the way, so
+// it waits for a stretch where it is not, however long that takes.
+//
+// The backoff is long for the same reason. Retrying every fifteen seconds meant
+// re-reading the whole file every fifteen seconds, since warming the page cache
+// comes before the quiet gate that turns the attempt away — so a machine too
+// busy to load a recognizer was being given the disk traffic of loading one,
+// over and over, for as long as it stayed busy.
+func (svc *txBatchService) startExtraWorkers() {
+	for n := 1; ; n++ {
+		for {
+			select {
+			case <-svc.closed:
+				return
+			default:
+			}
+			want := svc.wantWorkers()
+			if n >= want {
+				return
+			}
+			// A minute of proven quiet before touching anything.
+			if !waitTuneQuietHeld(time.Minute, 5*time.Minute) {
+				continue
+			}
+			w, err := svc.makeWorker(nil)
+			if err == nil {
+				logger("[CC] Recognizer %d of %d is up", n+1, want)
+				go svc.run(w, n)
+				break
+			}
+			logger("[CC] Recognizer %d could not load yet (%v); waiting for a quieter moment", n+1, err)
+			select {
+			case <-svc.closed:
+				return
+			case <-time.After(2 * time.Minute):
+			}
 		}
 	}
 }
@@ -5272,8 +5292,8 @@ func reconcileWorkers() {
 			continue
 		}
 		logger("[CC] Recognizers for %s: %d, was %d", filepath.Base(svc.path), want, had)
-		for i := had; i < want; i++ {
-			go svc.startWorker(i)
+		if want > had {
+			go svc.startExtraWorkers()
 		}
 	}
 }
@@ -5342,7 +5362,20 @@ func (svc *txBatchService) run(w *txWorker, n int) {
 		// cost. What is gone is only the speculative part: waiting to find out
 		// whether somebody might be about to speak.
 		_ = audioCap
-		for len(batch) < 16 && audioSec < maxBatchAudioSec {
+		// Leave something for the others.
+		//
+		// One recognizer draining the queue is exactly right when it is the
+		// only one. With several it is the whole problem: the first to come
+		// free takes everything waiting — six phrases in one dispatch was
+		// measured — and the rest sit idle holding two and a half gigabytes
+		// each for nothing. Every extra copy paid for and none of them used.
+		//
+		// So a worker stops drawing once what is left would be one apiece for
+		// the others. Whichever is free still takes the next phrase
+		// immediately, which is the point of a shared queue; it just stops
+		// taking theirs as well.
+		spare := svc.wantWorkers() - 1
+		for len(batch) < 16 && audioSec < maxBatchAudioSec && len(svc.requests) > spare {
 			select {
 			case r := <-svc.requests:
 				batch = append(batch, r)
