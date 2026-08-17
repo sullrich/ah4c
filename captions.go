@@ -7000,7 +7000,16 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	e.mu.Unlock()
 
 	if m.Streaming {
-		if err := model.beginStream(cfg.Language); err != nil {
+		// The same spelling the weights were loaded with.
+		//
+		// loadRecognizer corrects the language onto whatever locale the model
+		// accepts, but it does that to its own copy of cfg — so the load got
+		// en-US and this asked for en, which Nemotron rejects. It then fell
+		// back to a phrase at a time, which uses the same segmenter and lands
+		// with the same sentence latency, so the model that had just been
+		// chosen for being continuous behaved exactly like the one it was
+		// chosen over.
+		if err := model.beginStream(modelLanguage(m, cfg.Language)); err != nil {
 			logger("[CC] %s could not start continuous recognition (%v), falling back to phrase at a time", e.label, err)
 		} else {
 			e.streaming = true
