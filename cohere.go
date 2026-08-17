@@ -35,33 +35,33 @@ var cohereTranscribe = captionModel{
 	Hardware:  "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/cohere-transcribe-03-2026-gguf",
-	// Q8_0, and it is worth being exact about why, because the published
-	// numbers do not say what one would expect.
+	// Q4_K_M, after Q8_0 was tried on this machine and measured.
 	//
-	// The model's own table gives word error by quantization: BF16 and F16 at
-	// 1.26%, Q8_0 and Q6_K at 1.27%, Q5_K_M and Q4_K_M at 1.25%. The four bit
-	// quant is not the least accurate of them — on that measurement it is tied
-	// for the best, and the whole spread is two hundredths of a point, which is
-	// noise. Nobody should choose between these on that table.
+	// The published table says the quantization does not matter for accuracy:
+	// BF16 and F16 at 1.26% word error, Q8_0 and Q6_K at 1.27%, Q5_K_M and
+	// Q4_K_M at 1.25%. Four bit is tied for the best there and the whole spread
+	// is two hundredths of a point.
 	//
-	// What the table does not cover is the backend. It was measured on
-	// LibriSpeech with greedy decoding, and every one of those figures comes
-	// from a reference run rather than from Vulkan. The engine's own author
-	// found the quants behave differently on a graphics chip — that is why this
-	// was Q4_K_M in the first place, after Q5_K_M measured a third of the speed
-	// on integrated graphics — and if shader quality varies by quant for speed
-	// there is no reason it cannot vary for arithmetic too. Nobody has
-	// published an accuracy measurement for this model on Vulkan at all.
+	// It does matter, and the table cannot see it, because every one of those
+	// figures comes from a reference run rather than from Vulkan. Q8_0 was
+	// noticeably more accurate here — brand names and proper nouns that came
+	// back wrong at four bits came back right — which says the shaders differ
+	// in arithmetic as well as in speed, and that nobody has published a number
+	// for the backend most people will actually run this on.
 	//
-	// So this is a test of that, not an upgrade justified by the vendor's
-	// numbers. Q8_0 has the simplest dequantization of the set, which is the
-	// least room for a shader to be subtly wrong. It costs 2.41 GB on disk
-	// against 1.56, and about the same again in memory — once, since a phrase
-	// model is shared by every tuner. If the substitutions on proper nouns stop,
-	// the hypothesis was right. If they do not, this reverts to one filename
-	// and a number, and the answer is that the model does not know the word.
-	File:        "cohere-transcribe-03-2026-Q8_0.gguf",
-	SizeMB:      2410,
+	// It is not shipped, because it cost more than it bought. Eight bits
+	// measured 4.2 times real time against 7.4 at four, which on a recognizer
+	// that carries about as many streams as its multiplier is the difference
+	// between four captioned tuners and seven. At five tuners the queue stopped
+	// draining, streams ran thirteen seconds behind and phrases were skipped to
+	// stay current — and words skipped for staleness are worse than words
+	// spelled wrong. Q6_K was tried in between and was not good.
+	//
+	// So: four bits for the throughput, extra recognizers for the streams
+	// beyond one recognizer's share, and the accuracy made up elsewhere. The
+	// full precision attention cache below is the first of that.
+	File:        "cohere-transcribe-03-2026-Q4_K_M.gguf",
+	SizeMB:      1550,
 	Punctuation: true,
 	Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
 }
@@ -115,6 +115,25 @@ var cohereQuirks = modelQuirks{
 	// factor in the log falls somewhere it matters, this is the line to
 	// reconsider, and the streaming models do not use it at all.
 	KVType: txKVF32,
+
+	// Punctuation and capitalization asked for outright rather than left to the
+	// family's default. The engine takes it per call, the model supports it,
+	// and captions want it: this is the model whose whole case is that what it
+	// writes reads like a broadcast caption track.
+	PNC: txPNCOn,
+
+	// And inverse text normalization, which is the one in this pair worth
+	// having found. It turns spoken numbers, dates and currencies into the
+	// written form — nine ninety nine into $9.99, twenty twenty six into 2026,
+	// a phone number into digits — and it was never switched on because it was
+	// never read about.
+	//
+	// Television is made of those. A commercial is prices and dates and numbers
+	// to call, and a caption that spells them out in words is both harder to
+	// read at a distance and further from what a broadcast track does. It costs
+	// nothing at inference: the engine applies it to the text after the words
+	// are chosen, so no accuracy is traded for it and no time either.
+	ITN: txITNOn,
 
 	// As many recognizers as the page asks for, up to eight.
 	//

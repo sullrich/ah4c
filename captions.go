@@ -4092,6 +4092,11 @@ type modelQuirks struct {
 	// model, each with its own copy of the weights. One unless a model has been
 	// measured to benefit from more; see the page setting.
 	MaxWorkers int
+	// PNC and ITN are the punctuation and number-formatting toggles the engine
+	// takes per call. Zero is the family's own default for both, which is what
+	// a model gets until somebody has a reason.
+	PNC int32
+	ITN int32
 	// KVType is the precision of the attention cache, from transcribe.h.
 	// Zero is the engine's own choice and is right for almost everything; a
 	// model asks for something else only when its accuracy has been measured
@@ -4242,6 +4247,17 @@ func cleanRecognized(text string) string {
 const (
 	// Backends, from transcribe.h. The processor is asked for by name rather
 	// than left to AUTO so that choosing it on the page actually means it.
+	// Punctuation and capitalization, and inverse text normalization — turning
+	// spoken numbers, dates and currencies into their written form. Both from
+	// transcribe.h, both per call, both left at the family's own default
+	// unless a model says otherwise.
+	txPNCDefault = 0
+	txPNCOff     = 1
+	txPNCOn      = 2
+	txITNDefault = 0
+	txITNOff     = 1
+	txITNOn      = 2
+
 	// K/V activation precision, from transcribe.h. Auto is f16 whenever the
 	// weights are quantized, which ours always are.
 	txKVAuto = 0
@@ -5026,8 +5042,11 @@ type txBatchService struct {
 	// lang mirrors transcribeModel.lang: NUL-terminated, heap-resident.
 	lang  []byte
 	onGPU bool
-	// kvType is the attention cache precision this model asked for.
+	// kvType is the attention cache precision this model asked for, and pnc and
+	// itn its punctuation and number formatting.
 	kvType int32
+	pnc    int32
+	itn    int32
 	// workers is how many recognizers serve this queue. Read and written under
 	// txServiceLock, because the setting can change while they are running.
 	workers  int
@@ -5135,6 +5154,8 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		path:     path,
 		backend:  backend,
 		kvType:   quirksFor(mustFindModel(cfg.Model)).KVType,
+		pnc:      quirksFor(mustFindModel(cfg.Model)).PNC,
+		itn:      quirksFor(mustFindModel(cfg.Model)).ITN,
 		workers:  captionWorkers(cfg, mustFindModel(cfg.Model)),
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
@@ -5399,6 +5420,7 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	p := txRunParams{}
 	txRunParamsInit(unsafe.Pointer(&p))
 	p.timestamps = txTimestampsNone
+	p.pnc, p.itn = svc.pnc, svc.itn
 	if len(svc.lang) > 0 {
 		p.language = &svc.lang[0]
 	}
@@ -5847,6 +5869,9 @@ type transcribeModel struct {
 	// event mask does: a pointer into a goroutine stack is not safe to give to
 	// C, because the stack can move.
 	lang []byte
+	// pnc and itn are this model's punctuation and number-formatting choices.
+	pnc int32
+	itn int32
 	// committed counts the bytes of the continuous transcript already shown, so
 	// each feed contributes only what is new. The engine's committed text is
 	// append-only by contract, which is what makes this safe.
@@ -5925,8 +5950,9 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		}
 	}
 
+	q := quirksFor(m)
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu"}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: q.PNC, itn: q.ITN}
 	if withWatchdog {
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
@@ -5965,6 +5991,7 @@ func (t *transcribeModel) runParams() txRunParams {
 	p := txRunParams{}
 	txRunParamsInit(unsafe.Pointer(&p))
 	p.timestamps = txTimestampsNone
+	p.pnc, p.itn = t.pnc, t.itn
 	if len(t.lang) > 0 {
 		p.language = &t.lang[0]
 	}
