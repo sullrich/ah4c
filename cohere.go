@@ -116,23 +116,23 @@ var cohereQuirks = modelQuirks{
 	// reconsider, and the streaming models do not use it at all.
 	KVType: txKVF32,
 
-	// Punctuation and capitalization asked for outright rather than left to the
-	// family's default. The engine takes it per call, the model supports it,
-	// and captions want it: this is the model whose whole case is that what it
-	// writes reads like a broadcast caption track.
-	PNC: txPNCOn,
-
-	// And inverse text normalization, which is the one in this pair worth
-	// having found. It turns spoken numbers, dates and currencies into the
-	// written form — nine ninety nine into $9.99, twenty twenty six into 2026,
-	// a phone number into digits — and it was never switched on because it was
-	// never read about.
+	// Punctuation and inverse text normalization asked for, and this model does
+	// not take either.
 	//
-	// Television is made of those. A commercial is prices and dates and numbers
-	// to call, and a caption that spells them out in words is both harder to
-	// read at a distance and further from what a broadcast track does. It costs
-	// nothing at inference: the engine applies it to the text after the words
-	// are chosen, so no accuracy is traded for it and no time either.
+	// Both are documented as per-call toggles, and inverse text normalization
+	// is the one that would matter here: it turns spoken numbers, dates and
+	// currencies into their written form, and television is made of prices,
+	// years and numbers to call. It was worth asking for.
+	//
+	// The engine's answer is that cohere_asr exposes no runtime control over
+	// either, and its output already carries punctuation. So these are kept as
+	// the intent rather than removed — a later build of this family may expose
+	// them, and then it costs nothing to have said so — but they are now put
+	// through the capability probe the header names, which asks the loaded
+	// weights and drops anything they will not take. Without that the engine
+	// warned per call: two lines of log for every phrase of every stream, for
+	// ever.
+	PNC: txPNCOn,
 	ITN: txITNOn,
 
 	// As many recognizers as the page asks for, up to eight.

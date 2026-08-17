@@ -4247,6 +4247,12 @@ func cleanRecognized(text string) string {
 const (
 	// Backends, from transcribe.h. The processor is asked for by name rather
 	// than left to AUTO so that choosing it on the page actually means it.
+	// Capability probes, from transcribe.h. A model that does not expose a
+	// toggle must not be asked to change it: the engine warns and carries on
+	// with its default, once per call, for ever.
+	txFeaturePNC = 4
+	txFeatureITN = 5
+
 	// Punctuation and capitalization, and inverse text normalization — turning
 	// spoken numbers, dates and currencies into their written form. Both from
 	// transcribe.h, both per call, both left at the family's own default
@@ -4388,6 +4394,7 @@ var (
 	txSetAbortCallback func(session uintptr, cb uintptr, userData unsafe.Pointer)
 	txBackendAvailable func(kind int32) bool
 	// Returns the backend's name — "cpu", "vulkan", "cuda" — not an enum.
+	txModelSupports     func(model uintptr, feature int32) bool
 	txModelBackend      func(model uintptr) string
 	txRunBatch          func(session uintptr, pcm, nSamples unsafe.Pointer, n int32, params unsafe.Pointer) int32
 	txBatchNResults     func(session uintptr) int32
@@ -4485,6 +4492,7 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txSetAbortCallback, handle, "transcribe_set_abort_callback")
 		purego.RegisterLibFunc(&txLogSet, handle, "transcribe_log_set")
 		purego.RegisterLibFunc(&txBackendAvailable, handle, "transcribe_backend_available")
+		purego.RegisterLibFunc(&txModelSupports, handle, "transcribe_model_supports")
 		purego.RegisterLibFunc(&txModelBackend, handle, "transcribe_model_backend")
 		purego.RegisterLibFunc(&txRunBatch, handle, "transcribe_run_batch")
 		purego.RegisterLibFunc(&txBatchNResults, handle, "transcribe_batch_n_results")
@@ -5109,6 +5117,8 @@ func (svc *txBatchService) makeWorker(alive func() bool) (*txWorker, error) {
 	}
 	sp.nThreads = int32(threads)
 	sp.kvType = svc.kvType
+	// Asked of the weights now they are loaded, once, rather than per call.
+	svc.pnc, svc.itn = supportedToggles(shared.handle, quirksFor(mustFindModel(currentCaptionConfig().Model)))
 	// The decoder window stays at the model's own maximum. The engine's header
 	// warns that for families where audio tokens share the decoder window,
 	// capping it constrains the run — and capping it was another unmeasured
@@ -5154,8 +5164,6 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		path:     path,
 		backend:  backend,
 		kvType:   quirksFor(mustFindModel(cfg.Model)).KVType,
-		pnc:      quirksFor(mustFindModel(cfg.Model)).PNC,
-		itn:      quirksFor(mustFindModel(cfg.Model)).ITN,
 		workers:  captionWorkers(cfg, mustFindModel(cfg.Model)),
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
@@ -5950,9 +5958,9 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		}
 	}
 
-	q := quirksFor(m)
+	pnc, itn := supportedToggles(shared.handle, quirksFor(m))
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: q.PNC, itn: q.ITN}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: pnc, itn: itn}
 	if withWatchdog {
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
@@ -6960,6 +6968,31 @@ func plural(n int64, one, many string) string {
 		return fmt.Sprintf("%d %s", n, one)
 	}
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// supportedToggles narrows what a model was asked for to what it will actually
+// take, by asking it.
+//
+// The engine's rule for an unsupported toggle is to warn and carry on with its
+// own default, which sounds harmless and is not: it warns per call, so a model
+// that does not expose punctuation control produced two lines of log for every
+// phrase of every stream, for ever. The header names the pre-check in the same
+// sentence as the warning, and this is it.
+//
+// Asked and not assumed, because which families expose which toggle is not
+// written down anywhere and changes with the engine. A model that gains the
+// control later gets it without anybody editing a table.
+func supportedToggles(model uintptr, q modelQuirks) (pnc, itn int32) {
+	if txModelSupports == nil {
+		return txPNCDefault, txITNDefault
+	}
+	if q.PNC != txPNCDefault && txModelSupports(model, txFeaturePNC) {
+		pnc = q.PNC
+	}
+	if q.ITN != txITNDefault && txModelSupports(model, txFeatureITN) {
+		itn = q.ITN
+	}
+	return pnc, itn
 }
 
 // heldBackAsNoise decides whether a phrase is a stretch of room tone rather
