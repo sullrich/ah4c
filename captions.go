@@ -449,31 +449,7 @@ type captionModel struct {
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
-	{
-		Key:  "cohere-transcribe",
-		Name: "Cohere Transcribe 03-2026",
-		Role: "Best for one to three streams on CPU, or any number on a GPU",
-		Desc: "The most accurate open speech model there is, and the top of the public leaderboard. It reads a phrase at a time and what it writes reads like the closed captions on a broadcast channel. One copy is shared by every tuner, and the delay setting below decides how closely it follows the picture.",
-		// It reads a whole phrase and then writes it, so the delay setting
-		// governs how far behind it runs; the batch service amortizes its
-		// per-call cost across every tuner.
-		Latency:     "Two to four seconds behind the picture, like live broadcast captioning",
-		Accuracy:    "Best available",
-		Benchmark:   "1.3% of words come out wrong",
-		Hardware:    "One to three streams on the processor is fine; anything more, use a GPU — integrated graphics are plenty. Guidance, not a gate: the log will tell you honestly whether it keeps up.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/cohere-transcribe-03-2026-gguf",
-		// Q4_K_M rather than Q5_K_M, deliberately: they measure the same on
-		// accuracy (1.27% vs 1.26% word error), but Q4_K_M is a quant the
-		// engine's author benchmarks on GPU — eight times real time on an
-		// integrated-graphics machine of the same class where Q5_K_M, never
-		// benchmarked there, measured a third of that. GPU shader quality is
-		// per-quant, and the certified path is the one worth shipping.
-		File:   "cohere-transcribe-03-2026-Q4_K_M.gguf",
-		SizeMB: 1550,
-		Punctuation: true,
-		Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
-	},
+	cohereTranscribe,
 	{
 		Key:         "moonshine-tiny",
 		Name:        "Moonshine Streaming Tiny",
@@ -3976,66 +3952,6 @@ func quirksFor(m captionModel) modelQuirks {
 		return cohereQuirks
 	}
 	return modelDefaults
-}
-
-// ---------------------------------------------------------------------------
-// Cohere Transcribe 03-2026
-// ---------------------------------------------------------------------------
-
-// Three things, and the model's own card asks for two of them.
-//
-// Delete this block and its entry in quirksFor and nothing else has to change:
-// the recognizer, the caption encoders, the injector and the tune gate have no
-// idea which model they are serving.
-var cohereQuirks = modelQuirks{
-	// Four seconds. Three was tried and the accuracy went with it, worst over
-	// advertisements — the thinnest speech on television, and so the least
-	// able to spare a second of context. The card points the same way: it
-	// gives no minimum duration and its only length guidance is about long
-	// audio, thirty-five second splits and chunks of twenty to sixty. This is
-	// a model built to be handed plenty at once.
-	PhraseWindow: 4.0,
-
-	// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The
-	// model thus benefits from prepending a noise gate or VAD in order to
-	// prevent low-volume, floor noise from turning into hallucinations." Its
-	// words, and the reason the gate exists. There is nothing on the engine's
-	// side to use instead: its run parameters carry a task, a language,
-	// punctuation and inverse text normalisation, and no threshold of any kind.
-	NoiseGate: true,
-
-	// And for what gets past the gate, because applause and a music bed vary
-	// enough to look like speech.
-	Suppress: cohereSuppresses,
-}
-
-// cohereSuppresses reports a phrase that is this model answering a question
-// nobody asked.
-//
-// Two kinds. The stock phrases it reaches for when handed silence, which come
-// from the hours of video it was trained on whose closing seconds are somebody
-// thanking an audience. And the sound it names when handed music, which comes
-// from the same place: captioned video writes a stretch of music in brackets,
-// so a stretch of music is what it writes.
-//
-// Both are matched against the whole phrase and never part of one. Somebody
-// saying thank you mid-sentence keeps it, and a real sentence containing an
-// aside in brackets keeps the aside. What is being caught is a caption that is
-// entirely a stage direction, not a caption with one in it.
-func cohereSuppresses(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if isSoundEventTag(t) {
-		return true
-	}
-	t = strings.Trim(t, " .,!?-—’'\"")
-	return cohereStockPhrases[t] || cohereStockPhrases[t+"."]
-}
-
-var cohereStockPhrases = map[string]bool{
-	"thank you": true, "thanks": true, "thank you.": true,
-	"thanks for watching": true, "thank you for watching": true,
-	"you": true, "bye": true, "bye.": true, "okay": true,
-	"please subscribe": true, "subtitles by the amara.org community": true,
 }
 
 // isSoundEventTag reports whether a phrase is a model describing a noise
