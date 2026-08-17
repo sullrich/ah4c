@@ -1785,7 +1785,29 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
-	playbackTimeout = 40 * time.Second
+	// Confirmation is bimodal, so a long timeout buys nothing.
+	//
+	// Every confirmation that has succeeded in these logs arrived in about two
+	// and a half seconds — 2.362s, 2.45s. The ones that fail do not arrive
+	// late; they never arrive at all. The app was already playing when the
+	// baseline was taken, because prebmitune's readiness gate waits for
+	// PlaybackState{state=3} before returning, so switching channels reuses the
+	// audio player and no new id is ever created for heldNewID to find.
+	// Waiting longer cannot turn one of those into a success. It only delays
+	// the motion fallback that would have saved the tune.
+	//
+	// The whole budget belongs to the DVR, which abandons a tune at thirty
+	// seconds. The scripts take two to three and a half, this waits, and the
+	// keyframe gate may take eight more after it. At forty that is fifty-one
+	// seconds, and the recording is lost before anything else can go wrong —
+	// which is what three tunes died of tonight, at 50.4s, 51.6s and 52.9s.
+	//
+	// This was twenty for exactly that reason and was put back to forty six
+	// minutes later. Twenty was not low enough either: twenty plus eight plus
+	// the scripts is thirty-one, still over. Ten is four times the longest
+	// confirmation that has ever worked here and leaves the fallback nine
+	// seconds of margin under the DVR's limit.
+	playbackTimeout = 10 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
 	riseFactor      = 4
