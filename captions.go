@@ -450,77 +450,8 @@ type captionModel struct {
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
 	cohereTranscribe,
-	{
-		Key:  "nemotron-streaming",
-		Name: "Nemotron 3.5 ASR Streaming 0.6B",
-		Role: "Best when the captions have to keep up with the picture",
-		Desc: "Transcribes as the audio arrives instead of waiting for a phrase to finish, so the words appear about a second behind the speaker rather than four. Writes punctuation and sentence case, and does it in twenty-five languages. The one to pick if the delay is what bothers you.",
-		// Streaming is a different shape of model, not a faster one: it keeps a
-		// running encoder state and commits words as they settle, so latency is
-		// a property of the architecture rather than a setting. The phrase
-		// window does not apply to it.
-		Latency:   "About a second behind the picture",
-		Accuracy:  "Very good, short of the phrase model",
-		Benchmark: "Between the other two; not measured here",
-		// The memory is the thing to know about this one, and it is not the
-		// download.
-		//
-		// A phrase model is loaded once and shared: ten tuners captioning at
-		// once put one copy of Cohere in memory between them. A streaming model
-		// cannot be shared, because the running state that makes it streaming
-		// belongs to one stream — so every captioned tuner loads its own copy,
-		// and the memory is the size of the model times the number of tuners
-		// being captioned. Three streams is comfortable on most machines. Ten
-		// is seven gigabytes and worth deciding on deliberately.
-		Hardware:    "About 500 MB of memory for every tuner being captioned, because a streaming model cannot be shared between them. Comfortable for a few streams; worth adding up before running many.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
-		File:        "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
-		SizeMB:      496,
-		Streaming:   true,
-		Punctuation: true,
-		// Q4_K_M, and the reason is the graphics chip rather than the model.
-		//
-		// Accuracy barely moves across this model's quantizations — its own
-		// table runs from 7.97% at full precision to 8.49% at Q4_K_M, half a
-		// point across the whole range — so the choice is free on that side and
-		// is made on the two that matter. Memory, because this one is loaded
-		// per stream and four hundred and ninety-six megabytes against seven
-		// hundred and fifty is two and a half gigabytes across ten tuners. And
-		// the GPU, where quantization is not free at all: the shaders differ
-		// per quant, which is how Cohere came to ship Q4_K_M after its author
-		// measured it at eight times real time on integrated graphics where
-		// Q5_K_M managed a third of that.
-		//
-		// Nobody has published that measurement for this model — its table is
-		// accuracy only, and its throughput figures are from an H100, which
-		// says nothing about a UHD 770. So this is the same quant on the same
-		// engine on the same class of chip, which is the nearest thing to
-		// evidence available, and it is worth checking rather than trusting:
-		// the log prints the real-time factor every twenty-five dispatches.
-		Languages: []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr",
-			"hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"},
-	},
-	{
-		Key:         "moonshine-tiny",
-		Name:        "Moonshine Streaming Tiny",
-		Role:        "Best for small systems",
-		Desc:        "A forty-eight megabyte model that streams live and runs comfortably on a Celeron, a low-power NAS or a Raspberry Pi class board. English only. Less accurate than the big model, and the only one that fits hardware this small.",
-		Latency:     "Under a second",
-		Accuracy:    "Decent",
-		Benchmark:   "4.5% of words come out wrong",
-		Hardware:    "Runs on almost anything.",
-		Runtime:     rtTranscribe,
-		Repo:        "handy-computer/moonshine-streaming-tiny-gguf",
-		File:        "moonshine-streaming-tiny-Q8_0.gguf",
-		SizeMB:      48,
-		Streaming:   true,
-		Punctuation: true,
-		// English is this family's only language and the engine's default;
-		// no parameter is passed. The list is for the page only.
-		NoLanguage: true,
-		Languages:  []string{"en"},
-	},
+	nemotronStreaming,
+	moonshineTiny,
 }
 
 // captionLanguageNames turns the catalog's ISO codes into something readable in
@@ -532,6 +463,22 @@ var captionLanguageNames = map[string]string{
 	"lt": "Lithuanian", "lv": "Latvian", "mt": "Maltese", "nl": "Dutch", "pl": "Polish",
 	"pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak", "sl": "Slovenian",
 	"sv": "Swedish", "uk": "Ukrainian",
+
+	// Locales, for the families that will not take a bare code. Named with
+	// the country only where more than one is offered, so a list of thirty
+	// does not read as thirty variations on the same word.
+	"en-US": "English", "en-GB": "English (UK)",
+	"es-ES": "Spanish", "es-US": "Spanish (Americas)",
+	"fr-FR": "French", "fr-CA": "French (Canada)",
+	"pt-BR": "Portuguese (Brazil)", "pt-PT": "Portuguese",
+	"de-DE": "German", "it-IT": "Italian", "nl-NL": "Dutch",
+	"tr-TR": "Turkish", "ru-RU": "Russian", "ar-AR": "Arabic",
+	"hi-IN": "Hindi", "ja-JP": "Japanese", "ko-KR": "Korean",
+	"vi-VN": "Vietnamese", "uk-UA": "Ukrainian", "pl-PL": "Polish",
+	"sv-SE": "Swedish", "cs-CZ": "Czech", "nb-NO": "Norwegian",
+	"da-DK": "Danish", "bg-BG": "Bulgarian", "fi-FI": "Finnish",
+	"hr-HR": "Croatian", "sk-SK": "Slovak", "zh-CN": "Chinese",
+	"hu-HU": "Hungarian", "ro-RO": "Romanian", "et-EE": "Estonian",
 }
 
 // modelLanguage maps the configured language onto one this model accepts. The
@@ -3995,23 +3942,30 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 }
 
 // ---------------------------------------------------------------------------
-// What a model needs from us
+// Where the models attach
 // ---------------------------------------------------------------------------
 
-// Everything on this page is a concession to one particular speech model, and
-// it is gathered here so that swapping the model means reading one section
-// rather than hunting through the file.
+// Every model has knobs, and every model's knobs live in that model's own file.
+// This is the joint they meet at, and it is deliberately the only one.
 //
-// The pattern this replaces was bolting each fix on where it was noticed: a
-// phrase length inside the audio splitter, a noise gate inside the voice
-// detector, a suppression list inside the result handler. Each was correct and
-// none of them said which model it was for, so the day this model is replaced
-// somebody has to work out, three places apart, which of those rules were about
-// speech recognition in general and which were about this recognizer in
-// particular. The answer is: all of the ones below, and none of the ones
-// anywhere else.
+// captions.go is the common part: the audio splitter, the voice detector, the
+// recognizer, both caption encoders, the injector, the tune gate. None of it
+// knows which model it is serving. cohere.go, nemotron.go and moonshine.go each
+// hold one model — its catalog entry, and what it asks of the code around it —
+// and they are reachable from here and nowhere else.
 //
-// A model with no entry gets modelDefaults, which asks for nothing.
+// The two references that tie a model in are its line in captionModelCatalog
+// and its case in quirksFor below. Delete a model's file and the compiler names
+// both, by line number, which is how this stays true without anybody
+// remembering to keep it true.
+//
+// What this replaces was bolting each fix on where it was noticed: a phrase
+// length inside the audio splitter, a noise gate inside the voice detector, a
+// suppression list inside the result handler. Every one of them correct, and
+// none of them saying which model it was for.
+//
+// A model with no opinions gets modelDefaults, which asks for nothing. That is
+// where a new one starts; it earns an entry by misbehaving.
 
 // modelQuirks is what one model asks of the code around it.
 type modelQuirks struct {
@@ -4047,8 +4001,12 @@ func mustFindModel(key string) captionModel {
 // quirksFor is the single place a model's name is turned into its handling.
 func quirksFor(m captionModel) modelQuirks {
 	switch m.Key {
-	case "cohere-transcribe":
+	case cohereTranscribe.Key:
 		return cohereQuirks
+	case nemotronStreaming.Key:
+		return nemotronQuirks
+	case moonshineTiny.Key:
+		return moonshineQuirks
 	}
 	return modelDefaults
 }
