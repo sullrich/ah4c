@@ -5412,11 +5412,54 @@ func (w *txWorker) confidence(batchIndex int, batched bool) (float64, int, bool)
 // the hallucination this is aimed at arrives over music and commercials, and if
 // those phrases do not score below ordinary speech on this audio then there is
 // nothing here and the line comes out again along with the idea.
-func noteConfidence(mean float64, counted int, ok bool, text string) {
-	if !ok || text == "" {
+func noteConfidence(mean float64, counted int, ok bool, pcm []float32, text string) {
+	if text == "" {
 		return
 	}
-	logger("[CC] confidence %.3f over %d tokens: %q", mean, counted, text)
+	rms, peak, crest := phraseLevel(pcm)
+	conf := "none"
+	if ok {
+		conf = fmt.Sprintf("%.3f over %d tokens", mean, counted)
+	}
+	logger("[CC] phrase: confidence %s, rms %.4f, peak %.4f, crest %.2f, %.1fs: %q",
+		conf, rms, peak, crest, float64(len(pcm))/asrSampleRate, text)
+}
+
+// phraseLevel measures a phrase the way the gate measures one, after the fact.
+//
+// Reported beside the text and beside the engine's confidence so that a phrase
+// that should never have been transcribed can be told apart from one that
+// should, on evidence rather than on which explanation sounds better. A
+// commercial with a quiet vocal bed under it went through and came out as
+// lyrics: that phrase and the dialogue either side of it differ in some number,
+// and this prints the candidates rather than guessing which.
+//
+// Level matters because the bar this gate uses is not absolute. It follows the
+// noise floor, and it is pulled down further when the recent peak is low — so a
+// uniformly quiet passage lowers the bar until whatever is in it counts as
+// speech. That is deliberate for a distant or quiet speaker and it is exactly
+// how a quiet music bed becomes a caption. Which of the two is happening is a
+// question about numbers on real audio.
+func phraseLevel(pcm []float32) (rms, peak, crest float64) {
+	if len(pcm) == 0 {
+		return 0, 0, 0
+	}
+	var acc float64
+	for _, v := range pcm {
+		f := float64(v)
+		acc += f * f
+		if f < 0 {
+			f = -f
+		}
+		if f > peak {
+			peak = f
+		}
+	}
+	rms = math.Sqrt(acc / float64(len(pcm)))
+	if rms > 0 {
+		crest = peak / rms
+	}
+	return rms, peak, crest
 }
 
 // txWorker is one copy of the weights and the session that runs it.
@@ -5722,7 +5765,7 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		// The direct call fills the single-result accessors, not the batch ones.
 		text := cleanRecognized(txFullText(w.session))
 		mean, counted, have := w.confidence(0, false)
-		noteConfidence(mean, counted, have, text)
+		noteConfidence(mean, counted, have, batch[0].pcm, text)
 		batch[0].reply <- txBatchReply{text: text}
 	} else {
 		nres := int(txBatchNResults(w.session))
@@ -5737,7 +5780,7 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 			}
 			text := cleanRecognized(txBatchFullText(w.session, int32(i)))
 			mean, counted, have := w.confidence(i, true)
-			noteConfidence(mean, counted, have, text)
+			noteConfidence(mean, counted, have, r.pcm, text)
 			r.reply <- txBatchReply{text: text}
 		}
 	}
