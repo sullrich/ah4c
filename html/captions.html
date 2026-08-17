@@ -346,7 +346,7 @@ function render() {
                     <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
-                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from this image's own Debian archives, kept in the bind mount so a rebuild does not have to fetch them again.</span>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; fetched from Debian backports, with the same suite's snapshot archive as a fallback, and kept in the bind mount so a rebuild does not have to fetch them again. The image's own stable archive is deliberately not used: its driver predates this hardware and runs several times slower while every check passes.</span>
             </div>
             <div class="model-actions">
                 <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
@@ -354,28 +354,15 @@ function render() {
         </div>`).join('');
 
     const di = state.driverInstall || {};
+    const diPct = di.total > 0 ? Math.round((di.done / di.total) * 100) : 0;
     document.getElementById('drvState').innerHTML =
         (di.active || di.err || di.log)
-            ? `<p class="small muted" style="margin:0.7rem 0 0;">${di.active ? 'Installing the driver…' : (di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.')}</p>` +
-              (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
+            ? (di.active
+                ? `<p class="small muted" style="margin:0.7rem 0 0.3rem;">${esc(di.step || 'Setting up the driver')}${di.total > 0 ? ` &mdash; ${di.done} of ${di.total}` : '&hellip;'}</p>
+                   <div class="bar"><span style="width:${diPct}%"></span></div>`
+                : `<p class="small muted" style="margin:0.7rem 0 0;">${di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.'}</p>`)
+              + (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
             : '';
-
-    // Both figures are measured rather than guessed, and the wait is the one
-    // that answers "will it keep up". The real-time factor beside it is seconds
-    // of audio per second of compute — how fast the hardware is, not how many
-    // streams it carries. This once claimed it was the second thing, and four
-    // streams measuring the same factor as one is what settled that.
-    const rec = state.recognizer || {};
-    const lag = rec.lagSec > 0 ? rec.lagSec : 0;
-    document.getElementById('recogStat').innerHTML = rec.measured
-        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)},
-           ${rec.streams === 1 ? 'with one stream captioned' : `with ${rec.streams} streams captioned`}.
-           Phrases wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
-           <span class="muted">The wait is the one that matters: under a second is keeping up, and climbing is not.
-           Both are measured here, not estimated${rec.ageSec > 90 ? `, ${Math.round(rec.ageSec / 60)} min ago` : ''}.</span>`
-        : (cfg.enabled
-            ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
-            : '');
 
     const engineKey = model ? model.engine : 'transcribe';
     const engineName = model ? model.engineName : '';
