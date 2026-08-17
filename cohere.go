@@ -116,7 +116,7 @@ var cohereQuirks = modelQuirks{
 	// reconsider, and the streaming models do not use it at all.
 	KVType: txKVF32,
 
-	// Up to three recognizers, if the page asks for them.
+	// As many recognizers as the page asks for, up to eight.
 	//
 	// This model saturates one. Measured on an integrated graphics chip with
 	// five streams captioning: four phrases to a dispatch, two and a fifth
@@ -126,11 +126,19 @@ var cohereQuirks = modelQuirks{
 	// batching relieves the decode and not the encode, and the only way to have
 	// two encoder passes in flight is to have two copies of the weights.
 	//
-	// Three is a ceiling rather than a recommendation. Each one costs another
-	// full copy — two and a half gigabytes for the eight bit weights — and the
-	// graphics gate lets two decodes through at a time, so a third only helps
-	// where the processor is doing the arithmetic.
-	MaxWorkers: 3,
+	// Eight is a ceiling rather than a recommendation, and it is set by what a
+	// machine can hold rather than by what is likely to help: each recognizer
+	// is another full copy of the weights, two and a half gigabytes at eight
+	// bits, so eight of them is twenty gigabytes of it. Whoever is running this
+	// knows their own machine better than a number in a file does, so the page
+	// offers every one of them and says what each costs.
+	//
+	// What is worth knowing rather than enforcing: the graphics gate admits two
+	// transcriptions at once and holds the rest, so past two on a GPU the extra
+	// copies mostly wait. On the processor they do not — threads are shared out
+	// there and it really does run things at the same time — which is where a
+	// larger number earns itself.
+	MaxWorkers: 8,
 }
 
 // cohereSuppresses reports a phrase that is this model answering a question
