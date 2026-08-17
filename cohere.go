@@ -202,13 +202,17 @@ func cohereSuppresses(text string) bool {
 	// writes "I’m" and a map key spelled "i'm" never matches it — every entry
 	// here with an apostrophe in it was dead on arrival until this line existed.
 	t = strings.ReplaceAll(t, "’", "'")
-	return cohereStockPhrases[t] || cohereStockPhrases[t+"."]
+	// One lookup. There was a second against t+"." as well, which could never
+	// find anything the first had not: the trim above strips the period before
+	// either of them runs, so a dotted key is only ever reachable by putting the
+	// dot back on. The two dotted entries it existed for had undotted twins.
+	return cohereStockPhrases[t]
 }
 
 var cohereStockPhrases = map[string]bool{
-	"thank you": true, "thanks": true, "thank you.": true,
+	"thank you": true, "thanks": true,
 	"thanks for watching": true, "thank you for watching": true,
-	"you": true, "bye": true, "bye.": true, "okay": true,
+	"you": true, "bye": true, "okay": true,
 	"please subscribe": true, "subtitles by the amara.org community": true,
 	// The apology. Reported against this model on this machine, 2026-08-17.
 	// "i am sorry", "i'm so sorry" and a bare "sorry" were in here briefly and
