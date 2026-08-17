@@ -2978,11 +2978,19 @@ const cc608NominalRate = 29.97
 // channel's rate rather than the model's, which is why it looked the same
 // whichever model was running.
 //
-// Broadcast captioning runs at roughly a hundred and fifty to a hundred and
-// eighty words a minute because that is how fast people talk. Fifteen
-// characters a second is the middle of that with spaces counted, and pacing to
-// it makes the display fill at the speed the words were said — which is what
-// makes real roll-up readable rather than any dwell.
+// Fifteen is where the published guidance overlaps. The BBC puts subtitle
+// speed at 160 to 180 words a minute, the DCMP's captioning key at 130 to 160,
+// and the industry figure for characters a second is 20 at the most with 12 to
+// 18 comfortable. Fifteen characters a second is about 155 words a minute, which
+// is inside both word ranges and in the middle of the character one.
+//
+//	https://www.clevercast.com/bbc-subtitling-guidelines/
+//	https://dcmp.org/learn/601-captioning-key---presentation-rate
+//
+// The reason it works is simpler than the standards: it is how fast people
+// speak, which is the rate the words arrive at. Pacing the display to it makes
+// the screen fill at the speed the words were said, which is what makes real
+// roll-up readable — the dwell was never doing that job.
 //
 // It cannot fall behind on its own: the words arrive at speaking speed, so a
 // pace set to speaking speed matches them over any window longer than one
