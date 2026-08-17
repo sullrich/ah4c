@@ -177,26 +177,28 @@ One copy is all Cohere loads, however many tuners are on it. If it cannot keep p
 streams feeding it, captions thin themselves to stay current and the log says so — memory
 is never spent to cover for a slow setting on its own.
 
-**How many tuners one recognizer carries** is measured on your machine, because there is no
-number that is true of everybody's. It is shown on the Closed Captions page, under the
-switch, as soon as there is anything to measure:
+**Whether the recognizer is keeping up** is measured and shown on the Closed Captions page,
+under the switch:
 
-> Transcribing at **4.1× real time** on Vulkan — keeps pace with about **4 captioned
-> tuners**.
+> Transcribing at **4.6× real time** on Vulkan, with 4 streams captioned. Phrases wait
+> **0.31s** to be transcribed.
 
-The rule behind it is simple enough to check by eye: a captioned stream makes a second of
-audio for every second it runs, so a recognizer working at *N* times real time keeps pace
-with about *N* streams, and the next one is where the queue stops draining as fast as it
-fills. The same figure goes to the log every hundred dispatches, for a record over time:
+The wait is the figure that answers the question. It is the gap between a phrase being cut
+out of the audio and being transcribed: under a second is keeping up, and climbing is not.
+
+The real-time factor beside it is seconds of audio transcribed per second of compute — a
+property of the model, the quantization, the backend and the machine. It is **not** a number
+of streams, and this used to claim it was. Two things are wrong with that: only speech is
+ever queued, so a captioned stream does not submit a second of audio for every second it
+runs, and the factor does not move with the stream count anyway — four streams measure the
+same 4.6× as one. Read the wait for capacity and the factor for how fast the hardware is.
+
+The same figures go to the log every hundred dispatches, for a record over time:
 
 ```
-[CC] recognizer: 2.9 phrases per dispatch, 2.21s compute for 9.1s of audio per dispatch,
-     4.1x real time — about 4 streams' worth — over the last 100 dispatches
+[CC] recognizer: 4.6x real time, 1.4 phrases per dispatch, 0.61s compute for 2.8s of audio,
+     phrases waited 0.31s, 0 in the queue, 4 streams captioned — over the last 100 dispatches
 ```
-
-Read yours rather than that one. It moves with the model, the quantization, the backend and
-the hardware — the same model on the same machine ranges from four to seven times real time
-across quantizations alone — so it is worth a look before deciding anything below.
 
 **One recognizer, and there is no setting for it.** There was one — up to eight copies of
 the weights, chosen on the page — and it is gone because it was measured and it made
