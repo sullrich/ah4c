@@ -142,7 +142,23 @@
                 GPU choices appear only when this container can load them (for Vulkan: a driver and
                 <code>/dev/dri</code>). The log names the device actually doing the work.
             </p>
-            <div class="card-title" style="margin-top:1rem;">Model</div>
+            <div class="card-title" style="margin-top:1rem;">Model <span class="hint">the choice is really about delay</span></div>
+            <p class="small muted" style="margin:0 0 0.6rem;">
+                They differ in shape, not in quality. <b>Cohere</b> waits for each sentence to
+                finish and then transcribes the whole thing, so it has the most to work with and
+                is the most accurate — and can never be quicker than the sentence is long.
+                <b>Nemotron</b> and <b>Moonshine</b> type as they hear: about a second behind,
+                and blind to whatever is said next, which is where the accuracy goes. No setting
+                closes that gap in either direction.
+            </p>
+            <p class="small muted" style="margin:0 0 0.6rem;">
+                Between the two streaming ones it is size. Nemotron is the larger by a long way
+                and is the one to pick unless the machine cannot hold it; Moonshine is small
+                enough for a Raspberry Pi and understands English only. Memory runs opposite to
+                what you would expect: the sentence model loads one copy and shares it with every
+                tuner, while each streaming tuner loads a copy of its own — so the accurate
+                choice gets cheaper the more tuners you caption, and the quick ones get dearer.
+            </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
             <div id="dl" class="hidden">
