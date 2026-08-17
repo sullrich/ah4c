@@ -189,14 +189,32 @@ func engineUsable(v engineVariant) bool {
 	if v.Needs == "" {
 		return true
 	}
+	// The lock covers the answer, never the asking.
+	//
+	// This used to hold the mutex across the dlopen, and that put a load of the
+	// whole Vulkan or CUDA dependency chain — every symbol resolved eagerly,
+	// hundreds of megabytes off a cold disk — inside a lock the tune path takes.
+	// maybeWrapCaptions asks this question on every captioned tune, and it asks
+	// it while holding the global tuner lock, so one background probe could
+	// stall the tune that started underneath it and every tune queued behind
+	// that one. The cache was added to stop the page making thousands of these
+	// calls an hour; it did not stop the first one blocking a recording.
+	//
+	// So the answer is read under the lock, the library is opened outside it,
+	// and the result is stored under it again. Two probes racing may both open
+	// the same library, which costs nothing: dlopen is reference counted and
+	// idempotent, and the second gets the handle the first already mapped.
 	usableLock.Lock()
-	defer usableLock.Unlock()
-	if ok, seen := usableCache[v.Needs]; seen {
+	ok, seen := usableCache[v.Needs]
+	usableLock.Unlock()
+	if seen {
 		return ok
 	}
 	h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	ok := err == nil && h != 0
+	ok = err == nil && h != 0
+	usableLock.Lock()
 	usableCache[v.Needs] = ok
+	usableLock.Unlock()
 	return ok
 }
 
