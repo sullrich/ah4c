@@ -130,6 +130,7 @@
                 Transcribed on this machine and carried in the stream as ordinary CC1 captions —
                 no sidecar files, no re-encoding, no change to tune speed.
             </p>
+            <p class="small muted" id="recogStat" style="margin:0.4rem 0 0;"></p>
         </div>
 
         <div class="card">
@@ -305,6 +306,17 @@ function render() {
             ? `<p class="small muted" style="margin:0.7rem 0 0;">${di.active ? 'Installing the driver…' : (di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.')}</p>` +
               (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
             : '';
+
+    // Transcription speed, measured here rather than guessed. A captioned
+    // stream makes a second of audio every second it runs, so a recognizer at
+    // N times real time keeps pace with about N of them — which is the whole
+    // of what the number is for. It used to be printed in the log every half
+    // minute; it lives here instead, where it is looked at when it is wanted.
+    const rec = state.recognizer || {};
+    document.getElementById('recogStat').innerHTML = !rec.measured ? '' :
+        `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)} — keeps pace with about
+         <b>${rec.streams} captioned ${rec.streams === 1 ? 'tuner' : 'tuners'}</b>.
+         <span class="muted">Measured over the last 100 phrases handled${rec.ageSec > 90 ? `, ${Math.round(rec.ageSec / 60)} min ago` : ''}.</span>`;
 
     const engineKey = model ? model.engine : 'transcribe';
     const engineName = model ? model.engineName : '';

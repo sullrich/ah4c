@@ -177,16 +177,21 @@ One copy is all Cohere loads, however many tuners are on it. If it cannot keep p
 streams feeding it, captions thin themselves to stay current and the log says so — memory
 is never spent to cover for a slow setting on its own.
 
-**How many tuners one recognizer carries** is measured on your machine and printed in the
-log, because there is no number that is true of everybody's. The rule behind it is simple
-enough to check by eye: a captioned stream makes a second of audio for every second it
-runs, so a recognizer working at *N* times real time keeps pace with about *N* streams, and
-the next one is where the queue stops draining as fast as it fills. The recognizer line
-says the multiplier and the stream count it implies:
+**How many tuners one recognizer carries** is measured on your machine, because there is no
+number that is true of everybody's. It is shown on the Closed Captions page, under the
+switch, as soon as there is anything to measure:
+
+> Transcribing at **4.1× real time** on Vulkan — keeps pace with about **4 captioned
+> tuners**.
+
+The rule behind it is simple enough to check by eye: a captioned stream makes a second of
+audio for every second it runs, so a recognizer working at *N* times real time keeps pace
+with about *N* streams, and the next one is where the queue stops draining as fast as it
+fills. The same figure goes to the log every hundred dispatches, for a record over time:
 
 ```
 [CC] recognizer: 2.9 phrases per dispatch, 2.21s compute for 9.1s of audio per dispatch,
-     4.1x real time — about 4 streams' worth — over the last 25 dispatches
+     4.1x real time — about 4 streams' worth — over the last 100 dispatches
 ```
 
 Read yours rather than that one. It moves with the model, the quantization, the backend and
