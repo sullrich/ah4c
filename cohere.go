@@ -115,6 +115,22 @@ var cohereQuirks = modelQuirks{
 	// factor in the log falls somewhere it matters, this is the line to
 	// reconsider, and the streaming models do not use it at all.
 	KVType: txKVF32,
+
+	// Up to three recognizers, if the page asks for them.
+	//
+	// This model saturates one. Measured on an integrated graphics chip with
+	// five streams captioning: four phrases to a dispatch, two and a fifth
+	// seconds of compute for nine seconds of audio, and streams reporting seven
+	// and eight seconds behind with nothing dropped — a queue that no longer
+	// drains as fast as it fills. Its encoder runs serially across a batch, so
+	// batching relieves the decode and not the encode, and the only way to have
+	// two encoder passes in flight is to have two copies of the weights.
+	//
+	// Three is a ceiling rather than a recommendation. Each one costs another
+	// full copy — two and a half gigabytes for the eight bit weights — and the
+	// graphics gate lets two decodes through at a time, so a third only helps
+	// where the processor is doing the arithmetic.
+	MaxWorkers: 3,
 }
 
 // cohereSuppresses reports a phrase that is this model answering a question

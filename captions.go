@@ -547,6 +547,9 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
+	// Workers is how many recognizers share one phrase model, each with its own
+	// copy of the weights. Zero and one both mean one.
+	Workers int `json:"workers"`
 	// RollSpeed is how long a finished line is held before the display rolls
 	// it up, when there is nothing waiting to take its place. Taste, eyesight
 	// and the number of rows all bear on it, so it is asked rather than
@@ -4082,6 +4085,10 @@ type modelQuirks struct {
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
+	// MaxWorkers is how many recognizers may share the request queue for this
+	// model, each with its own copy of the weights. One unless a model has been
+	// measured to benefit from more; see the page setting.
+	MaxWorkers int
 	// KVType is the precision of the attention cache, from transcribe.h.
 	// Zero is the engine's own choice and is right for almost everything; a
 	// model asks for something else only when its accuracy has been measured
@@ -5017,7 +5024,9 @@ type txBatchService struct {
 	lang  []byte
 	onGPU bool
 	// kvType is the attention cache precision this model asked for.
-	kvType   int32
+	kvType int32
+	// workers is how many recognizers serve this queue.
+	workers  int
 	requests chan txBatchRequest
 	refs     int
 	closed   chan struct{}
@@ -5122,6 +5131,7 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		path:     path,
 		backend:  backend,
 		kvType:   quirksFor(mustFindModel(cfg.Model)).KVType,
+		workers:  captionWorkers(cfg, mustFindModel(cfg.Model)),
 		onGPU:    backend != txBackendCPU,
 		requests: make(chan txBatchRequest, 32),
 		refs:     1,
@@ -5145,6 +5155,25 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			return
 		}
 		go svc.run(w)
+		// The rest come up behind the first, so the service is usable the
+		// moment one recognizer is ready and the others join as they load.
+		//
+		// A second recognizer is a second copy of the weights and a second
+		// session on it, because the engine allows one compute in flight per
+		// copy — that is the rule the shared service exists to obey, and the
+		// only way past it is to have more than one thing to be in flight on.
+		// They read the same queue, so whichever is free takes the next batch.
+		for i := 1; i < svc.workers; i++ {
+			go func(n int) {
+				extra, err := svc.makeWorker(nil)
+				if err != nil {
+					logger("[CC] Recognizer %d could not be started: %v", n+1, err)
+					return
+				}
+				logger("[CC] Recognizer %d of %d is up", n+1, svc.workers)
+				svc.run(extra)
+			}(i)
+		}
 		// Every stream that wanted this may have timed out and moved on
 		// while the load ran. A live service nobody references would hold
 		// the weights until restart; reap it here, and a later stream simply
@@ -8393,6 +8422,34 @@ func captionComputeThreads() int {
 	}
 	if n < 2 {
 		n = 2
+	}
+	return n
+}
+
+// captionWorkers is how many recognizers serve one phrase model, from the page
+// setting, bounded by what the model says it can use and by what the machine
+// has to give.
+//
+// One is the default and is right until the recognizer saturates. The log says
+// when it has: the real-time factor stops improving and streams start reporting
+// that they are running behind while nothing is dropped, which is a queue that
+// no longer drains as fast as it fills. A second recognizer is the only way past
+// that, because the engine permits one compute in flight per loaded copy — so a
+// second copy is the cost, in full, every time.
+//
+// Bounded by the GPU gate as well, which lets two decodes at the accelerator at
+// once and holds the rest: recognizers past that number would queue on it rather
+// than run, having already paid for their weights.
+func captionWorkers(cfg captionConfig, m captionModel) int {
+	n := cfg.Workers
+	if n < 1 {
+		n = 1
+	}
+	if max := quirksFor(m).MaxWorkers; max > 0 && n > max {
+		n = max
+	}
+	if n > cap(gpuGate) && txBackend(currentEngineVariant()) != txBackendCPU {
+		n = cap(gpuGate)
 	}
 	return n
 }
