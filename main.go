@@ -2136,7 +2136,48 @@ func playbackBudget() time.Duration {
 	return playbackTimeout
 }
 
+var (
+	playbackMissLock sync.Mutex
+	playbackMisses   = map[string]int{}
+	playbackSkipped  = map[string]int{}
+)
+
+const playbackReprobe = 10
+
+func playbackSkip(tunerip string) (bool, int) {
+	playbackMissLock.Lock()
+	defer playbackMissLock.Unlock()
+	misses := playbackMisses[tunerip]
+	if misses == 0 {
+		return false, 0
+	}
+	playbackSkipped[tunerip]++
+	if playbackSkipped[tunerip] >= playbackReprobe {
+		playbackSkipped[tunerip] = 0
+		return false, misses
+	}
+	return true, misses
+}
+
+func playbackConfirmed(tunerip string) {
+	playbackMissLock.Lock()
+	delete(playbackMisses, tunerip)
+	delete(playbackSkipped, tunerip)
+	playbackMissLock.Unlock()
+}
+
+func playbackMissed(tunerip string) int {
+	playbackMissLock.Lock()
+	defer playbackMissLock.Unlock()
+	playbackMisses[tunerip]++
+	return playbackMisses[tunerip]
+}
+
 func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
+	if skip, misses := playbackSkip(tunerip); skip {
+		logger("[PLAYBACK] %s has not confirmed on its last %d tunes, gating on motion alone without waiting", tunerip, misses)
+		return
+	}
 	t0 := time.Now()
 	budget := playbackBudget()
 	deadline := t0.Add(budget)
@@ -2157,13 +2198,14 @@ func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{})
 		} else {
 			fails = 0
 			if heldNewID(base, audioPiids(string(out)), held) {
+				playbackConfirmed(tunerip)
 				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
 				return
 			}
 		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone", tunerip, budget)
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone (%d in a row)", tunerip, budget, playbackMissed(tunerip))
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
