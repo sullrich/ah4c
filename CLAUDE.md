@@ -74,6 +74,17 @@ Each of these cost a recording before it was written down.
    success, which is the hardest kind to see. Deferring and dropping look
    identical in a loop and are opposites in effect.
 
+10. **Guaranteed quiet beats proven quiet, and startup is the only guaranteed
+    quiet there is.** Everything above is refereeing a race between the driver
+    install and the tunes. `main` calls `restoreGPURuntime` before it binds
+    7654, and until that port is bound the DVR cannot ask for anything — it gets
+    connection refused, not a request nobody answers. There is no tune to
+    interrupt, so there is nothing to gate. Rules 1 through 9 are what to do when
+    the race cannot be removed; ask first whether it can be. If a piece of work
+    has to happen once per container and cannot be paused, in front of the
+    listener is where it belongs, bounded so a container that cannot do it still
+    comes up.
+
 ## Working here
 
 - **Do not change `main.go`.** Its diff against upstream is kept purely
