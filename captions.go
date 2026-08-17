@@ -1613,7 +1613,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if len(debs) == 0 {
 		return "", fmt.Errorf("no saved packages to install")
 	}
-	logger("[CC] Installing %d saved packages for %s", len(debs), g.Name)
+	logger("[CC] Installing %d saved packages for %s, one at a time so a tune can cut in", len(debs), g.Name)
 	// Whatever was true about these libraries stops being true here.
 	forgetEngineUsable()
 	forgetBrokenDrivers()
@@ -1623,9 +1623,45 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// container that loses power reinstalls them from there on the way back
 	// up. What it buys is nothing, and what it costs is an array full of
 	// synchronous writes beside a tuner trying to prove it is playing.
-	cmd := politeCommand("dpkg", append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)...)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-	out, err := cmd.CombinedOutput()
+	// One package at a time, with the gate re-checked between each.
+	//
+	// A gate can only promise the moment it is asked. Ten seconds of proven
+	// quiet said nothing about the thirty that followed, and a DVR starting
+	// several recordings at once is exactly the thing that arrives in the
+	// middle of them — which is what happened: the window was found, the
+	// install began, the tunes started a second later and one of them died.
+	//
+	// The rule already written down for this is that long work yields
+	// throughout rather than at the door. dpkg cannot be paused, so this was
+	// treated as work that could only be gated and not yielded. That was
+	// wrong: it cannot be paused, but it can be *divided*. Thirty-seven
+	// packages is thirty-seven jobs of a second or two, and between any two of
+	// them the machine is free. The exposure drops from the length of the
+	// whole install to the length of one package.
+	//
+	// Order does not matter because --force-depends installs regardless of what
+	// is not there yet; anything left unconfigured is configured by a later
+	// package or caught by the verification below.
+	var out []byte
+	err = nil
+	for i, deb := range debs {
+		if !waitTuneQuietHeld(5*time.Second, 2*time.Minute) {
+			// Nothing has gone wrong; the machine is simply busy. Wait for it,
+			// however long it takes. A driver is a convenience.
+			i--
+			continue
+		}
+		cmd := politeCommand("dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, e := cmd.CombinedOutput()
+		out = append(out, b...)
+		if e != nil {
+			err = e
+		}
+		if i == len(debs)-1 || (i+1)%10 == 0 {
+			logger("[CC] %s: %d of %d packages in", g.Name, i+1, len(debs))
+		}
+	}
 	if err != nil && !driverActive(g) {
 		return string(out), fmt.Errorf("installing the saved packages: %w", err)
 	}

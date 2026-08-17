@@ -35,13 +35,22 @@ Each of these cost a recording before it was written down.
 4. **Long work must yield throughout, not just at the start.** A gate at the
    door of a job that runs for minutes protects nothing: the world changes
    while it runs. Downloads pause per read (`tunesPending()`); model loads
-   re-check; anything that cannot be paused must not be started (rule 1).
+   re-check.
 
-5. **Nothing on the tune path may block.** `maybeWrapCaptions` and everything it
+5. **Work that cannot be paused can usually be divided.** This was written as
+   "anything that cannot be paused must not be started", and that let a
+   thirty-second package install through on ten seconds of proven quiet — a
+   gate can only promise the moment it is asked, and a DVR starting several
+   recordings at once arrives in the middle. dpkg cannot be interrupted, but
+   thirty-seven packages is thirty-seven jobs of a second or two with the gate
+   re-checked between each. Before accepting that something must run
+   uninterrupted, ask whether it is really one job or many.
+
+6. **Nothing on the tune path may block.** `maybeWrapCaptions` and everything it
    calls must be effectively free. Loading, probing, dlopening and downloading
    all happen on other goroutines, after the stream is already flowing.
 
-6. **If a gate can starve something, separate the two concerns.** The engine's
+7. **If a gate can starve something, separate the two concerns.** The engine's
    open waited on the driver restore, so an unbounded wait stopped captions
    entirely. The answer is not to bound the gate — it is to release the waiter
    and let the gated work keep waiting.
