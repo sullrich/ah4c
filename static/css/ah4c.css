@@ -959,3 +959,16 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 .pagebar .nav.push-right ~ .build-version {
 	margin-left: 0.75rem;
 }
+
+/* Where the stamp goes when the bar is too narrow to carry it. theme.js moves
+   the one element in here at the same 760px this file collapses the bar at,
+   so this is only ever occupied on a narrow screen. */
+.build-footer {
+	display: none;
+	padding: 0 1.25rem 1.5rem;
+	text-align: center;
+}
+@media (max-width: 760px) {
+	.build-footer { display: block; }
+	.build-footer .build-version { margin-left: 0; padding-left: 0; }
+}
