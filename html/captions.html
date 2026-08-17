@@ -190,6 +190,11 @@
                     <option value="rollup4">Roll-up, 4 lines</option>
                 </select>
             </div>
+            <div class="field-row" id="phraseRow" style="display:none;">
+                <label for="phrase">Sentence length</label>
+                <select id="phrase"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="phraseHelp"></p>
             <div class="field-row">
                 <label for="roll">Roll-up speed</label>
                 <select id="roll">
@@ -482,6 +487,23 @@ function render() {
         `<option value="${esc(l)}" ${l === cfg.language ? 'selected' : ''}>${esc(state.languageNames[l] || l)}</option>`).join('');
     if (!langs.includes(cfg.language)) sel.value = langs[0];
 
+    // Sentence length, and only for a model that has sentences. A streaming
+    // model has no phrase to lengthen, so the row is not shown at all.
+    const wins = (model && model.windows) || [];
+    document.getElementById('phraseRow').style.display = wins.length ? '' : 'none';
+    if (wins.length) {
+        const sel = document.getElementById('phrase');
+        sel.innerHTML = wins.map(w =>
+            `<option value="${w}" ${w === model.window ? 'selected' : ''}>${w.toFixed(1)} seconds${w === 4 ? ' (default)' : ''}</option>`).join('');
+        document.getElementById('phraseHelp').innerHTML =
+            `How long ${esc(model.name.split(' ')[0])} listens before it transcribes. It is the trade this model exists for, in one dial.
+             <b>Longer</b> hands it more of the sentence, which is where its accuracy comes from, and no caption can appear until the
+             sentence has finished. <b>Shorter</b> puts words on screen sooner and makes it guess at anything that needed the end of the
+             sentence to resolve. Turning it down also helps continuous speech: a news anchor never pauses, so every phrase runs to the
+             full length and the display gets a burst per phrase with no gap to drain in.`;
+    } else {
+        document.getElementById('phraseHelp').innerHTML = '';
+    }
     document.getElementById('style').value = cfg.style || 'rollup3';
     document.getElementById('roll').value = cfg.rollSpeed || 'broadcast';
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
@@ -509,6 +531,7 @@ function pickModel(key) {
 function collect() {
     return {
         enabled: document.getElementById('enabled').checked,
+        phraseSec: parseFloat(document.getElementById('phrase').value) || 0,
         model: state.config.model,
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
