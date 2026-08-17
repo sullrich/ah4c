@@ -1785,7 +1785,11 @@ const (
 	adbGiveUp       = 3
 	playbackPoll    = 250 * time.Millisecond
 	playbackConfirm = 2
-	playbackTimeout = 40 * time.Second
+	// Twenty-five, not the forty this shipped with. The tune budget belongs to
+	// the DVR, which gives up at about thirty seconds, and forty spends more
+	// than all of it before the motion fallback has been asked for anything.
+	// PLAYBACK_TIMEOUT overrides this per machine.
+	playbackTimeout = 25 * time.Second
 	keyframeWait    = 8 * time.Second
 	riseWindow      = 250 * time.Millisecond
 	riseFactor      = 4
