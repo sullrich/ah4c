@@ -1520,6 +1520,9 @@ func apiStatusHandler(c *gin.Context) {
 	if gpuUtil == "" && memUsage == "" {
 		gpuUtil, memUsage = sysfsGPU()
 	}
+	if gpuUtil == "" {
+		gpuUtil, _ = intelGPUStrings()
+	}
 	// Response with JSON
 	c.JSON(http.StatusOK, gin.H{
 		"CPU":           roundedCpu,
