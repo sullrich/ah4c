@@ -203,13 +203,31 @@
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="phraseHelp"></p>
             <div class="field-row">
+                <label for="speed">Reading speed</label>
+                <select id="speed"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                How fast words are let onto the screen, rather than how fast the channel could carry them.
+                Line 21 can push sixty characters a second and nobody speaks at a quarter of that, so without
+                a pace a sentence lands all at once and the screen sits idle until the next one. Captioning
+                guidance puts subtitle speed between 120 and 160 words a minute; the whole range is here.
+                Lower is easier to read and falls behind sooner on dense speech, which the freshness rules
+                then catch up by dropping a phrase.
+            </p>
+            <div class="field-row">
                 <label for="roll">Roll-up speed</label>
                 <select id="roll">
                     <option value="broadcast">Broadcast pace (a finished line rests before it rolls)</option>
                     <option value="brisk">Brisk (half the rest)</option>
-                    <option value="instant">Immediate (roll the moment a line is finished)</option>
+                    <option value="instant">As soon as allowed</option>
                 </select>
             </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                None of these can take a line off the screen before it can be read. Captioning guidance is a
+                second for one line, a second and a half for two and two for three, and a roll-up shows a row
+                for as many rolls as there are rows &mdash; so whatever is chosen here is raised if it would
+                fall short of that. Fewer rows need a longer rest to reach the same figure.
+            </p>
             <div class="field-row">
                 <label for="case">Letter case</label>
                 <select id="case">
@@ -529,6 +547,10 @@ function render() {
         document.getElementById('phraseHelp').innerHTML = '';
     }
     document.getElementById('style').value = cfg.style || 'rollup3';
+    const speeds = state.speeds || [];
+    const spd = document.getElementById('speed');
+    spd.innerHTML = speeds.map(w =>
+        `<option value="${w}" ${w === (cfg.speedWPM || 150) ? 'selected' : ''}>${w} words a minute${w === 150 ? ' (default)' : ''}</option>`).join('');
     document.getElementById('roll').value = cfg.rollSpeed || 'broadcast';
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
@@ -556,6 +578,7 @@ function collect() {
     return {
         enabled: document.getElementById('enabled').checked,
         phraseSec: parseFloat(document.getElementById('phrase').value) || 0,
+        speedWPM: parseInt(document.getElementById('speed').value, 10) || 0,
         model: state.config.model,
         language: document.getElementById('language').value,
         style: document.getElementById('style').value,
