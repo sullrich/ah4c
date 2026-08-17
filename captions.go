@@ -1709,6 +1709,8 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// polite work, which is a smaller thing to risk against a tune than an
 	// incomplete driver is against every tune afterwards.
 	var out []byte
+	var failed []string
+	in := 0
 	err = nil
 	warned := false
 	for i, deb := range debs {
@@ -1722,11 +1724,34 @@ func applyDriver(g gpuRuntime) (string, error) {
 		out = append(out, b...)
 		if e != nil {
 			err = e
+			failed = append(failed, filepath.Base(deb))
+		} else {
+			in++
 		}
 		if i == len(debs)-1 || (i+1)%10 == 0 {
-			logger("[CC] %s: %d of %d packages in", g.Name, i+1, len(debs))
+			// Packages that went in, not loops that were run. This counted the
+			// index, so it read "37 of 37 packages in" whatever dpkg had made
+			// of them — a line that says the same thing on success and on total
+			// failure is worse than no line, because it is believed.
+			logger("[CC] %s: %d of %d packages in", g.Name, in, len(debs))
 		}
 	}
+	if len(failed) > 0 {
+		logger("[CC] %s: %d packages would not install: %s", g.Name, len(failed), strings.Join(failed, " "))
+	}
+	// Ask the loader again rather than reading back what was true before.
+	//
+	// driverActive goes through the same answer-store the engine probe uses,
+	// and that store was emptied before this install and not after it. The
+	// install takes the better part of a minute, and the Closed Captions page
+	// polls every second and a half — so a poll during the install asked
+	// whether libvulkan.so.1 loads, was told no because it genuinely did not
+	// yet, and stored it. The check below then read that back and reported a
+	// driver that had installed perfectly as one that will not load.
+	//
+	// Which is why it was reported by somebody watching the page and not by
+	// somebody who pressed the button and walked away.
+	forgetEngineUsable()
 	if err != nil && !driverActive(g) {
 		return string(out), fmt.Errorf("installing the saved packages: %w", err)
 	}
