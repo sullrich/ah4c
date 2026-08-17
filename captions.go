@@ -1666,7 +1666,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if len(debs) == 0 {
 		return "", fmt.Errorf("no saved packages to install")
 	}
-	logger("[CC] Installing %d saved packages for %s, one at a time so a tune can cut in", len(debs), g.Name)
+	logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
 	// Whatever was true about these libraries stops being true here.
 	forgetEngineUsable()
 	forgetBrokenDrivers()
