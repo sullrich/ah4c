@@ -228,9 +228,16 @@ Transcribe reads phrases of up to four seconds and lands captions two to four se
 behind the picture — what live broadcast captioning runs. Nemotron and Moonshine stream at
 their own trained cadences and land about a second behind. The recognizer reports its throughput in
 the log, so whether your hardware is keeping up is a measurement, not a guess. The display
-is paced too: a finished caption line stays on screen a beat before the next one rolls it
-up, the way broadcast roll-up reads. If you want captions later — to match a delayed
-feed — the Extra delay setting pushes them back; nothing makes them earlier.
+is paced too, by two settings. **Reading speed** is how fast words are let onto the screen,
+in words a minute: the channel could push sixty characters a second and nobody speaks at a
+quarter of that, so without a pace a sentence lands all at once and the screen sits idle
+until the next one. Captioning guidance puts subtitle speed between 120 and 160 words a
+minute and the whole range is offered, 150 by default. **Time on screen** is the least time
+a line stays readable before it is allowed to leave, two to eight seconds. A roll-up does
+not put lines up together — each row is added and the oldest scrolls away — so the figure is
+shared out between the rows above it, and more rows means each roll waits less. Neither can
+go below the guidance minimum of a second for one line, a second and a half for two and two
+for three, whatever is chosen.
 
 Captions are rendered in capitals, which is the long-standing convention for broadcast
 captioning and is easier to read across a room; there is a setting for mixed case. That

@@ -551,10 +551,6 @@ type captionConfig struct {
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
 	Uppercase bool `json:"uppercase"`
-	// OffsetSec delays caption display, for trimming sync by hand. It never
-	// delays the video: the stream is passed through untouched apart from the
-	// caption bytes, so a tune is exactly as fast with captions on as off.
-	OffsetSec int `json:"offsetSec"`
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
@@ -584,7 +580,6 @@ func defaultCaptionConfig() captionConfig {
 		OnScreenSec: 3,
 		Uppercase:   true,
 		Engine:      "auto",
-		OffsetSec:   0,
 	}
 }
 
@@ -7424,12 +7419,8 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	}
 }
 
-// show puts recognized text on screen, honoring the configured offset.
+// show puts recognized text on screen.
 func (e *captionEngine) show(text string, breakAfter bool) {
-	if d := e.cfg.OffsetSec; d > 0 {
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, breakAfter) })
-		return
-	}
 	e.write(text, breakAfter)
 }
 
@@ -7930,18 +7921,9 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	// trimFalseStop, which strips the full stop the model puts on a fragment
 	// this code cut mid-sentence. The same fragments should not end a line
 	// either: they flow on, fill the width, and wrap where the window wraps.
-	// A real pause ends the line, which is what a pause is.
-	// Break where speech would naturally pause, which is the whole of the
-	// broadcast guidance on this: a real pause, or a place the model closed the
-	// sentence off. Not where the length ceiling happened to fall.
-	brk := item.atPause || (!item.hardCut && endsSentence(text))
-	if d := e.cfg.OffsetSec; d > 0 {
-		// Hold the phrase back for hand-tuned sync. The video is never delayed,
-		// so this only ever pushes text later.
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, brk) })
-		return
-	}
-	e.write(text, brk)
+	// A real pause ends the line, or a place the model closed the sentence off;
+	// not where the length ceiling happened to fall.
+	e.write(text, item.atPause || (!item.hardCut && endsSentence(text)))
 }
 
 // trimFalseStop removes a full stop the speaker did not make.
