@@ -451,6 +451,57 @@ type captionModel struct {
 var captionModelCatalog = []captionModel{
 	cohereTranscribe,
 	{
+		Key:  "nemotron-streaming",
+		Name: "Nemotron 3.5 ASR Streaming 0.6B",
+		Role: "Best when the captions have to keep up with the picture",
+		Desc: "Transcribes as the audio arrives instead of waiting for a phrase to finish, so the words appear about a second behind the speaker rather than four. Writes punctuation and sentence case, and does it in twenty-five languages. The one to pick if the delay is what bothers you.",
+		// Streaming is a different shape of model, not a faster one: it keeps a
+		// running encoder state and commits words as they settle, so latency is
+		// a property of the architecture rather than a setting. The phrase
+		// window does not apply to it.
+		Latency:   "About a second behind the picture",
+		Accuracy:  "Very good, short of the phrase model",
+		Benchmark: "Between the other two; not measured here",
+		// The memory is the thing to know about this one, and it is not the
+		// download.
+		//
+		// A phrase model is loaded once and shared: ten tuners captioning at
+		// once put one copy of Cohere in memory between them. A streaming model
+		// cannot be shared, because the running state that makes it streaming
+		// belongs to one stream — so every captioned tuner loads its own copy,
+		// and the memory is the size of the model times the number of tuners
+		// being captioned. Three streams is comfortable on most machines. Ten
+		// is seven gigabytes and worth deciding on deliberately.
+		Hardware:    "About 500 MB of memory for every tuner being captioned, because a streaming model cannot be shared between them. Comfortable for a few streams; worth adding up before running many.",
+		Runtime:     rtTranscribe,
+		Repo:        "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+		File:        "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
+		SizeMB:      496,
+		Streaming:   true,
+		Punctuation: true,
+		// Q4_K_M, and the reason is the graphics chip rather than the model.
+		//
+		// Accuracy barely moves across this model's quantizations — its own
+		// table runs from 7.97% at full precision to 8.49% at Q4_K_M, half a
+		// point across the whole range — so the choice is free on that side and
+		// is made on the two that matter. Memory, because this one is loaded
+		// per stream and four hundred and ninety-six megabytes against seven
+		// hundred and fifty is two and a half gigabytes across ten tuners. And
+		// the GPU, where quantization is not free at all: the shaders differ
+		// per quant, which is how Cohere came to ship Q4_K_M after its author
+		// measured it at eight times real time on integrated graphics where
+		// Q5_K_M managed a third of that.
+		//
+		// Nobody has published that measurement for this model — its table is
+		// accuracy only, and its throughput figures are from an H100, which
+		// says nothing about a UHD 770. So this is the same quant on the same
+		// engine on the same class of chip, which is the nearest thing to
+		// evidence available, and it is worth checking rather than trusting:
+		// the log prints the real-time factor every twenty-five dispatches.
+		Languages: []string{"auto", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr",
+			"hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"},
+	},
+	{
 		Key:         "moonshine-tiny",
 		Name:        "Moonshine Streaming Tiny",
 		Role:        "Best for small systems",
@@ -5512,7 +5563,6 @@ func txGoString(p *byte) string {
 	return string(unsafe.Slice(p, n))
 }
 
-
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
 	model uintptr
@@ -7720,9 +7770,9 @@ type captionStatus struct {
 	// RuntimeList is every engine, in order, so the page can show both as the
 	// separate programs they are rather than swapping one card's contents and
 	// leaving the reader to notice the name changed.
-	RuntimeList    []speechRuntime  `json:"runtimeList"`
-	RuntimeVersion string           `json:"runtimeVersion"`
-	RuntimeURL     string           `json:"runtimeURL"`
+	RuntimeList    []speechRuntime `json:"runtimeList"`
+	RuntimeVersion string          `json:"runtimeVersion"`
+	RuntimeURL     string          `json:"runtimeURL"`
 	// Engines carries the builds of both engines, keyed by engine, so the page
 	// can show what a model would need before it has been saved. Picking a
 	// radio button is browsing, not a decision, and must not change what a tune
