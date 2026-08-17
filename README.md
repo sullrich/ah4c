@@ -232,6 +232,7 @@ services:
       - ENCODER8_URL=${ENCODER8_URL} # Full URL for tuner #8 in the form http://hostname/stream or http://ip/stream
       - ENCODER9_URL=${ENCODER9_URL} # Full URL for tuner #9 in the form http://hostname/stream or http://ip/stream
       - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
+      - PYATV=${PYATV} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
       - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
       - ALERT_SMTP_SERVER=${ALERT_SMTP_SERVER} # The domainname:port of the SMTP server you'll be using like smtp.gmail.com:587. This is for sending ah4c alerts if tuning fails.
       - ALERT_AUTH_SERVER=${ALERT_AUTH_SERVER} # The auth server for the e-mail you'll be using like smtp.gmail.com
@@ -283,6 +284,7 @@ ENCODER4_URL=http://encoder_48007/12.ts
 TUNER5_IP=firestick-travel2:5555
 ENCODER5_URL=http://encoder_23393/0.ts
 STREAMER_APP=scripts/firetv/dtvdeeplinks
+PYATV=FALSE
 CHANNELSIP=media-server6
 ALERT_SMTP_SERVER=smtp.gmail.com:587
 ALERT_AUTH_SERVER=smtp.gmail.com

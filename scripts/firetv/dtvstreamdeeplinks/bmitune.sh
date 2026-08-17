@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for firetv/dtvstreamdeeplinks
-# 2024.09.18
+# 2026.08.17
 
 #Debug on if uncommented
 set -x
@@ -110,11 +110,12 @@ activeAudioCheck() {
             ;;
         esac
       else
-        exit 1
+        echo "No pre-existing audio detected -- proceeding to tune anyway"
+        return
       fi
     fi
 
-    if (( $(echo "$checkLoudness > $minimumLoudness" | bc -l) )); then
+    if [[ -n "$checkLoudness" ]] && (( $(echo "$checkLoudness > $minimumLoudness" | bc -l) )); then
       echo "Active audio stream detected with $checkLoudness LUF."
       break
     fi
