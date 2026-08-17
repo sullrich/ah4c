@@ -6863,6 +6863,8 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	peak := 0.0
 	decoderTries := 0
 	var frames, cutThisMinute int
+	// carryNext is set by a forced cut and consumed by the phrase after it.
+	carryNext := false
 	maxPhrase := e.quirks.PhraseWindow
 	if maxPhrase <= 0 {
 		maxPhrase = vadMaxPhrase
@@ -6969,12 +6971,14 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			continue
 		}
 
-		audio := pending
+		audio, carried := pending, carryNext
+		carryNext = false
 		if forced {
 			// Carry a little audio forward so a mid-word cut is not lost.
 			lead := int(vadLead * asrSampleRate)
 			if len(audio) > lead {
 				pending = append([]float32(nil), audio[len(audio)-lead:]...)
+				carryNext = true
 			} else {
 				pending = nil
 			}
@@ -6997,7 +7001,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 		cutThisMinute++
-		e.queue(audio)
+		e.queue(audio, carried)
 	}
 }
 
@@ -7007,6 +7011,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 type phraseItem struct {
 	pcm []float32
 	cut time.Time
+	// carried marks a phrase that begins with audio held over from the
+	// previous one. Only these can contain a repeated word, and only these
+	// are trimmed for it; see trimOverlap.
+	carried bool
 }
 
 // phraseStaleAfter is how old a phrase may be before it is abandoned. Normal
@@ -7019,9 +7027,9 @@ type phraseItem struct {
 const phraseStaleAfter = 6 * time.Second
 
 // queue hands a phrase to the recognizer, and never waits for it.
-func (e *captionEngine) queue(audio []float32) {
+func (e *captionEngine) queue(audio []float32, carried bool) {
 	select {
-	case e.phrases <- phraseItem{pcm: audio, cut: time.Now()}:
+	case e.phrases <- phraseItem{pcm: audio, cut: time.Now(), carried: carried}:
 	default:
 		// The recognizer is still working through what it has. Losing this
 		// phrase costs a sentence; waiting here would cost the audio stream,
@@ -7233,7 +7241,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 			}
 		}
 	}
-	text = e.trimOverlap(text)
+	text = e.trimOverlap(text, item.carried)
 	if text == "" {
 		return
 	}
@@ -7261,9 +7269,26 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 // audio is recognized in both, which put "and" twice across the join and turned
 // "downtown" into "downtown" followed by "town". Up to four words of overlap
 // are matched and removed.
-func (e *captionEngine) trimOverlap(text string) string {
+// trimOverlap removes words this phrase repeats from the end of the last one.
+//
+// The repeat is not a habit of the model, it is something this code causes: a
+// phrase cut at the four second backstop lands mid-word, so a fifth of a second
+// of audio is carried into the next phrase to save the word — and that fifth of
+// a second gets recognized twice.
+//
+// Which is why it now only runs on the phrases that carried something. It used
+// to run on every phrase and trim on a single matching word, and a single
+// matching word across a phrase boundary is not evidence of anything: speech is
+// full of "and", "the", "so", "we", and a phrase ending on one followed by a
+// phrase opening on one is a coincidence, not a duplicate. Every time that
+// happened a real word was deleted. That is the missing word.
+//
+// A phrase cut at a silence or a word gap carries nothing forward and therefore
+// cannot repeat anything, so there is nothing to look for and nothing to lose
+// by not looking.
+func (e *captionEngine) trimOverlap(text string, carried bool) string {
 	words := strings.Fields(text)
-	if len(words) == 0 || len(e.tail) == 0 {
+	if len(words) == 0 || len(e.tail) == 0 || !carried {
 		e.rememberTail(words)
 		return strings.TrimSpace(text)
 	}
