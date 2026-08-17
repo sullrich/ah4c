@@ -78,7 +78,7 @@ leaving the box.
   UI and stored in `captions/config.json`. Changes apply to the next tune.
 - **No GPU, no /dev/dri, no hardware encoder.** Nothing here requires a graphics card:
   everything but the high-end choice runs faster than real time on an ordinary CPU, and
-  that one is labelled for what it wants. The backend is chosen automatically — the best build
+  that one is labeled for what it wants. The backend is chosen automatically — the best build
   this container can actually load — and the log says which one each model really runs on.
 - **Entirely opt-in.** With captions off, a tune takes exactly the path it always did.
 
