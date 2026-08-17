@@ -209,27 +209,90 @@ func cohereSuppresses(text string) bool {
 	return cohereStockPhrases[t]
 }
 
-// Only phrases that are never dialogue.
+// The list comes from the community dataset, filtered by one rule.
 //
-// The rule this list needs is not "the model sometimes says this over silence"
-// — it is "a person on television never says this". The two are different and
-// the difference cost real captions: "Thank you." was dropped twice in one
-// commercial break at rms 0.024 and crest 4.8, which is ordinary speech by every
-// number beside it in the log, because somebody had ordinarily said it.
+// This is how it is actually done, and the method has two halves. A voice
+// activity gate stops non-speech reaching the model, and a phrase list catches
+// what gets through; measured on Common Voice, the gate alone took about 1.5%
+// absolute off word error rate, the list alone about 2.5%, and the two together
+// about 3.5%. Cohere's card recommends the gate half and says nothing about
+// this one.
 //
-// So the generic conversational ones are gone: thank you, thanks, you, bye,
-// okay, and I'm sorry with them. Every one is something a person says, and a
-// caption filter that deletes them deletes conversation. That the model also
-// produces them over silence is true and is not enough — a rule that cannot
-// tell the two apart should not be the one deciding, and the noise gate the
-// model's card actually recommends is what stands between silence and the
-// recognizer.
+//	Investigation of Whisper ASR Hallucinations Induced by Non-Speech Audio
+//	https://arxiv.org/pdf/2501.11378
 //
-// What is left is the sign-off a broadcaster never reads out: an appeal to
-// subscribe, a thank-you for watching, a subtitling credit. Those come from the
-// training material rather than from the audio, and hearing one on a network
-// feed would be more surprising than the hallucination.
+// The list itself is not guesswork either. It was built by running the model
+// over a noise-only corpus and counting what came out, which is 7,889 phrases
+// across every language and 348 in English:
+//
+//	https://huggingface.co/datasets/sachaarbonel/whisper-hallucinations
+//
+// What that data shows is why hand-picking was always going to go wrong. The
+// most frequent English hallucinations are "bye", "you", "thank you" and "the" —
+// all of them ordinary speech, and all of them things this list has had in it at
+// one time or another. Blocking those deletes conversation, and no amount of
+// arguing about it settles anything, because they really are both.
+//
+// So the rule is structural rather than statistical: a phrase belongs here only
+// if a person on a television channel could not have said it. That admits two
+// families and no others.
+//
+// Captioning and transcription credits, which come from the subtitle files the
+// model was trained on. A broadcaster does not read its own caption vendor out
+// loud.
+//
+// Video sign-offs, which come from the same place: an appeal to subscribe, a
+// thank-you for watching, a promise to see you in the next one. Broadcast has
+// its own version of these and it is not this one.
+//
+// Deliberately excluded, though the dataset lists all of them: every
+// interjection (isSoundEventTag has the bracketed ones and the rest are real
+// speech), every courtesy — thank you, thanks, bye, okay, I'm sorry — and
+// anything a channel might genuinely say, which is why "we'll be right back" is
+// not here even though the model hallucinates it. Frequency was not used as a
+// criterion at all. The most frequent entries are the most dangerous ones.
 var cohereStockPhrases = map[string]bool{
-	"thanks for watching": true, "thank you for watching": true,
-	"please subscribe": true, "subtitles by the amara.org community": true,
+	// Caption and transcript credits.
+	"subtitles by the amara.org community":                    true,
+	"subtitles by the amara org community":                    true,
+	"amara.org":                                               true,
+	"subtitles by steamteamextra":                             true,
+	"captioned by cotter captioning services":                 true,
+	"captions by gettranscribed com":                          true,
+	"captions by gettranscribed.com":                          true,
+	"captions by nicosubs":                                    true,
+	"closed captioning by kris brandhagen com":                true,
+	"closed captioning by kris brandhagen.com":                true,
+	"closed captioning provided by muhsen":                    true,
+	"closed captioning provided by the imperial news network": true,
+	"transcribed by eso translated by":                        true,
+	"transcription by eso translation by":                     true,
+	"transcript emily beynon":                                 true,
+	"tanya cushman reviewer":                                  true,
+	"tanya cushman reviewer's":                                true,
+	"rev com":                                                 true,
+	"rev.com":                                                 true,
+	"otter ai":                                                true,
+	"otter.ai":                                                true,
+
+	// Video sign-offs and channel patter.
+	"thanks for watching":                           true,
+	"thank you for watching":                        true,
+	"thanks for watching please subscribe":          true,
+	"thank you for watching please subscribe":       true,
+	"please subscribe and like thanks for watching": true,
+	"please subscribe to my channel thank you":      true,
+	"please subscribe":                              true,
+	"please subscribe to my channel":                true,
+	"like and subscribe":                            true,
+	"don't forget to subscribe":                     true,
+	"and subscribe to my channel":                   true,
+	"welcome to my channel":                         true,
+	"hi guys welcome back to my channel":            true,
+	"hello everyone welcome to my channel":          true,
+	"and i'll see you in the next one":              true,
+	"and i'll see you in the next video":            true,
+	"and i'll see you next time":                    true,
+	"so i'll see you next time":                     true,
+	"the next video":                                true,
 }
