@@ -1,6 +1,6 @@
 #!/bin/bash
 # prebmitune.sh for firetv/dtvstreamdeeplinks
-# 2024.09.18
+# 2026.08.17
 
 #Debug on if uncommented
 set -x
@@ -43,26 +43,8 @@ adbConnect() {
   done
 }
 
-adbWake() {
-  packageLaunch="com.clientapp.MainActivity"
-  packageName="com.att.tv"
-  packagePID=$($adbTarget shell pidof $packageName)
-  
-  if [ ! -z $packagePID ]; then
-    #$adbTarget shell input keyevent KEYCODE_WAKEUP
-    $adbTarget shell am start -n $packageName/$packageLaunch
-    echo "Confirming $packageName on $streamerIP"
-    touch $streamerNoPort/adbAppRunning
-  else
-    #$adbTarget shell input keyevent KEYCODE_WAKEUP
-    $adbTarget shell am start -n $packageName/$packageLaunch
-    echo "Starting $packageName on $streamerIP"
-  fi
-}
-
 main() {
   adbConnect
-  adbWake
 }
 
 main
