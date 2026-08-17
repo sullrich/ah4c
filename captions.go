@@ -2624,6 +2624,7 @@ const (
 const (
 	dtvccCR  = 0x0D // carriage return: next row, scrolling the window
 	dtvccCW0 = 0x80 // set current window to 0
+	dtvccCLW = 0x88 // clear windows, followed by a window bitmap
 	dtvccDSW = 0x89 // display windows, followed by a window bitmap
 	dtvccDLW = 0x8C // delete windows, followed by a window bitmap
 	dtvccSPA = 0x90 // set pen attributes, two bytes
@@ -2918,7 +2919,24 @@ func (c *cea708) next(n int) []dtvccPair {
 	// and may not when there is. The queue here is constructs rather than byte
 	// pairs, but the question is the same one.
 	if len(c.queue) == 0 {
-		return nil
+		// Nothing to send, so this is the moment to notice that nothing has
+		// been sent for a long time.
+		//
+		// A caption left on screen after everything upstream has stopped is
+		// worse than no caption: it is a sentence from several minutes ago
+		// presented as though it were current, and a failure that looks like a
+		// caption. Line 21 has erased on this timer since the beginning; the
+		// digital window had no equivalent and would hold its last line until
+		// the channel changed.
+		if c.defined && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
+			c.pending = append(c.pending, dtvccCLW, 1<<dtvccWindow)
+			c.lastText = time.Time{}
+			c.col, c.pendingBreak = 0, false
+			c.packetize()
+		}
+		if len(c.queue) == 0 {
+			return nil
+		}
 	}
 	// Metered, unless there is so much waiting that evenness has stopped being
 	// the point. Credit accrues with time and is spent one construct at a
@@ -6886,6 +6904,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			pcm = next
 			pending, speaking, silenceRun, speechLen = nil, false, 0, 0
 			loudest, levelSum, levelN = 0, 0, 0
+			// The phrase that was owed a carry never arrived, so nothing the
+			// next one says can be a repeat of it.
+			carryNext = false
 			continue
 		}
 		// Audio is flowing again, so the restart budget is for consecutive

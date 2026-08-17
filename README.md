@@ -140,15 +140,17 @@ Quick Sync is not on that list and cannot be. It is fixed-function video encode 
 hardware, not a compute unit, so nothing can run a model on it. The VA-API packages already
 in the image are for video and are unrelated.
 
-**Models** — three, and the choice between them is really a choice about delay. Cohere
-Transcribe is the one to pick if you want the words right. Nemotron is the one to pick if
-you want them now. Moonshine is for hardware that cannot run either. Every recommendation
-is guidance, never a gate, and all three run anywhere.
+**Models** — three. Cohere Transcribe is the most accurate thing there is in the eight
+languages it reads. Nemotron reads thirty-two, transcribes as the audio arrives rather
+than a phrase at a time, and on a GPU keeps up with Cohere while landing a second behind
+the picture instead of four — so it is the one to pick for anything that is not English,
+and a fair choice even where it is. Moonshine is for hardware that cannot run either.
+Every recommendation is guidance, never a gate, and all three run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | Everyone. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Two to four seconds, like broadcast | 1.6 GB | 8 |
-| **Nemotron 3.5 ASR Streaming 0.6B** — transcribes as the audio arrives | Anyone the delay bothers, with the memory to spend on it | Very good | About a second | 496 MB | 25 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | English and seven others. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Two to four seconds, like broadcast | 1.6 GB | 8 |
+| **Nemotron 3.5 ASR Streaming 0.6B** — thirty-two languages, transcribes as the audio arrives | Anything not in English, and anyone the delay bothers. Keeps up with Cohere on a GPU; costs memory per tuner | Very good | About a second | 496 MB | 32 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
 Accuracy is word error rate on LibriSpeech test-clean; read it as a ranking, since live
