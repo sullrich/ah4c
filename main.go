@@ -94,6 +94,7 @@ type reader struct {
 	gateReady     chan struct{}
 	gateDone      chan struct{}
 	gateStop      sync.Once
+	gateBase      map[string]bool
 	startedAt     time.Time
 }
 
@@ -222,10 +223,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		r.started = true
 		addReader(r)
 		go func() {
-			var base map[string]bool
-			if r.gateReady != nil {
-				base = audioBaseline(r.t.tunerip)
-			}
+			base := r.gateBase
 			if err := execute(r.t.start, r.channel, r.t.tunerip); err != nil {
 				logger("[ERR] Failed to run start script: %v", err)
 				if r.gateReady != nil {
@@ -418,14 +416,16 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			// Network encoder
 			logger("Attempting network tune for device %s %s %v %v", t.url, t.tunerip, channel, idx)
 			tuneStart := time.Now()
+			var ready chan struct{}
+			var base map[string]bool
+			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
+				ready = make(chan struct{})
+				base = audioBaseline(t.tunerip)
+			}
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				t.active = false
 				continue
-			}
-			var ready chan struct{}
-			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
-				ready = make(chan struct{})
 			}
 			if secs, _ := strconv.Atoi(os.Getenv("PLAYBACK_DELAY")); secs > 0 && ready == nil {
 				if secs > 30 {
@@ -500,6 +500,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t:          t,
 				gateReady:  ready,
 				gateDone:   make(chan struct{}),
+				gateBase:   base,
 			}
 			return r, nil
 		}
