@@ -7957,7 +7957,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 		cutThisMinute++
-		e.queue(audio, carried, ended)
+		e.queue(audio, carried, ended, forced && !ended && !gapped)
 	}
 }
 
@@ -7974,6 +7974,9 @@ type phraseItem struct {
 	// atPause marks a phrase that ended because the speaker stopped, rather
 	// than because the segmenter ran out of room. See trimFalseStop.
 	atPause bool
+	// hardCut marks a phrase the length ceiling ended, with no gap in the
+	// audio at all. Only these are certainly mid-sentence.
+	hardCut bool
 }
 
 // phraseStaleAfter is how old a phrase may be before it is abandoned. Normal
@@ -7986,9 +7989,9 @@ type phraseItem struct {
 const phraseStaleAfter = 6 * time.Second
 
 // queue hands a phrase to the recognizer, and never waits for it.
-func (e *captionEngine) queue(audio []float32, carried, atPause bool) {
+func (e *captionEngine) queue(audio []float32, carried, atPause, hardCut bool) {
 	select {
-	case e.phrases <- phraseItem{pcm: audio, cut: time.Now(), carried: carried, atPause: atPause}:
+	case e.phrases <- phraseItem{pcm: audio, cut: time.Now(), carried: carried, atPause: atPause, hardCut: hardCut}:
 	default:
 		// The recognizer is still working through what it has. Losing this
 		// phrase costs a sentence; waiting here would cost the audio stream,
@@ -8201,7 +8204,14 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		}
 	}
 	text = e.trimOverlap(text, item.carried)
-	text = trimFalseStop(text, item.atPause)
+	// Punctuation is only wrong where the ceiling cut with no gap at all.
+	//
+	// A word gap is a place the speaker paused, and if the model closed the
+	// sentence off there it agrees. Stripping that was treating every cut this
+	// code made as an interruption, which ran two sentences together
+	// unpunctuated whenever somebody paused for less than vadSilence between
+	// them.
+	text = trimFalseStop(text, !item.hardCut)
 	if text == "" {
 		return
 	}
@@ -8226,13 +8236,17 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	// this code cut mid-sentence. The same fragments should not end a line
 	// either: they flow on, fill the width, and wrap where the window wraps.
 	// A real pause ends the line, which is what a pause is.
+	// Break where speech would naturally pause, which is the whole of the
+	// broadcast guidance on this: a real pause, or a place the model closed the
+	// sentence off. Not where the length ceiling happened to fall.
+	brk := item.atPause || (!item.hardCut && endsSentence(text))
 	if d := e.cfg.OffsetSec; d > 0 {
 		// Hold the phrase back for hand-tuned sync. The video is never delayed,
 		// so this only ever pushes text later.
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, item.atPause) })
+		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, brk) })
 		return
 	}
-	e.write(text, item.atPause)
+	e.write(text, brk)
 }
 
 // trimFalseStop removes a full stop the speaker did not make.
@@ -8273,6 +8287,30 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 // middle of one reads as a fault — which it is.
 //
 // An ellipsis is left alone. The model wrote three of them on purpose.
+// endsSentence reports whether the model closed the phrase off.
+//
+// This is the only clause boundary available. Broadcast guidance is to break
+// where speech would naturally pause and never inside a clause, and the model
+// writing a full stop is it saying a clause ended — better evidence than a gap
+// measured in the waveform, which cannot tell a breath from a full stop.
+//
+// An ellipsis is not an ending. The model writes it for speech that trails off,
+// which is the middle of a thought rather than the end of one.
+func endsSentence(text string) bool {
+	// Closing punctuation of every shape, because a full stop inside a quotation
+	// is still a full stop: he said "no." and he said \u201cno.\u201d end the same
+	// sentence, and only one of them was being seen.
+	t := strings.TrimRight(text, " \"')]\u2019\u201d")
+	if t == "" || strings.HasSuffix(t, "...") || strings.HasSuffix(t, "\u2026") {
+		return false
+	}
+	switch t[len(t)-1] {
+	case '.', '?', '!':
+		return true
+	}
+	return false
+}
+
 func trimFalseStop(text string, atPause bool) string {
 	if atPause {
 		return text
