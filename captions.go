@@ -641,6 +641,9 @@ func saveCaptionConfig(cfg captionConfig) error {
 	captionCfgLock.Lock()
 	captionCfg = cfg
 	captionCfgLock.Unlock()
+	// A loaded model is brought into line with the new setting rather than
+	// keeping the number it happened to start with.
+	go reconcileWorkers()
 	return nil
 }
 
@@ -5025,7 +5028,8 @@ type txBatchService struct {
 	onGPU bool
 	// kvType is the attention cache precision this model asked for.
 	kvType int32
-	// workers is how many recognizers serve this queue.
+	// workers is how many recognizers serve this queue. Read and written under
+	// txServiceLock, because the setting can change while they are running.
 	workers  int
 	requests chan txBatchRequest
 	refs     int
@@ -5125,10 +5129,6 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			return nil, svc.err
 		}
 		logger("[CC] Sharing the copy of %s already in memory (%d streams on it)", filepath.Base(path), n)
-		if want := captionWorkers(cfg, mustFindModel(cfg.Model)); want != svc.workers {
-			logger("[CC] The recognizer count is set to %d and this model is already loaded with %d. "+
-				"It changes when the last captioned stream ends and the model is loaded again.", want, svc.workers)
-		}
 		return svc, nil
 	}
 	svc := &txBatchService{
@@ -5158,54 +5158,19 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			txServiceLock.Unlock()
 			return
 		}
-		go svc.run(w)
-		// The rest come up behind the first, so the service is usable the
-		// moment one recognizer is ready and the others join as they load.
-		//
-		// A second recognizer is a second copy of the weights and a second
-		// session on it, because the engine allows one compute in flight per
-		// copy — that is the rule the shared service exists to obey, and the
-		// only way past it is to have more than one thing to be in flight on.
-		// They read the same queue, so whichever is free takes the next batch.
-		//
-		// They keep trying, and that is the whole of what was wrong with the
-		// first version of this. Loading weights goes through the same gates
-		// every load here does: warm the file yielding to tunes, then wait for
-		// a quiet machine and give up quickly if none comes. Those gates are
-		// built to fail fast because the caller is a stream with a retry loop
-		// behind it — and a recognizer had no such loop, so on a busy box every
-		// extra one failed its single attempt and went away. Five were asked
-		// for, one arrived, and the only sign was two gigabytes of memory where
-		// twelve were expected.
+		go svc.run(w, 0)
+		// The rest come up behind the first, so the service is usable the moment
+		// one recognizer is ready and the others join as they load. Each is a
+		// whole copy of the weights and its own session, because the engine
+		// allows one transcription in flight per copy — which is the rule the
+		// shared service exists to obey, and the only way past it is to have
+		// more than one thing to be in flight on.
 		if svc.workers > 1 {
 			logger("[CC] Starting %d recognizers for %s; each loads its own copy of the weights",
 				svc.workers, filepath.Base(svc.path))
 		}
 		for i := 1; i < svc.workers; i++ {
-			go func(n int) {
-				for attempt := 1; ; attempt++ {
-					select {
-					case <-svc.closed:
-						return
-					default:
-					}
-					extra, err := svc.makeWorker(nil)
-					if err == nil {
-						logger("[CC] Recognizer %d of %d is up", n+1, svc.workers)
-						svc.run(extra)
-						return
-					}
-					if attempt == 1 || attempt%10 == 0 {
-						logger("[CC] Recognizer %d of %d is still waiting to load (%v); trying again at the next quiet moment",
-							n+1, svc.workers, err)
-					}
-					select {
-					case <-svc.closed:
-						return
-					case <-time.After(15 * time.Second):
-					}
-				}
-			}(i)
+			go svc.startWorker(i)
 		}
 		// Every stream that wanted this may have timed out and moved on
 		// while the load ran. A live service nobody references would hold
@@ -5245,15 +5210,91 @@ func (svc *txBatchService) release() {
 	close(svc.closed)
 }
 
-func (svc *txBatchService) run(w *txWorker) {
+// wantWorkers is how many recognizers this service should have right now.
+func (svc *txBatchService) wantWorkers() int {
+	txServiceLock.Lock()
+	defer txServiceLock.Unlock()
+	return svc.workers
+}
+
+// startWorker brings one up and keeps trying until it does. Loading weights
+// goes behind the same gates as every load here, and those gates fail fast
+// because their usual caller is a stream with a retry loop behind it; a
+// recognizer needs its own.
+func (svc *txBatchService) startWorker(n int) {
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-svc.closed:
+			return
+		default:
+		}
+		if n >= svc.wantWorkers() {
+			return
+		}
+		w, err := svc.makeWorker(nil)
+		if err == nil {
+			logger("[CC] Recognizer %d of %d is up", n+1, svc.wantWorkers())
+			svc.run(w, n)
+			return
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			logger("[CC] Recognizer %d is still waiting to load (%v); trying again at the next quiet moment", n+1, err)
+		}
+		select {
+		case <-svc.closed:
+			return
+		case <-time.After(15 * time.Second):
+		}
+	}
+}
+
+// reconcileWorkers brings every loaded model into line with the setting.
+//
+// The count used to be fixed when the model loaded, which meant changing it did
+// nothing at all while anybody was being captioned — and being captioned is the
+// only time anybody would want to change it. It applied at the next load, which
+// on a machine that captions continuously is never.
+func reconcileWorkers() {
+	cfg := currentCaptionConfig()
+	txServiceLock.Lock()
+	svcs := make([]*txBatchService, 0, len(txServices))
+	for _, svc := range txServices {
+		svcs = append(svcs, svc)
+	}
+	txServiceLock.Unlock()
+	for _, svc := range svcs {
+		want := captionWorkers(cfg, mustFindModel(cfg.Model))
+		txServiceLock.Lock()
+		had := svc.workers
+		svc.workers = want
+		txServiceLock.Unlock()
+		if want == had {
+			continue
+		}
+		logger("[CC] Recognizers for %s: %d, was %d", filepath.Base(svc.path), want, had)
+		for i := had; i < want; i++ {
+			go svc.startWorker(i)
+		}
+	}
+}
+
+func (svc *txBatchService) run(w *txWorker, n int) {
 	defer func() {
 		if w.session != 0 {
 			txSessionFree(w.session)
 		}
 		releaseTxModel(svc.path+"|"+fmt.Sprint(svc.backend), w.shared)
-		logger("[CC] Shared model worker released")
+		logger("[CC] Recognizer %d released its copy of the weights", n+1)
 	}()
 	for {
+		// The count is live. A recognizer past the number now being asked for
+		// gives its weights back between batches rather than at the end of the
+		// last stream, so lowering the setting frees the memory while somebody
+		// is still watching.
+		if n >= svc.wantWorkers() {
+			logger("[CC] Recognizer %d is standing down; %d are wanted now", n+1, svc.wantWorkers())
+			return
+		}
 		var first txBatchRequest
 		select {
 		case <-svc.closed:
