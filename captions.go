@@ -639,6 +639,7 @@ func saveCaptionConfig(cfg captionConfig) error {
 	was := captionCfg.Enabled
 	captionCfg = cfg
 	captionCfgLock.Unlock()
+	refreshCaptionReady()
 	// Switching captions on is what asks for the graphics driver, because
 	// startup no longer installs one for a container that was not captioning.
 	// It runs behind the same gates as any other install now that the server is
@@ -739,6 +740,7 @@ func startModelDownload(m captionModel) error {
 		} else {
 			logger("[CC] Model %s is ready", m.Key)
 		}
+		refreshCaptionReady()
 		dlLock.Unlock()
 	}()
 	return nil
@@ -889,6 +891,7 @@ func startRuntimeDownload(variant, modelKey string) error {
 		} else {
 			logger("[CC] %s %s is ready", eng.Name, eng.Version)
 		}
+		refreshCaptionReady()
 		dlLock.Unlock()
 	}()
 	return nil
@@ -1047,6 +1050,7 @@ func removeCaptionModel(m captionModel) error {
 		return err
 	}
 	logger("[CC] Removed model %s", m.Key)
+	refreshCaptionReady()
 	return nil
 }
 
@@ -2060,6 +2064,7 @@ var gpuReady atomic.Bool
 // is the thing that dlopens.
 func refreshGPUReady() {
 	gpuReady.Store(gpuAvailable())
+	refreshCaptionReady()
 }
 
 func gpuAvailable() bool {
@@ -6780,7 +6785,27 @@ func (e *captionEngine) begin() {
 }
 
 // start does the slow part off the tune path.
+// captionStarts admits one caption engine at a time.
+//
+// Three streams asked for at once start three tunes at once, and each one hands
+// its engine a start as soon as its own gate opens. The first pays for
+// everything — the backend scan, the device enumeration, the weights — and the
+// other two pile onto it while the tuners that have not opened yet are still
+// polling their boxes over adb for playback. The tune that is furthest behind
+// is the one that gets starved, and it is the one with the least budget left.
+//
+// One at a time. Nothing is lost by it: the second and third were going to wait
+// on the shared model anyway, and waiting outside the load is cheaper than
+// waiting inside it. What changes is that they no longer wait *while* competing.
+var captionStarts = make(chan struct{}, 1)
+
 func (e *captionEngine) start(cfg captionConfig, m captionModel) {
+	select {
+	case captionStarts <- struct{}{}:
+		defer func() { <-captionStarts }()
+	case <-e.closed:
+		return
+	}
 	// This runs in the background with native code below it; nothing it does
 	// may take the process down. The stream it serves is already flowing.
 	defer func() {
@@ -8589,6 +8614,49 @@ type captionStream struct {
 // beginning here — through its most fragile stretch, playback confirmation —
 // and the returned reader marks it settled at the first delivered byte. All
 // of it inside this file; the caller just wraps a reader like always.
+// captionReady is whether captions can run and, if not, why — answered off the
+// tune path and refreshed wherever any of its inputs change. maybeWrapCaptions
+// reads it and asks nothing.
+type captionReadyState struct {
+	ok    bool
+	why   string
+	model captionModel
+}
+
+var captionReadyVal atomic.Value
+
+func captionReadiness() captionReadyState {
+	if v, ok := captionReadyVal.Load().(captionReadyState); ok {
+		return v
+	}
+	// Nothing has looked yet. Look now rather than refuse: this can only happen
+	// before the first refresh, which runs before the port is bound.
+	refreshCaptionReady()
+	v, _ := captionReadyVal.Load().(captionReadyState)
+	return v
+}
+
+// refreshCaptionReady re-answers it. Never call from the tune path: it stats.
+func refreshCaptionReady() {
+	cfg := currentCaptionConfig()
+	m, found := findCaptionModel(cfg.Model)
+	st := captionReadyState{ok: true, model: m}
+	switch {
+	case !found:
+		st = captionReadyState{why: fmt.Sprintf("unknown model %q", cfg.Model)}
+	case !modelInstalled(m):
+		st = captionReadyState{why: "model " + m.Key + " is not downloaded"}
+	case m.NeedsGPU && !gpuReady.Load():
+		// Captioning anyway would be worse than not captioning: this model on a
+		// processor loses ground against live audio until most of the speech is
+		// missed, and half a transcript is harder to watch than none.
+		st = captionReadyState{why: "model " + m.Key + " needs a GPU and none is usable here"}
+	case !engineInstalled():
+		st = captionReadyState{why: "the speech runtime is not downloaded"}
+	}
+	captionReadyVal.Store(st)
+}
+
 func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadCloser {
 	captionTuneStarting()
 	src = newTuneSettleReader(src)
@@ -8608,26 +8676,22 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 			return src
 		}
 	}
-	m, ok := findCaptionModel(cfg.Model)
-	if !ok {
-		logger("[CC] %s unknown model %q, captions disabled for this tune", label, cfg.Model)
+	// Everything about whether captions can run has been worked out already,
+	// off this path, and is read here as one value.
+	//
+	// It used to be worked out here: a lookup, two os.Stat calls and a question
+	// that could dlopen the whole Vulkan chain, all inside the global tuner
+	// lock, on every captioned tune. None of it is expensive on a quiet
+	// machine, which is exactly why it survived — and the one time it matters
+	// is three tunes arriving together, which is the one time nothing may be in
+	// the way. A stat is a disk touch, and the disk is what a tune is competing
+	// for.
+	r := captionReadiness()
+	if !r.ok {
+		logger("[CC] %s %s, captions disabled for this tune", label, r.why)
 		return src
 	}
-	if !modelInstalled(m) {
-		logger("[CC] %s model %s is not downloaded, captions disabled for this tune", label, m.Key)
-		return src
-	}
-	if m.NeedsGPU && !gpuReady.Load() {
-		// Captioning anyway would be worse than not captioning: this model on a
-		// processor loses ground against live audio until most of the speech is
-		// missed, and half a transcript is harder to watch than none.
-		logger("[CC] %s model %s needs a GPU and none is usable here, captions disabled for this tune", label, m.Key)
-		return src
-	}
-	if !engineInstalled() {
-		logger("[CC] %s the speech runtime is not downloaded, captions disabled for this tune", label)
-		return src
-	}
+	m := r.model
 	engine, err := newCaptionEngine(cfg, m, label)
 	if err != nil {
 		logger("[CC] %s could not start captions: %v", label, err)
