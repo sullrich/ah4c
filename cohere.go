@@ -295,4 +295,28 @@ var cohereStockPhrases = map[string]bool{
 	"and i'll see you next time":                    true,
 	"so i'll see you next time":                     true,
 	"the next video":                                true,
+
+	// The courtesies, which are both.
+	//
+	// These fail the rule above — people say them on television constantly —
+	// and they are in here anyway, because the dataset ranks them among the
+	// most frequent hallucinations there are and two of them turned up over a
+	// music bed within minutes of taking them out. Both errors are real and
+	// the choice is which one to make; this is the one that happens less.
+	//
+	// What it costs is a caption whose entire content is the courtesy. Anything
+	// around it survives — "thank you, Jim, back to you" is untouched, because
+	// the match is against the whole phrase and never part of one. A standalone
+	// "Thank you." is close to the least informative caption there is, and a
+	// standalone "Thank you." over music is noise in the middle of a programme.
+	//
+	// The line is drawn at courtesies and no further. "bye", "you", "okay" and
+	// "the" score higher in the dataset than any of these and are not here:
+	// they carry nothing that marks them as stock, and a filter that eats them
+	// eats conversation rather than pleasantries.
+	"thank you":           true,
+	"thanks":              true,
+	"thank you very much": true,
+	"i'm sorry":           true,
+	"i am sorry":          true,
 }
