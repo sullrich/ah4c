@@ -5999,6 +5999,9 @@ type captionEngine struct {
 	// describe now or say nothing: a pipeline that has fallen behind must thin
 	// out and catch up, never serve the past in order. Only recognize touches it.
 	skippedStale int64
+	// gated counts stretches the noise gate held back: loud enough to pass a
+	// level test, too steady to be somebody talking.
+	gated int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -6504,6 +6507,69 @@ const (
 	framesPerMinute = 60 * asrSampleRate / vadFrame
 )
 
+// stockHallucinations are the phrases this family of model reaches for when it
+// is handed audio with nothing in it. They come from the data it was trained
+// on — hours of video whose closing seconds are somebody thanking an audience
+// — and they arrive with the same confidence as a real sentence, because the
+// engine offers no confidence to tell them apart by.
+//
+// The gate above is the first defence and the one the documentation asks for.
+// This is the second, for what gets past it: applause, music and a crowd all
+// vary enough to look like speech, and what the model makes of them is this.
+//
+// Matched against the whole phrase and never against part of one. Somebody on
+// television saying "thank you" in the middle of a sentence keeps it; a phrase
+// that is nothing but a thank-you, from three seconds of audio, is the model
+// filling a silence. That trade loses the occasional real one-word thanks and
+// is worth it.
+var stockHallucinations = map[string]bool{
+	"thank you": true, "thanks": true, "thank you.": true,
+	"thanks for watching": true, "thank you for watching": true,
+	"you": true, "bye": true, "bye.": true, "okay": true,
+	"please subscribe": true, "subtitles by the amara.org community": true,
+}
+
+func isStockHallucination(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	t = strings.Trim(t, " .,!?-\u2014\u2019'\"")
+	return stockHallucinations[t] || stockHallucinations[t+"."]
+}
+
+// phraseIsSpeech is the noise gate the model's own documentation asks for.
+//
+// The card is explicit about how this model fails: "Cohere Transcribe is eager
+// to transcribe, even non-speech sounds. The model thus benefits from
+// prepending a noise gate or VAD in order to prevent low-volume, floor noise
+// from turning into hallucinations." That is the thank-yous — the model is not
+// mishearing anything, it is being handed a stretch of room tone and asked what
+// was said in it, and it answers, because answering is what it does.
+//
+// There is nothing on the engine's side to lean on. Its run parameters carry a
+// task, a language, punctuation and inverse text normalisation, and that is
+// all: no no-speech threshold, no blank suppression, no confidence a caller
+// could threshold on. The header says so and the README says nothing at all.
+// So the gate is here or it is nowhere.
+//
+// A level test alone cannot do it, because the bar follows the noise floor
+// down — that is what lets it hear quiet dialogue — and a hiss above a very
+// low floor passes exactly like speech does. What separates them is not how
+// loud they are but how much they vary. Speech is syllables: energy swinging
+// hard between vowels and stops, several times a second. Room tone, rain, a
+// fan, the hum of an empty studio are all steady by definition, and their
+// loudest moment sits close to their average one.
+//
+// So the test is the ratio between the two. Two is conservative — ordinary
+// speech runs well above it, and a stretch that flat is not a sentence anybody
+// said.
+const vadCrestMin = 2.0
+
+func phraseIsSpeech(loudest, levelSum float64, n int) bool {
+	if n == 0 || levelSum <= 0 {
+		return false
+	}
+	return loudest/(levelSum/float64(n)) >= vadCrestMin
+}
+
 // vadBar is the level at which audio counts as somebody talking. It follows the
 // noise floor upwards, but only so far: see vadBarMax for why the ceiling
 // matters more than the adaptation does.
@@ -6717,6 +6783,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var pending []float32
 	speaking := false
 	var silenceRun, speechLen float64
+	// loudest and levelSum describe the shape of what is being heard, which is
+	// how steady noise is told from speech; see phraseIsSpeech.
+	var loudest, levelSum float64
+	var levelN int
 	floor := 0.005
 	peak := 0.0
 	decoderTries := 0
@@ -6741,6 +6811,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			pcm.Close()
 			pcm = next
 			pending, speaking, silenceRun, speechLen = nil, false, 0, 0
+			loudest, levelSum, levelN = 0, 0, 0
 			continue
 		}
 		// Audio is flowing again, so the restart budget is for consecutive
@@ -6784,6 +6855,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			if !speaking {
 				speaking = true
 				speechLen = 0
+				loudest, levelSum, levelN = 0, 0, 0
 				lead := int(vadLead * asrSampleRate)
 				if len(pending) > lead {
 					pending = pending[len(pending)-lead:]
@@ -6791,6 +6863,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			}
 			silenceRun = 0
 			speechLen += float64(vadFrame) / asrSampleRate
+			loudest = math.Max(loudest, rms)
+			levelSum += rms
+			levelN++
 		} else {
 			silenceRun += float64(vadFrame) / asrSampleRate
 		}
@@ -6833,7 +6908,15 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		if speechLen < vadMinSpeech {
 			continue
 		}
-		speechLen = 0
+		if !phraseIsSpeech(loudest, levelSum, levelN) {
+			n := atomic.AddInt64(&e.gated, 1)
+			if n == 1 || n%25 == 0 {
+				logger("[CC] %s held back %d stretches of steady noise that were not speech", e.label, n)
+			}
+			speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
+			continue
+		}
+		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 		cutThisMinute++
 		e.queue(audio)
 	}
@@ -7073,6 +7156,13 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	}
 	text = e.trimOverlap(text)
 	if text == "" {
+		return
+	}
+	if isStockHallucination(text) {
+		n := atomic.AddInt64(&e.gated, 1)
+		if n == 1 || n%25 == 0 {
+			logger("[CC] %s dropped %q; nothing was said (%d suppressed so far)", e.label, text, n)
+		}
 		return
 	}
 	// Say where the delay actually goes, in the two pieces it comes in, so the
