@@ -7102,7 +7102,7 @@ const (
 	// it. A floor is kept so that a genuinely silent channel is not treated as
 	// wall-to-wall speech.
 	//
-	// It fails towards hearing. A noisy channel gets its noise transcribed,
+	// It fails toward hearing. A noisy channel gets its noise transcribed,
 	// which is untidy and was the behavior before any of this; the alternative
 	// is captions that stop, which is the bug.
 	vadFloorMax = 0.01
