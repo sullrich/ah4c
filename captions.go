@@ -1197,6 +1197,7 @@ func startDriverDownload(kind string) error {
 			// driver is the one moment that answer changes.
 			forgetEngineUsable()
 			forgetBrokenDrivers()
+			refreshGPUReady()
 			// Record that this driver is wanted. Downloading it is the only
 			// point at which the intent is expressed: the engine picker will
 			// not offer a GPU build until the driver already loads, so waiting
@@ -1665,6 +1666,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// Whatever was true about these libraries stops being true here.
 	forgetEngineUsable()
 	forgetBrokenDrivers()
+	defer refreshGPUReady()
 	// --force-unsafe-io because the fsync per file is the entire weight of
 	// this. dpkg syncs to be certain a package survives a power cut mid
 	// install; these packages exist in the bind mount either way, and a
@@ -2032,6 +2034,34 @@ func accelStatus() accelReport {
 // It deliberately does not care whether that build has been downloaded yet.
 // Refusing to show a model because the engine it would use is still a button
 // press away would be a maze rather than a gate.
+// gpuReady is gpuAvailable's answer, kept where the tune path can read it
+// without asking.
+//
+// gpuAvailable calls engineUsable, and engineUsable dlopens the library when its
+// cache is cold: libvulkan and the whole Mesa chain, every symbol resolved
+// eagerly, off a disk that may be cold. That is seconds, and maybeWrapCaptions
+// was calling it on the tune path while the global tuner lock was held — so the
+// tune, and every tune queued behind it, waited for a driver probe.
+//
+// The cache made this rare rather than impossible, and installing a driver
+// empties it on purpose, because the answer really does change when one goes in.
+// So the first captioned tune after any install paid the full cost: on a
+// container start that is the first tune of the night, which is exactly where
+// playback confirmation was timing out, and only with captions on, because
+// nothing else on that path asks this question.
+//
+// It is a stored answer now, refreshed off the tune path wherever the cache is
+// emptied. False until something has looked, which costs nothing: the warm-up
+// runs before the port is bound, so it has always looked by the time a tune can
+// arrive.
+var gpuReady atomic.Bool
+
+// refreshGPUReady re-answers the question. Never call it from the tune path: it
+// is the thing that dlopens.
+func refreshGPUReady() {
+	gpuReady.Store(gpuAvailable())
+}
+
 func gpuAvailable() bool {
 	nodes := renderNodes()
 	for _, v := range engineVariants {
@@ -2329,6 +2359,9 @@ func warmEngineCache() {
 	usableLock.Lock()
 	usableCache = fresh
 	usableLock.Unlock()
+	// The tune path reads the stored answer and never asks. This is where it is
+	// answered, before the port is bound.
+	refreshGPUReady()
 }
 
 // reinstallSavedDriver puts the driver back after a container rebuild, from
@@ -8584,7 +8617,7 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 		logger("[CC] %s model %s is not downloaded, captions disabled for this tune", label, m.Key)
 		return src
 	}
-	if m.NeedsGPU && !gpuAvailable() {
+	if m.NeedsGPU && !gpuReady.Load() {
 		// Captioning anyway would be worse than not captioning: this model on a
 		// processor loses ground against live audio until most of the speech is
 		// missed, and half a transcript is harder to watch than none.
