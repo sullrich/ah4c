@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2116,6 +2117,18 @@ func adbControl(tunerip string, action string) error {
 	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
 }
 
+func piidList(m map[string]bool) string {
+	if len(m) == 0 {
+		return "no started players"
+	}
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
 func audioBaseline(tunerip string) map[string]bool {
 	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
 	exec.CommandContext(ctx, "adb", "connect", tunerip).Run()
@@ -2137,55 +2150,12 @@ func playbackBudget() time.Duration {
 	return playbackTimeout
 }
 
-var (
-	playbackMissLock sync.Mutex
-	playbackMisses   = map[string]int{}
-	playbackSkipped  = map[string]int{}
-)
-
-const (
-	playbackReprobe   = 10
-	playbackMissLimit = 2
-)
-
-func playbackSkip(tunerip string) (bool, int) {
-	playbackMissLock.Lock()
-	defer playbackMissLock.Unlock()
-	misses := playbackMisses[tunerip]
-	if misses < playbackMissLimit {
-		return false, misses
-	}
-	playbackSkipped[tunerip]++
-	if playbackSkipped[tunerip] >= playbackReprobe {
-		playbackSkipped[tunerip] = 0
-		return false, misses
-	}
-	return true, misses
-}
-
-func playbackConfirmed(tunerip string) {
-	playbackMissLock.Lock()
-	delete(playbackMisses, tunerip)
-	delete(playbackSkipped, tunerip)
-	playbackMissLock.Unlock()
-}
-
-func playbackMissed(tunerip string) int {
-	playbackMissLock.Lock()
-	defer playbackMissLock.Unlock()
-	playbackMisses[tunerip]++
-	return playbackMisses[tunerip]
-}
-
 func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
-	if skip, misses := playbackSkip(tunerip); skip {
-		logger("[PLAYBACK] %s has not confirmed on its last %d tunes, gating on motion alone without waiting", tunerip, misses)
-		return
-	}
 	t0 := time.Now()
 	budget := playbackBudget()
 	deadline := t0.Add(budget)
 	held := map[string]int{}
+	last := map[string]bool{}
 	fails := 0
 	for time.Now().Before(deadline) {
 		select {
@@ -2201,15 +2171,16 @@ func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{})
 			}
 		} else {
 			fails = 0
-			if heldNewID(base, audioPiids(string(out)), held) {
-				playbackConfirmed(tunerip)
+			last = audioPiids(string(out))
+			if heldNewID(base, last, held) {
 				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
 				return
 			}
 		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone (%d in a row)", tunerip, budget, playbackMissed(tunerip))
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s",
+		tunerip, budget, piidList(base), piidList(last))
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
