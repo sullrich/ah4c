@@ -5125,6 +5125,10 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 			return nil, svc.err
 		}
 		logger("[CC] Sharing the copy of %s already in memory (%d streams on it)", filepath.Base(path), n)
+		if want := captionWorkers(cfg, mustFindModel(cfg.Model)); want != svc.workers {
+			logger("[CC] The recognizer count is set to %d and this model is already loaded with %d. "+
+				"It changes when the last captioned stream ends and the model is loaded again.", want, svc.workers)
+		}
 		return svc, nil
 	}
 	svc := &txBatchService{
@@ -5163,15 +5167,44 @@ func acquireTxBatchService(path string, backend int32, cfg captionConfig, alive 
 		// copy — that is the rule the shared service exists to obey, and the
 		// only way past it is to have more than one thing to be in flight on.
 		// They read the same queue, so whichever is free takes the next batch.
+		//
+		// They keep trying, and that is the whole of what was wrong with the
+		// first version of this. Loading weights goes through the same gates
+		// every load here does: warm the file yielding to tunes, then wait for
+		// a quiet machine and give up quickly if none comes. Those gates are
+		// built to fail fast because the caller is a stream with a retry loop
+		// behind it — and a recognizer had no such loop, so on a busy box every
+		// extra one failed its single attempt and went away. Five were asked
+		// for, one arrived, and the only sign was two gigabytes of memory where
+		// twelve were expected.
+		if svc.workers > 1 {
+			logger("[CC] Starting %d recognizers for %s; each loads its own copy of the weights",
+				svc.workers, filepath.Base(svc.path))
+		}
 		for i := 1; i < svc.workers; i++ {
 			go func(n int) {
-				extra, err := svc.makeWorker(nil)
-				if err != nil {
-					logger("[CC] Recognizer %d could not be started: %v", n+1, err)
-					return
+				for attempt := 1; ; attempt++ {
+					select {
+					case <-svc.closed:
+						return
+					default:
+					}
+					extra, err := svc.makeWorker(nil)
+					if err == nil {
+						logger("[CC] Recognizer %d of %d is up", n+1, svc.workers)
+						svc.run(extra)
+						return
+					}
+					if attempt == 1 || attempt%10 == 0 {
+						logger("[CC] Recognizer %d of %d is still waiting to load (%v); trying again at the next quiet moment",
+							n+1, svc.workers, err)
+					}
+					select {
+					case <-svc.closed:
+						return
+					case <-time.After(15 * time.Second):
+					}
 				}
-				logger("[CC] Recognizer %d of %d is up", n+1, svc.workers)
-				svc.run(extra)
 			}(i)
 		}
 		// Every stream that wanted this may have timed out and moved on

@@ -200,8 +200,18 @@ dropped*, which is a queue that no longer drains as fast as it fills. More recog
 the only way past that, because the engine allows one transcription in flight per loaded
 copy of a model — the rule that makes a single shared copy worth having in the first place.
 
+What a second one actually does: nothing on its own, and everything under load. All the
+recognizers read the same queue of phrases, and whichever is free takes the next batch — so
+one is exactly as fast as it ever was, and two are two phrases at a time instead of one.
+The reason it has to be a whole second copy rather than a second thread on the first is
+that the engine allows one transcription in flight per loaded copy, which is also why the
+encoder inside a batch runs serially and why batching relieves the decode without relieving
+the encode.
+
 So **each recognizer is another complete copy of the weights**, 2.4 GB apiece for Cohere
-Transcribe, held for as long as any tuner is being captioned. The page offers every number
+Transcribe, held for as long as any tuner is being captioned. The setting takes effect when
+the model is next loaded — while streams are already captioning, the copy in memory keeps
+the number it started with, and the log says so. The page offers every number
 the model allows, up to eight, and prints the running total in gigabytes beside each one
 with a warning above the list once it is past one. Check that figure against what the
 machine actually has free. Nothing here is chosen for you: a graphics chip runs two
