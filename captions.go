@@ -8741,10 +8741,13 @@ type captionStatus struct {
 	DriverInstall gpuInstallState                  `json:"driverInstall"`
 	// Recognizer is the measured throughput, so the page can answer "will this
 	// keep up" without anybody reading a log.
-	Recognizer     recognizerReport `json:"recognizer"`
-	Persistent     bool             `json:"persistent"`
-	PersistWarning string           `json:"persistWarning"`
-	Tuners         int              `json:"tuners"`
+	Recognizer recognizerReport `json:"recognizer"`
+	// Streaming is how many tuners are busy, so the page can refuse to switch
+	// captions on in the middle of a recording.
+	Streaming      int    `json:"streaming"`
+	Persistent     bool   `json:"persistent"`
+	PersistWarning string `json:"persistWarning"`
+	Tuners         int    `json:"tuners"`
 	// MemoryWarning is spelled out when the current choice could use a lot of
 	// memory, worked out for the tuners actually being captioned rather than
 	// left as arithmetic for the reader.
@@ -9123,6 +9126,25 @@ func countCPUList(s string) int {
 }
 
 // captionedStreams is how many tuners could be captioning at the same time.
+// tunersStreaming counts tuners with a stream on them right now.
+//
+// The page uses it to refuse to switch captions on mid-stream. Enabling them is
+// no longer only a settings write: it is what asks for the graphics driver, and
+// that install is a package at a time against whatever is playing. Startup does
+// it where nothing can be tuning; asking for it in the middle of a recording is
+// the one thing this program is not allowed to make easy.
+func tunersStreaming() int {
+	tunerLock.Lock()
+	defer tunerLock.Unlock()
+	n := 0
+	for i := range tuners {
+		if tuners[i].active {
+			n++
+		}
+	}
+	return n
+}
+
 func captionedStreams(cfg captionConfig) int {
 	// Only tuners that exist. A selection left over from a larger setup would
 	// otherwise inflate every memory figure and shrink every thread share for
@@ -9277,6 +9299,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Recognizer:     recog,
+		Streaming:      tunersStreaming(),
 		Persistent:     persistent,
 		PersistWarning: persistWarning,
 		MemoryWarning:  memoryWarning(cfg),

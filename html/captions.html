@@ -126,6 +126,7 @@
                 </label>
                 <span class="badge badge-idle" id="stateBadge">Off</span>
             </div>
+            <div id="busyWarn"></div>
             <p class="footnote">
                 Transcribed on this machine and carried in the stream as ordinary CC1 captions —
                 no sidecar files, no re-encoding, no change to tune speed.
@@ -235,6 +236,43 @@ function mb(n) {
     return (n / 1048576).toFixed(1) + ' MB';
 }
 
+// Switching captions on is what asks for the graphics driver, and that install
+// runs a package at a time against whatever is playing. Startup does it where
+// nothing can be tuning; doing it in the middle of a recording is the thing not
+// to make easy. Switching them off stays available at all times — that costs
+// nothing and may well be why you came.
+//
+// Polled rather than read once, so the switch locks when a recording starts and
+// unlocks when the last one stops, without anybody reloading the page. Only
+// these two elements are touched: a full re-render would throw away whatever
+// was half-chosen in the selects below.
+function applyBusy() {
+    const enabled = document.getElementById('enabled');
+    const busy = state.streaming || 0;
+    enabled.disabled = !state.config.enabled && busy > 0;
+    document.getElementById('busyWarn').innerHTML = enabled.disabled
+        ? `<div class="warn" style="margin:0.6rem 0 0;">
+             <span class="dot"></span>
+             <div>
+               <div class="h">${busy === 1 ? 'A tuner is streaming' : busy + ' tuners are streaming'}, so captions cannot be switched on yet</div>
+               <div class="d">Turning captions on is also what installs the graphics driver, and that goes in a
+               package at a time against whatever is playing. It is done at startup where nothing can be tuning.
+               Stop the ${busy === 1 ? 'stream' : 'streams'} and this unlocks by itself. Switching captions
+               <em>off</em> is always available.</div>
+             </div>
+           </div>`
+        : '';
+}
+
+async function busyPoll() {
+    try {
+        const r = await fetch('/api/captions');
+        const s = await r.json();
+        state.streaming = s.streaming;
+        applyBusy();
+    } catch (e) {}
+}
+
 async function load() {
     const r = await fetch('/api/captions');
     state = await r.json();
@@ -244,6 +282,7 @@ async function load() {
 function render() {
     const cfg = state.config;
     document.getElementById('enabled').checked = cfg.enabled;
+    applyBusy();
     document.getElementById('runtime').textContent = state.runtime === 'ready' ? '' : state.runtime;
 
     const badge = document.getElementById('stateBadge');
@@ -572,6 +611,7 @@ async function poll() {
 }
 
 load().then(() => { if (state.download && state.download.active) poll(); });
+setInterval(busyPoll, 5000);
 </script>
 </body>
 </html>
