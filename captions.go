@@ -555,6 +555,11 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
+	// RollSpeed is how long a finished line is held before the display rolls
+	// it up, when there is nothing waiting to take its place. Taste, eyesight
+	// and the number of rows all bear on it, so it is asked rather than
+	// assumed; empty means the broadcast pace this always ran at.
+	RollSpeed string `json:"rollSpeed"`
 	// Uppercase renders captions in capitals, which is the long-standing
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
@@ -579,6 +584,7 @@ func defaultCaptionConfig() captionConfig {
 		Model:     "cohere-transcribe",
 		Language:  "en",
 		Style:     "rollup3",
+		RollSpeed: "broadcast",
 		Uppercase: true,
 		Engine:    "auto",
 		OffsetSec: 0,
@@ -2237,6 +2243,9 @@ type cea608 struct {
 	// toldRate is the picture rate the injector read out of the stream, used
 	// until this channel has clocked itself.
 	toldRate float64
+	// minRollGap is the least time between two rolls, from the page's roll
+	// speed setting.
+	minRollGap time.Duration
 }
 
 // pairRate is how many byte pairs a second this channel is clearing, measured.
@@ -2296,7 +2305,7 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool) *cea608 {
+func newCEA608(style string, upper bool, rollSpeed string) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -2304,7 +2313,7 @@ func newCEA608(style string, upper bool) *cea608 {
 	case "rollup4":
 		rows = ccRU4
 	}
-	return &cea608{rows: rows, maxCol: 32, upper: upper}
+	return &cea608{rows: rows, maxCol: 32, upper: upper, minRollGap: rollGapFor(rollSpeed)}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2430,40 +2439,55 @@ func (c *cea608) writeRune(r rune) {
 // looks like a failure — a blank line — instead of looking like a caption.
 const ccStaleAfter = 20 * time.Second
 
-// ccMinRollGap is the least time between two rolls of the display.
+// The roll speeds offered on the page: the least time between two rolls of the
+// display.
 //
-// The text itself is paced by the channel — sixty characters a second, no
+// The text itself is paced by the channel — so many characters a second, no
 // faster — but a carriage return is only two byte pairs, so a burst of
 // recognition can roll the display several times in well under a second and a
-// line leaves the screen before anyone has read it. This floor keeps a
-// finished line put for a beat; with three rows up, a line then stays visible
-// for a few seconds after it completes, which is what broadcast roll-up looks
-// like.
-const ccMinRollGap = 1200 * time.Millisecond
+// line leaves the screen before anyone has read it. This floor keeps a finished
+// line put for a beat, which is what broadcast roll-up looks like.
+//
+// How long a beat should be is a matter of taste and eyesight, and of how many
+// rows are up: at two rows a roll is the only thing standing between a line and
+// the edge of the screen, while at four it has three more rows to travel. So it
+// is a setting rather than a number, and the default is the broadcast one it
+// has always been.
+const (
+	rollGapBroadcast = 1200 * time.Millisecond
+	rollGapBrisk     = 600 * time.Millisecond
+	rollGapInstant   = 0
+)
 
-// ccRollPressureSec is the backlog, in seconds of channel time, past which the
-// pacing yields. Holding a roll holds everything queued behind it, so once more
-// than this much text is waiting, currency wins over composure and the display
-// rolls at channel speed.
+// rollGapFor maps the page's roll speed onto that floor. Anything unrecognized,
+// including the empty string a configuration written before this setting
+// existed will have, is the broadcast pace it was already running at.
+func rollGapFor(speed string) time.Duration {
+	switch speed {
+	case "brisk":
+		return rollGapBrisk
+	case "instant":
+		return rollGapInstant
+	}
+	return rollGapBroadcast
+}
+
+// waiting reports whether anything is queued behind the carriage return at the
+// head — that is, whether holding the roll is holding words back.
 //
-// It is a duration and not a number of byte pairs on purpose, because a count
-// of pairs is a number about one model on one stream. The old figure was sixty
-// pairs, which was written as "about two seconds" — true at thirty pictures a
-// second, wrong at sixty, and unreachable for the model that was actually
-// running. A phrase model hands over one phrase at a time, three or four
-// seconds of speech, which is under thirty pairs once the row controls are
-// counted; the backlog sat at half the threshold for ever, the valve never
-// opened, and every carriage return took the full dwell with the rest of the
-// sentence waiting behind it. Two rolls to a phrase, a second and a bit each,
-// on every phrase.
+// This is the whole of the rule the pacing needs, and every threshold tried
+// here was an approximation of it. A count of pairs was a number about one
+// model on one stream, and half a second of channel time was a number about
+// one taste; both asked "is a lot waiting", when the question is "is anything
+// waiting". A finished line may sit and be read when there is nothing to say.
+// The moment there are words recognized and not yet on screen, every
+// millisecond of dwell is a millisecond they are late by, and no amount of
+// composure is worth that — least of all in the middle of a sentence, where a
+// wrapped line holds back the end of the phrase it belongs to.
 //
-// Half a second of unaired text is a statement about the viewer rather than
-// about any model: there are words recognized and not yet on screen, and
-// holding them back is costing more than the dwell is buying. A model that
-// speaks in longer phrases, or shorter ones, or a word at a time, is measured
-// by the same sentence — which is the point, since the next one will not
-// resemble either of these.
-const ccRollPressureSec = 0.5
+// Two, because a control code occupies the queue twice: the pair and the copy
+// a decoder is only guaranteed to recognize when it arrives back to back.
+func (c *cea608) waiting() bool { return len(c.queue) > 2 }
 
 // cc608NominalRate is the pair rate assumed until the channel has been running
 // long enough to measure its own. Field 1 of CEA-608 carries one pair per
@@ -2496,7 +2520,7 @@ func (c *cea608) next() [2]byte {
 		switch {
 		case c.crCopies > 0:
 			c.crCopies--
-		case time.Since(c.lastCR) < ccMinRollGap && float64(len(c.queue)) < ccRollPressureSec*c.pairRate():
+		case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
 			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 		default:
 			c.lastCR = time.Now()
@@ -5494,7 +5518,7 @@ type captionEngine struct {
 // seconds of captions on a cold start and nothing at all on a warm one.
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
-		enc:     newCEA608(cfg.Style, cfg.Uppercase),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
