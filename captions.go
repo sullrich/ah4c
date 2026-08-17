@@ -6561,13 +6561,34 @@ func isStockHallucination(text string) bool {
 // So the test is the ratio between the two. Two is conservative — ordinary
 // speech runs well above it, and a stretch that flat is not a sentence anybody
 // said.
-const vadCrestMin = 2.0
+// One and a half, not two. Two was set against a measurement taken over the
+// loud frames alone — a set selected for being level, whose peak is close to
+// its average by construction — so it read ordinary speech as flat and held
+// back everything. Measured properly, across the quiet gaps as well, speech
+// runs several times its own average and steady noise sits near one and a
+// quarter. The floor is left low enough that being wrong again costs a
+// hallucination rather than a caption, and the measured figure is printed
+// whenever something is held back, so the number can be argued with from
+// evidence.
+const vadCrestMin = 1.5
 
-func phraseIsSpeech(loudest, levelSum float64, n int) bool {
+// phraseCrest is how far the loudest moment of a phrase stands above its
+// average, and whether that is enough to be speech.
+func phraseCrest(loudest, levelSum float64, n int) (float64, bool) {
 	if n == 0 || levelSum <= 0 {
-		return false
+		return 0, false
 	}
-	return loudest/(levelSum/float64(n)) >= vadCrestMin
+	crest := loudest / (levelSum / float64(n))
+	return crest, crest >= vadCrestMin
+}
+
+// plural picks the right word for a count, because "1 stretches" is the sort of
+// thing that makes a log look machine-written.
+func plural(n int64, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // vadBar is the level at which audio counts as somebody talking. It follows the
@@ -6863,13 +6884,19 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			}
 			silenceRun = 0
 			speechLen += float64(vadFrame) / asrSampleRate
-			loudest = math.Max(loudest, rms)
-			levelSum += rms
-			levelN++
 		} else {
 			silenceRun += float64(vadFrame) / asrSampleRate
 		}
 		pending = append(pending, frame...)
+		if speaking {
+			// Every frame of the phrase, loud or quiet. The gaps between
+			// syllables are the whole point: measuring only the frames that
+			// already passed the bar measures a set selected for being level,
+			// which is how this came to hold back ordinary speech.
+			loudest = math.Max(loudest, rms)
+			levelSum += rms
+			levelN++
+		}
 
 		if !speaking {
 			// Hold only the lead-in window while the channel is quiet.
@@ -6908,10 +6935,11 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		if speechLen < vadMinSpeech {
 			continue
 		}
-		if !phraseIsSpeech(loudest, levelSum, levelN) {
+		if crest, ok := phraseCrest(loudest, levelSum, levelN); !ok {
 			n := atomic.AddInt64(&e.gated, 1)
 			if n == 1 || n%25 == 0 {
-				logger("[CC] %s held back %d stretches of steady noise that were not speech", e.label, n)
+				logger("[CC] %s held back %s of steady noise that was not speech (peak %.1f times the average, floor is %.1f)",
+					e.label, plural(n, "stretch", "stretches"), crest, vadCrestMin)
 			}
 			speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 			continue
