@@ -8539,9 +8539,12 @@ type captionStream struct {
 	pr     *io.PipeReader
 	pw     *io.PipeWriter
 	once   sync.Once
-	// pump starts the reading loop, and not before something asks for a byte.
-	// See Read.
-	pump sync.Once
+	// pump starts the reading loop, and not before the gate has let a byte
+	// through. first holds that byte's chunk until the loop can take it. See
+	// Read.
+	pump    sync.Once
+	started bool
+	first   []byte
 }
 
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
@@ -8638,6 +8641,22 @@ func (cs *captionStream) inject() {
 	bw := bufio.NewWriterSize(cs.pw, 64*1024)
 	inj := newCaptionInjector(bw, cs.engine.enc, cs.engine.enc708, cs.engine.label)
 	buf := make([]byte, 64*1024)
+	// The chunk Read already took directly, before this loop existed. It is the
+	// first of the stream and carries the program tables the injector needs, so
+	// it goes through the injector like every other chunk rather than being
+	// handed to the DVR raw.
+	if len(cs.first) > 0 {
+		cs.engine.feed(cs.first)
+		if _, werr := inj.Write(cs.first); werr != nil {
+			cs.pw.CloseWithError(werr)
+			return
+		}
+		if werr := bw.Flush(); werr != nil {
+			cs.pw.CloseWithError(werr)
+			return
+		}
+		cs.first = nil
+	}
 	for {
 		n, err := cs.src.Read(buf)
 		if n > 0 {
@@ -8660,32 +8679,36 @@ func (cs *captionStream) inject() {
 	}
 }
 
-// Read starts the pump on the first call, and that timing is the whole point.
+// Read is a plain pass-through until the first byte arrives, and only then
+// becomes the captioned path.
 //
-// The pump used to start in maybeWrapCaptions, one line above the return. It
-// reads from src in a loop, and src is the chain that ends at reader.Read —
-// which is where ah4c takes its audio baseline, runs the tune script and then
-// waits for the box to confirm playback. So captioning a tuner moved all of
-// that from "when the DVR pulls" to "the instant the reader was built", a
-// couple of hundred milliseconds earlier and before the HTTP response had even
-// been written.
+// Nothing about captions may be in the way while ah4c is deciding whether the
+// box is playing. That window is the gate holding every byte back, and
+// waitForPlayback polling the box over adb beside it; the captioned path adds a
+// pipe, a pump goroutine, an injector and a second buffer to the stream during
+// exactly that stretch. Measured, that difference is the whole failure:
+// confirmation succeeds with captions off and times out with them on, on the
+// same box and the same channel.
 //
-// On a warm box that changes nothing. On the first tune after the container
-// starts, the box has been idle and is slow to bring its player up after the
-// wake, and those few hundred milliseconds land the deep link and the baseline
-// inside that transition instead of after it. The app folds the tune into the
-// session it is already building rather than starting a new one, no new audio
-// player id ever appears, and waitForPlayback times out — every time, on the
-// first tune, only when captions were on. With captions off the same box
-// confirms in about two and a half seconds.
+// So until a byte actually comes through, this calls straight into src, the way
+// the un-captioned reader does — same call, same goroutine, same buffer. A byte
+// arriving means the gate has opened and confirmation is over, and only then is
+// the pump started, the first chunk handed to it, and the injector put in the
+// path.
 //
-// So the rule captions are supposed to obey is stricter than "be quick on the
-// tune path": nothing here may change *when* anything on the tune path
-// happens. Reading only when read from restores the un-captioned ordering
-// exactly, because the DVR is once again the thing that asks for the first
-// byte.
+// Nothing is lost by the delay: the gate emits the program tables at release,
+// so the first chunk carries what the injector needs to identify the stream.
 func (cs *captionStream) Read(p []byte) (int, error) {
-	cs.pump.Do(func() { go cs.run() })
+	if !cs.started {
+		n, err := cs.src.Read(p)
+		if n > 0 {
+			cs.started = true
+			cs.first = append([]byte(nil), p[:n]...)
+			cs.pump.Do(func() { go cs.run() })
+			return 0, nil
+		}
+		return 0, err
+	}
 	return cs.pr.Read(p)
 }
 
