@@ -2839,7 +2839,18 @@ func dtvccRunes(w string) []byte {
 		case r >= 0x20 && r < 0x7F:
 			out = append(out, byte(r))
 		case r >= 0xA0 && r <= 0xFF:
+			// Latin-1 as itself: accented letters the 608 side has to fold down
+			// to bare vowels survive here, which is the second thing this
+			// format is better at.
 			out = append(out, byte(r))
+		default:
+			// Everything else borrows the fold the 608 side uses. Dropping it
+			// was worse than folding it — a caption reading "koda" where the
+			// other track manages "Skoda" is a format that carries more and
+			// says less.
+			if b, ok := cc608Fold[r]; ok {
+				out = append(out, b)
+			}
 		}
 	}
 	return out
