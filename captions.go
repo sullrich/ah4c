@@ -6625,9 +6625,24 @@ func (e *captionEngine) pumpAudio() {
 // is what normally fires during continuous speech and keeps the cut off the
 // middle of a word. The hard ceiling is only a backstop.
 const (
-	vadFrame     = asrSampleRate / 50 // 20 ms
-	vadMinSpeech = 0.6                // ignore blips shorter than this
-	vadMinPhrase = 1.8                // past this, a word gap is enough to cut
+	vadFrame = asrSampleRate / 50 // 20 ms
+	// Ignore blips shorter than this — but a word is not a blip.
+	//
+	// Six tenths of a second was set when a duration test was the only thing
+	// standing between the model and a stretch of room tone, and it was doing
+	// two jobs: telling noise from speech, and telling a blip from a word. It
+	// was too blunt for the second. "Yes", "No", "Right", "Thanks", a name
+	// called across a room — these are three to five tenths of a second of
+	// speech, and every one of them was thrown away whole, which the log now
+	// says out loud and which is where the last of the missing words were
+	// going.
+	//
+	// The shape test does the first job properly now: room tone is flat and
+	// speech is not, whatever its length. So this is free to be what its name
+	// says, a floor under blips rather than a floor under short answers. Thirty
+	// five hundredths keeps a one-word reply and still refuses a door closing.
+	vadMinSpeech = 0.35
+	vadMinPhrase = 1.8 // past this, a word gap is enough to cut
 	// The gap between two spoken words — and it has to be a gap between words
 	// rather than a gap inside one.
 	//
