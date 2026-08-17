@@ -4440,6 +4440,7 @@ const (
 	txABISessionParams = 1
 	txABIRunParams     = 2
 	txABIStreamParams  = 3
+	txABIToken         = 8
 	txABIStreamUpdate  = 9
 	txABIStreamText    = 10
 	txABIBackendDevice = 13
@@ -4527,6 +4528,10 @@ var (
 	txStatusString  func(status int32) string
 	txInitBackends  func(dir string) int32
 	txABIStructSize func(which int32) uint64
+	txNTokens       func(session uintptr) int32
+	txGetToken      func(session uintptr, i int32, out unsafe.Pointer) int32
+	txBatchNTokens  func(session uintptr, i int32) int32
+	txBatchGetToken func(session uintptr, i, j int32, out unsafe.Pointer) int32
 
 	txDeviceCount func() int32
 	txDeviceInit  func(p unsafe.Pointer)
@@ -4663,6 +4668,10 @@ func initTranscribe(variant string) error {
 		purego.RegisterLibFunc(&txStreamParamsInit, handle, "transcribe_stream_params_init")
 		purego.RegisterLibFunc(&txStreamUpdateInit, handle, "transcribe_stream_update_init")
 		purego.RegisterLibFunc(&txStreamTextInit, handle, "transcribe_stream_text_init")
+		purego.RegisterLibFunc(&txNTokens, handle, "transcribe_n_tokens")
+		purego.RegisterLibFunc(&txGetToken, handle, "transcribe_get_token")
+		purego.RegisterLibFunc(&txBatchNTokens, handle, "transcribe_batch_n_tokens")
+		purego.RegisterLibFunc(&txBatchGetToken, handle, "transcribe_batch_get_token")
 		purego.RegisterLibFunc(&txDeviceCount, handle, "transcribe_backend_device_count")
 		purego.RegisterLibFunc(&txDeviceInit, handle, "transcribe_backend_device_init")
 		purego.RegisterLibFunc(&txGetDevice, handle, "transcribe_get_backend_device")
@@ -4920,6 +4929,7 @@ func txCheckABI() error {
 		{"stream update", txABIStreamUpdate, unsafe.Sizeof(txStreamUpdate{})},
 		{"stream text", txABIStreamText, unsafe.Sizeof(txStreamText{})},
 		{"backend device", txABIBackendDevice, unsafe.Sizeof(txBackendDevice{})},
+		{"token", txABIToken, unsafe.Sizeof(txToken{})},
 	} {
 		if got := txABIStructSize(s.id); got != uint64(s.size) {
 			return fmt.Errorf("transcribe.cpp %s is %d bytes here and %d bytes in the engine; this build of ah4c expects transcribe.cpp %s",
@@ -5286,6 +5296,110 @@ func recognizerSnapshot() recognizerReport {
 	return r
 }
 
+// txToken is one token of a result, laid out to match transcribe.h. Only p is
+// read; the rest are here because the struct has to be the right size and the
+// library writes all of it.
+//
+// The size is checked against the engine's own answer at startup, with every
+// other struct in this file. A layout that has drifted is caught by a message
+// naming the release rather than by writing over the stack.
+type txToken struct {
+	structSize uint64
+	id         int32
+	p          float32
+	t0ms       int64
+	t1ms       int64
+	segIndex   int32
+	wordIndex  int32
+	text       *byte
+}
+
+// tokenConfidence averages the engine's per-token probabilities for one result.
+//
+// This is the engine's own number and not a heuristic of ours. From
+// transcribe.h, in as many words:
+//
+//	"transcribe_token::p is the per-token probability when the architecture
+//	produces one, or NaN when it does not. ... callers should treat it as a
+//	confidence hint, not a calibrated probability."
+//
+// A hint is what it is used as. The question being asked of it is not "how sure
+// is the model" in any absolute sense — it is whether a phrase the model
+// invented over a stretch of music scores lower than a phrase somebody actually
+// said, on this audio, on this machine. That is a question about the separation
+// between two piles of numbers and not about any one of them, which is why this
+// only reports for now and decides nothing.
+//
+// NaN means the family publishes no probability, and one NaN is taken as the
+// answer for the whole result: a family either produces these or it does not,
+// and averaging the ones that are not NaN would invent a figure out of whichever
+// tokens happened to have one. Not-ok means no opinion, and no opinion must
+// never become a reason to drop a caption.
+//
+// Split from the reading of it so it can be tested without an engine, which is
+// the rule for anything that will end up deciding whether text is thrown away.
+func tokenConfidence(n int, at func(int) (float32, bool)) (mean float64, counted int, ok bool) {
+	var sum float64
+	for i := 0; i < n; i++ {
+		p, present := at(i)
+		if !present {
+			continue
+		}
+		v := float64(p)
+		if math.IsNaN(v) {
+			return 0, 0, false
+		}
+		sum += v
+		counted++
+	}
+	if counted == 0 {
+		return 0, 0, false
+	}
+	return sum / float64(counted), counted, true
+}
+
+// confidence reads the tokens of the result sitting in the session. The direct
+// call and the batch call fill different accessors, so which one to ask is the
+// caller's to say — exactly as it is for the text.
+func (w *txWorker) confidence(batchIndex int, batched bool) (float64, int, bool) {
+	if txNTokens == nil || txGetToken == nil {
+		return 0, 0, false
+	}
+	read := func(i int) (float32, bool) {
+		t := txToken{structSize: uint64(unsafe.Sizeof(txToken{}))}
+		var st int32
+		if batched {
+			st = txBatchGetToken(w.session, int32(batchIndex), int32(i), unsafe.Pointer(&t))
+		} else {
+			st = txGetToken(w.session, int32(i), unsafe.Pointer(&t))
+		}
+		// A row that is not there comes back with text NULL rather than an
+		// error, which is the header's own way of saying "no such row".
+		if st != txOK || t.text == nil {
+			return 0, false
+		}
+		return t.p, true
+	}
+	if batched {
+		return tokenConfidence(int(txBatchNTokens(w.session, int32(batchIndex))), read)
+	}
+	return tokenConfidence(int(txNTokens(w.session)), read)
+}
+
+// noteConfidence prints what the engine thought of a phrase beside the phrase.
+//
+// Deliberately one line per phrase, and deliberately temporary. It is here to
+// find out whether the separation exists at all before anything is built on it:
+// the hallucination this is aimed at arrives over music and commercials, and if
+// those phrases do not score below ordinary speech on this audio then there is
+// nothing here and the line comes out again along with the idea.
+func noteConfidence(mean float64, counted int, ok bool, text string) {
+	if !ok || text == "" {
+		return
+	}
+	logger("[CC] confidence %.3f over %d tokens: %q", mean, counted, text)
+}
+
 // txWorker is one copy of the weights and the session that runs it.
 type txWorker struct {
 	shared  *sharedTxModel
@@ -5587,7 +5701,10 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 	}
 	if len(batch) == 1 {
 		// The direct call fills the single-result accessors, not the batch ones.
-		batch[0].reply <- txBatchReply{text: cleanRecognized(txFullText(w.session))}
+		text := cleanRecognized(txFullText(w.session))
+		mean, counted, have := w.confidence(0, false)
+		noteConfidence(mean, counted, have, text)
+		batch[0].reply <- txBatchReply{text: text}
 	} else {
 		nres := int(txBatchNResults(w.session))
 		for i, r := range batch {
@@ -5599,7 +5716,10 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 				r.reply <- txBatchReply{err: fmt.Errorf("%s", txStatusString(pst))}
 				continue
 			}
-			r.reply <- txBatchReply{text: cleanRecognized(txBatchFullText(w.session, int32(i)))}
+			text := cleanRecognized(txBatchFullText(w.session, int32(i)))
+			mean, counted, have := w.confidence(i, true)
+			noteConfidence(mean, counted, have, text)
+			r.reply <- txBatchReply{text: text}
 		}
 	}
 
