@@ -2217,7 +2217,7 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
 				return
 			}
-			if samePiids(base, last) && now == sig {
+			if sig != "" && samePiids(base, last) && now == sig {
 				if static++; static >= playbackStatic {
 					logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
 						tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
