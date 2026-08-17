@@ -491,7 +491,6 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			if ready != nil {
 				body = newGateReader(body, ready)
 			}
-			// Captions wrap the outermost reader to see the bytes the DVR will.
 			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
@@ -802,7 +801,6 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
-	// Closed captions
 	r.GET("/captions", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "captions.html", nil)
 	})
@@ -842,7 +840,6 @@ func run() error {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
-		// The model is optional; without it the saved model's engine is fetched.
 		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -2129,7 +2126,6 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
-// PLAYBACK_TIMEOUT (seconds): override playbackTimeout per machine.
 func playbackBudget() time.Duration {
 	if s := os.Getenv("PLAYBACK_TIMEOUT"); s != "" {
 		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
