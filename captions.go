@@ -6417,6 +6417,27 @@ func (e *captionEngine) recognize() {
 			window = window[1:]
 			e.captionResult(p.item, r.text, r.err, time.Since(p.sent))
 		case <-lost:
+			// Being made to wait is not the same as having failed, and this
+			// could not tell them apart. Inference stops dead while any tune
+			// has yet to deliver its video, and a tune that never confirms
+			// holds everything for the best part of a minute — comfortably
+			// longer than the budget a phrase is given. So a burst of tuners
+			// starting, which is exactly what a container start looks like,
+			// declared every phrase in flight unanswered, threw away work the
+			// recognizer had been told not to do, and said the recognizer was
+			// at fault. What a viewer saw was captions collapsing on the
+			// stream that was already playing whenever another one started.
+			//
+			// Time spent held on purpose does not count against the phrase.
+			// The budget is for a recognizer that has wedged, and while a tune
+			// is in flight there is nothing to conclude, so it starts again.
+			// A phrase that does come back too late to be worth showing is
+			// still discarded on arrival, by the freshness check that has
+			// always been there for it.
+			if tunesPending() {
+				window[0].giveUp = time.Now().Add(txRunDeadline + 8*time.Second)
+				continue
+			}
 			window = window[1:]
 			logger("[CC] %s the shared recognizer did not answer", e.label)
 		case item, ok := <-in:
