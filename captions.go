@@ -2740,7 +2740,7 @@ func (c *cea708) defineWindow() {
 	// Define window 0: visible, both locks off, top priority.
 	//
 	// The anchor is relative, so it holds its place whatever the picture size:
-	// bottom-centre, ninety percent of the way down, halfway across. Row and
+	// bottom-center, ninety percent of the way down, halfway across. Row and
 	// column counts are written one less than they are, which is how the
 	// format spends its four and six bits.
 	c.pending = append(c.pending,
@@ -2748,14 +2748,14 @@ func (c *cea708) defineWindow() {
 		0x20,                 // visible, no row or column lock, priority 0
 		0x80|90,              // relative positioning, anchor 90% down
 		50,                   // anchor 50% across
-		7<<4|byte(c.rows-1),  // anchor point bottom-centre, row count
+		7<<4|byte(c.rows-1),  // anchor point bottom-center, row count
 		byte(dtvccColumns-1), // column count
 		4<<3|1,               // window style 4 (roll-up, word wrap), pen style 1
 	)
 	// And then say the same things in full, because a style number is a
 	// promise about a table rather than an instruction.
 	//
-	// Byte three is where the behaviour lives: word wrap on, print left to
+	// Byte three is where the behavior lives: word wrap on, print left to
 	// right, scroll bottom to top — which is what makes it a roll-up — and
 	// text left justified.
 	c.pending = append(c.pending,
@@ -6569,7 +6569,7 @@ const (
 // was said in it, and it answers, because answering is what it does.
 //
 // There is nothing on the engine's side to lean on. Its run parameters carry a
-// task, a language, punctuation and inverse text normalisation, and that is
+// task, a language, punctuation and inverse text normalization, and that is
 // all: no no-speech threshold, no blank suppression, no confidence a caller
 // could threshold on. The header says so and the README says nothing at all.
 // So the gate is here or it is nowhere.

@@ -70,7 +70,7 @@ var cohereQuirks = modelQuirks{
 	// prevent low-volume, floor noise from turning into hallucinations." Its
 	// words, and the reason the gate exists. There is nothing on the engine's
 	// side to use instead: its run parameters carry a task, a language,
-	// punctuation and inverse text normalisation, and no threshold of any kind.
+	// punctuation and inverse text normalization, and no threshold of any kind.
 	NoiseGate: true,
 
 	// And for what gets past the gate, because applause and a music bed vary
