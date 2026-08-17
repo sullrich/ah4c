@@ -147,25 +147,18 @@
             </p>
             <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                They differ in quality, and the difference is bought with delay. <b>Cohere</b>
-                waits for each sentence to finish and then transcribes the whole thing, so it has
-                the most to work with and is comfortably the most accurate — and can never be
+                Accuracy is bought with delay. <b>Cohere</b> waits for a sentence to end and
+                transcribes it whole, which makes it the most accurate and means it can never be
                 quicker than the sentence is long. <b>Nemotron</b> and <b>Moonshine</b> type as
-                they hear: about a second behind, and blind to whatever is said next, which is
-                where the accuracy goes. A word that is only decidable from the three words after
-                it is a word a streaming model has to guess at and a sentence model does not. No
-                setting closes that gap in either direction, so the question is which of the two
-                you would rather have.
+                they hear, about a second behind, guessing at words a sentence model would have
+                had the context for. No setting closes that gap either way.
             </p>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                Language decides it more often than either. Cohere reads eight; Nemotron reads
-                thirty-two and is the only real answer for the other twenty-four. Between the two
-                streaming ones it is size — Nemotron is the larger by a long way and the one to
-                pick unless the machine cannot hold it, while Moonshine fits a Raspberry Pi and
-                understands English only. Memory runs opposite to
-                what you would expect: the sentence model loads one copy and shares it with every
-                tuner, while each streaming tuner loads a copy of its own — so the accurate
-                choice gets cheaper the more tuners you caption, and the quick ones get dearer.
+                Language usually decides it: Cohere reads eight, Nemotron thirty-two. Moonshine is
+                English only and small enough for a Raspberry Pi. Memory runs backwards from what
+                you would expect — Cohere loads one copy and shares it with every tuner, while
+                each streaming tuner loads its own, so the accurate choice gets cheaper the more
+                tuners you caption.
             </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
