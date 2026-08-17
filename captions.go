@@ -563,6 +563,10 @@ type captionConfig struct {
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
+	// SpeedWPM is how fast captions are let onto the screen, in words a minute.
+	// Zero means the default. The guidance ranges from 120 to 160 and the page
+	// offers exactly that.
+	SpeedWPM int `json:"speedWPM"`
 	// PhraseSec is how long a phrase model may listen before it cuts, chosen on
 	// the page from what the model offers. Zero means the model's own figure.
 	PhraseSec float64 `json:"phraseSec"`
@@ -2674,8 +2678,10 @@ type cea608 struct {
 	// minRollGap is the least time between two rolls, from the page's roll
 	// speed setting.
 	minRollGap time.Duration
-	// credit is the pacing allowance, in characters, accrued per picture.
+	// credit is the pacing allowance, in characters, accrued per picture, and
+	// pace the rate it accrues at.
 	credit float64
+	pace   float64
 	// pendingBreak is a carriage return the last phrase finished with and this
 	// one has yet to spend. See pushText.
 	pendingBreak bool
@@ -2738,7 +2744,7 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool, rollSpeed string) *cea608 {
+func newCEA608(style string, upper bool, rollSpeed string, wpm int) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -2746,7 +2752,15 @@ func newCEA608(style string, upper bool, rollSpeed string) *cea608 {
 	case "rollup4":
 		rows = ccRU4
 	}
-	return &cea608{rows: rows, maxCol: 32, upper: upper, minRollGap: rollGapFor(rollSpeed)}
+	n := 3
+	switch rows {
+	case ccRU2:
+		n = 2
+	case ccRU4:
+		n = 4
+	}
+	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm),
+		minRollGap: rollGapFloor(rollGapFor(rollSpeed), n)}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2996,7 +3010,62 @@ const cc608NominalRate = 29.97
 // pace set to speaking speed matches them over any window longer than one
 // phrase. What it cannot absorb is a genuine backlog, and that is what the
 // catch-up below is for.
+// ccMinOnScreen is how long a line must be readable before it leaves, from the
+// captioning guidance: a minimum of one second for a single line, one and a half
+// for two, two for three. A roll-up does not put lines up together — each row is
+// added and the oldest scrolls away — so what a row gets is the gap between
+// rolls multiplied by the number of rows above it.
+//
+// So the floor is on the product rather than on the gap, and it is a floor and
+// not a setting. Roll speed is taste; a line leaving before it can be read is
+// not a taste, it is a caption nobody got to have.
+func ccMinOnScreen(rows int) time.Duration {
+	switch {
+	case rows <= 1:
+		return time.Second
+	case rows == 2:
+		return 1500 * time.Millisecond
+	default:
+		return 2 * time.Second
+	}
+}
+
+// rollGapFloor raises a chosen roll gap to whatever keeps a line on screen for
+// ccMinOnScreen. Immediate becomes the fastest the guidance allows rather than
+// no gap at all.
+func rollGapFloor(gap time.Duration, rows int) time.Duration {
+	if rows < 1 {
+		rows = 1
+	}
+	if min := ccMinOnScreen(rows) / time.Duration(rows); gap < min {
+		return min
+	}
+	return gap
+}
+
 const cc608Pace = 15.0
+
+// captionSpeeds is what the page offers, in words a minute. The published
+// guidance puts subtitle speed between 120 and 160 depending on audience and
+// medium — the BBC at the top of it, the DCMP lower — so the range is offered
+// whole rather than a number chosen out of it on somebody's behalf.
+var captionSpeeds = []int{120, 130, 140, 150, 160}
+
+// ccCharsPerWord converts words a minute into characters a second.
+//
+// Five point eight is a word with its trailing space in English prose, which is
+// what the characters-a-second guidance is counted against: twenty at the most,
+// twelve to eighteen comfortable. 150 words a minute lands at 14.5, mid-band.
+const ccCharsPerWord = 5.8
+
+func paceFor(wpm int) float64 {
+	for _, w := range captionSpeeds {
+		if wpm == w {
+			return float64(wpm) * ccCharsPerWord / 60
+		}
+	}
+	return cc608Pace
+}
 
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
@@ -3006,9 +3075,9 @@ func (c *cea608) next() [2]byte {
 	// being current matters more than reading evenly and the channel is used
 	// for what it is worth.
 	if rate := c.pairRate(); rate > 0 && !c.waiting() {
-		c.credit += cc608Pace / rate
-		if c.credit > cc608Pace {
-			c.credit = cc608Pace
+		c.credit += c.pace / rate
+		if c.credit > c.pace {
+			c.credit = c.pace
 		}
 		if c.credit < 1 {
 			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
@@ -6493,7 +6562,7 @@ type captionEngine struct {
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
 		quirks:  quirksFor(m),
-		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed, cfg.SpeedWPM),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
@@ -8656,6 +8725,8 @@ type captionStatus struct {
 	// Recognizer is the measured throughput, so the page can answer "will this
 	// keep up" without anybody reading a log.
 	Recognizer recognizerReport `json:"recognizer"`
+	// Speeds is what the page offers for caption speed, in words a minute.
+	Speeds []int `json:"speeds"`
 	// Streaming is how many tuners are busy, so the page can refuse to switch
 	// captions on in the middle of a recording.
 	Streaming      int    `json:"streaming"`
@@ -9220,6 +9291,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeVersion: needed.Version,
 		RuntimeURL:     engineURL,
 		Recognizer:     recog,
+		Speeds:         captionSpeeds,
 		Streaming:      tunersStreaming(),
 		Persistent:     persistent,
 		PersistWarning: persistWarning,
