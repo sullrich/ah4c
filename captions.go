@@ -8203,13 +8203,27 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		}
 		return
 	}
+	// The line breaks where the speaker stopped, not where this code cut.
+	//
+	// It broke after every phrase. A phrase is two to four seconds, which is
+	// five to ten words, so every row held one phrase and then ended — half a
+	// line of a forty-two column window used, and a roll for each one whether
+	// the line was full or not. Reported as captions not using the screen and
+	// scrolling away faster than they can be read, which is both halves of the
+	// same fault.
+	//
+	// atPause is already the answer and is already carried this far for
+	// trimFalseStop, which strips the full stop the model puts on a fragment
+	// this code cut mid-sentence. The same fragments should not end a line
+	// either: they flow on, fill the width, and wrap where the window wraps.
+	// A real pause ends the line, which is what a pause is.
 	if d := e.cfg.OffsetSec; d > 0 {
 		// Hold the phrase back for hand-tuned sync. The video is never delayed,
 		// so this only ever pushes text later.
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, true) })
+		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, item.atPause) })
 		return
 	}
-	e.write(text, true)
+	e.write(text, item.atPause)
 }
 
 // trimFalseStop removes a full stop the speaker did not make.
