@@ -33,6 +33,9 @@ import (
 func otherGPU() (util, mem, power string) {
 	util, mem, power = amdSysfs()
 	if util == "" {
+		util = drmGPUString()
+	}
+	if util == "" {
 		util, _ = intelGPUStrings()
 	}
 	return util, mem, power
@@ -81,6 +84,122 @@ func amdSysfs() (util, mem, power string) {
 		}
 	}
 	return util, mem, power
+}
+
+// GPU busyness from DRM fdinfo, which needs nothing but /dev/dri.
+//
+// The kernel accounts GPU time per client on the file descriptor itself. Every
+// process holding a DRM fd has, in /proc/<pid>/fdinfo/<fd>, a line per engine
+// with the nanoseconds that client has been busy on it:
+//
+//	drm-engine-render:  12345678 ns
+//	drm-engine-copy:    0 ns
+//
+// Two reads a second apart give the fraction of that second the engine was
+// working, which is what a utilisation figure is. It is our own fds, so it
+// needs no permission beyond having opened them, and the device node is already
+// passed through or captioning would not run at all.
+//
+// This is the same accounting intel_gpu_top presents, reached without the perf
+// interface it uses. That matters because perf_event_open is on Docker's
+// default seccomp deny list, so the tool fails inside a container even when it
+// is installed — and it is not installed. The interface is common to i915 and
+// amdgpu, so one reader serves both.
+//
+// What it measures is this program's share rather than the whole chip. For a
+// graph of what captioning costs, that is the more useful of the two anyway.
+var (
+	fdinfoMu   sync.Mutex
+	fdinfoBusy float64
+	fdinfoSeen time.Time
+	fdinfoOnce sync.Once
+)
+
+// drmBusy reads the engine totals across every DRM fd this process holds.
+func drmBusy() (map[string]float64, bool) {
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return nil, false
+	}
+	out := map[string]float64{}
+	found := false
+	for _, fd := range fds {
+		target, err := os.Readlink("/proc/self/fd/" + fd.Name())
+		if err != nil || !strings.HasPrefix(target, "/dev/dri/") {
+			continue
+		}
+		b, err := os.ReadFile("/proc/self/fdinfo/" + fd.Name())
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			name, rest, ok := strings.Cut(line, ":")
+			if !ok || !strings.HasPrefix(name, "drm-engine-") {
+				continue
+			}
+			v, err := strconv.ParseFloat(strings.Fields(strings.TrimSpace(rest))[0], 64)
+			if err != nil {
+				continue
+			}
+			out[strings.TrimPrefix(name, "drm-engine-")] += v
+			found = true
+		}
+	}
+	return out, found
+}
+
+// sampleDRM keeps a utilisation figure from two reads a second apart.
+func sampleDRM() {
+	prev, ok := drmBusy()
+	last := time.Now()
+	for {
+		time.Sleep(time.Second)
+		now, ok2 := drmBusy()
+		at := time.Now()
+		if ok && ok2 {
+			elapsed := float64(at.Sub(last).Nanoseconds())
+			busy := 0.0
+			for name, v := range now {
+				// The busiest engine, not the sum: four engines at half is a
+				// chip half used, not one at two hundred percent.
+				if d := v - prev[name]; d > busy {
+					busy = d
+				}
+			}
+			if elapsed > 0 {
+				pct := busy / elapsed * 100
+				if pct > 100 {
+					pct = 100
+				}
+				fdinfoMu.Lock()
+				fdinfoBusy, fdinfoSeen = pct, at
+				fdinfoMu.Unlock()
+			}
+		}
+		prev, ok, last = now, ok2, at
+	}
+}
+
+// drmGPUString is the utilisation figure, empty when there is none.
+func drmGPUString() string {
+	// Started unconditionally, not only when a DRM fd already exists.
+	//
+	// The device is opened when the caption engine loads its model, which is
+	// well after the first time anybody can open the status page. Gating the
+	// sampler on fds being present at the first call means a page opened early
+	// consumes the once, finds nothing, and never looks again — the same stale
+	// answer that made the driver install report a loader it had just
+	// installed as missing.
+	//
+	// It costs a directory read a second on a machine with no GPU, and it
+	// starts reporting by itself the moment one appears.
+	fdinfoOnce.Do(func() { go sampleDRM() })
+	fdinfoMu.Lock()
+	defer fdinfoMu.Unlock()
+	if fdinfoSeen.IsZero() || time.Since(fdinfoSeen) > time.Minute {
+		return ""
+	}
+	return strconv.FormatFloat(fdinfoBusy, 'f', 2, 64)
 }
 
 // Intel engine busyness, from intel_gpu_top.
@@ -154,9 +273,12 @@ func readIntelGPU() {
 	if err != nil {
 		return
 	}
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
 	if err := cmd.Start(); err != nil {
 		return
 	}
+	defer noteIntelFailure(&errBuf)
 	defer func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -187,6 +309,30 @@ func readIntelGPU() {
 		intelMu.Unlock()
 	}
 }
+
+// noteIntelFailure explains the one failure that is not ours to fix, once.
+//
+// Reading Intel engine busyness means reading the i915 PMU, and that means the
+// perf_event_open syscall, which Docker's default seccomp profile refuses. So
+// the tool fails the same way whether or not it is installed, and the page shows
+// nothing either way, which is indistinguishable from a chip that reports
+// nothing at all.
+//
+// It is a compose file change and nobody would guess it, so it is said plainly
+// and said once. Everything else here degrades quietly on purpose; this one
+// cannot be fixed by anything in this program.
+func noteIntelFailure(errBuf *strings.Builder) {
+	msg := errBuf.String()
+	if !strings.Contains(msg, "PMU") && !strings.Contains(msg, "Permission denied") {
+		return
+	}
+	intelToldOnce.Do(func() {
+		logger("[STATS] Intel GPU statistics need the perf interface, which this container is not allowed to use: %s", strings.TrimSpace(msg))
+		logger("[STATS] Add cap_add: [PERFMON] to the compose file, and set kernel.perf_event_paranoid to 2 or lower on the host. Captioning on the GPU is unaffected either way; this is only the graph.")
+	})
+}
+
+var intelToldOnce sync.Once
 
 // intelGPUStrings is what the status handler wants: the same two figures as
 // strings, empty when there is no reading, so it can fall through to whatever
