@@ -149,7 +149,7 @@ Every recommendation is guidance, never a gate, and all three run anywhere.
 
 | Model | For | Accuracy | Delay | Download | Languages |
 | --- | --- | --- | --- | --- | --- |
-| **Cohere Transcribe 03-2026** — the most accurate open model there is | English and seven others. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Two to four seconds, like broadcast | 1.6 GB | 8 |
+| **Cohere Transcribe 03-2026** — the most accurate open model there is | English and seven others. One to three streams on the processor is fine; anything more, use a GPU | Best — 1.3% | Two to four seconds, like broadcast | 2.4 GB | 8 |
 | **Nemotron 3.5 ASR Streaming 0.6B** — thirty-two languages, transcribes as the audio arrives | Anything not in English, and anyone the delay bothers. Keeps up with Cohere on a GPU; costs memory per tuner | Very good | About a second | 496 MB | 32 |
 | **Moonshine Streaming Tiny** — forty-eight megabytes, streams live | Very small machines: a Celeron, a low-power NAS, a Pi | Decent — 4.5% | Under a second | 48 MB | English |
 
@@ -165,7 +165,7 @@ said and can never see what comes next. That is where the accuracy difference co
 and it is why no setting closes the gap in either direction.
 
 **Memory**, and this is where the choice bites hardest. A phrase model is loaded once and
-shared: Cohere Transcribe costs about 2.2 GB resident however many tuners are captioning,
+shared: Cohere Transcribe costs about 3.3 GB resident however many tuners are captioning,
 and it is freed when the last of them ends. A streaming model cannot be shared, because
 the running state that makes it streaming belongs to one stream — so every captioned tuner
 loads its own copy. Nemotron is roughly 500 MB per stream, which is comfortable for three
