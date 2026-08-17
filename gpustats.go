@@ -3,11 +3,85 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+// otherGPU is everything that is not NVIDIA: AMD through sysfs, Intel through
+// intel_gpu_top. Returns utilisation, memory and power as percentages, empty
+// where the hardware does not publish the figure.
+//
+// Three vendors, three different answers about what is even knowable.
+//
+// AMD publishes all three in sysfs and needs nothing installed: gpu_busy_percent
+// for the engine, mem_info_vram_used against _total for memory, and hwmon's
+// power1_average against power1_cap for power.
+//
+// Intel publishes utilisation only, and only through intel_gpu_top. There is no
+// memory figure because an integrated chip has no memory of its own — it is
+// using system RAM, which the page already shows — and no power percentage
+// because the tool reports watts and there is no cap to divide by. Reporting
+// watts in a field labelled percent would be worse than the gap.
+//
+// NVIDIA is handled by the caller, which asks nvidia-smi first and only falls
+// through to here when that is absent.
+func otherGPU() (util, mem, power string) {
+	util, mem, power = amdSysfs()
+	if util == "" {
+		util, _ = intelGPUStrings()
+	}
+	return util, mem, power
+}
+
+func amdSysfs() (util, mem, power string) {
+	read := func(p string) (float64, bool) {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return 0, false
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
+		return v, err == nil
+	}
+	pct := func(used, total float64) string {
+		if total <= 0 {
+			return ""
+		}
+		return strconv.FormatFloat(used/total*100, 'f', 2, 64)
+	}
+	cards, _ := filepath.Glob("/sys/class/drm/card*/device")
+	for _, d := range cards {
+		if util == "" {
+			if v, ok := read(d + "/gpu_busy_percent"); ok {
+				util = strconv.FormatFloat(v, 'f', 2, 64)
+			}
+		}
+		if mem == "" {
+			u, ok1 := read(d + "/mem_info_vram_used")
+			t, ok2 := read(d + "/mem_info_vram_total")
+			if ok1 && ok2 {
+				mem = pct(u, t)
+			}
+		}
+		if power == "" {
+			hwmons, _ := filepath.Glob(d + "/hwmon/hwmon*")
+			for _, h := range hwmons {
+				// Microwatts in both, so the units cancel.
+				a, ok1 := read(h + "/power1_average")
+				c, ok2 := read(h + "/power1_cap")
+				if ok1 && ok2 {
+					power = pct(a, c)
+					break
+				}
+			}
+		}
+	}
+	return util, mem, power
+}
 
 // Intel engine busyness, from intel_gpu_top.
 //
