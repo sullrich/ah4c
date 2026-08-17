@@ -718,7 +718,18 @@ func startModelDownload(m captionModel) error {
 		// A button press must not fight a recording: gigabytes to disk wait
 		// for the machine to go quiet, bounded so the press is still honored
 		// on a machine that never quite is.
-		waitTuneQuiet(60 * time.Second)
+		// Held, and the answer respected. This discarded its result — it waited
+		// up to a minute and then went ahead regardless, which is the override
+		// on a timer that cost a recording once already. Before the first tune
+		// of a container's life the plain wait does not even wait: nothing has
+		// asked for anything yet, so it answers instantly and the storm is two
+		// seconds away.
+		//
+		// A download pauses per read and an install goes a package at a time,
+		// so neither holds the machine for long once it starts. This is about
+		// not starting them into a tune in the first place.
+		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
+		}
 		err := fetchModel(m)
 		dlLock.Lock()
 		dlState.Active = false
@@ -861,7 +872,18 @@ func startRuntimeDownload(variant, modelKey string) error {
 	logger("[CC] Downloading %s from %s", eng.Name, url)
 	go func() {
 		// Same rule as the model download: never fight a recording.
-		waitTuneQuiet(60 * time.Second)
+		// Held, and the answer respected. This discarded its result — it waited
+		// up to a minute and then went ahead regardless, which is the override
+		// on a timer that cost a recording once already. Before the first tune
+		// of a container's life the plain wait does not even wait: nothing has
+		// asked for anything yet, so it answers instantly and the storm is two
+		// seconds away.
+		//
+		// A download pauses per read and an install goes a package at a time,
+		// so neither holds the machine for long once it starts. This is about
+		// not starting them into a tune in the first place.
+		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
+		}
 		// The engine is a library plus the ggml backends it loads from
 		// alongside itself, so the whole archive is taken.
 		err := fetchRuntime(url, dir, lib, rt == rtTranscribe)
@@ -1158,7 +1180,18 @@ func startDriverDownload(kind string) error {
 	go func() {
 		// apt and dpkg are heavy hands; they wait for the machine to go
 		// quiet, bounded so the press is still honored eventually.
-		waitTuneQuiet(60 * time.Second)
+		// Held, and the answer respected. This discarded its result — it waited
+		// up to a minute and then went ahead regardless, which is the override
+		// on a timer that cost a recording once already. Before the first tune
+		// of a container's life the plain wait does not even wait: nothing has
+		// asked for anything yet, so it answers instantly and the storm is two
+		// seconds away.
+		//
+		// A download pauses per read and an install goes a package at a time,
+		// so neither holds the machine for long once it starts. This is about
+		// not starting them into a tune in the first place.
+		for !waitTuneQuietHeld(10*time.Second, 2*time.Minute) {
+		}
 		log, err := fetchDriver(g)
 		if err == nil {
 			var l2 string
