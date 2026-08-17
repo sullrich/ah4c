@@ -168,17 +168,30 @@ var cohereQuirks = modelQuirks{
 // from the same place: captioned video writes a stretch of music in brackets,
 // so a stretch of music is what it writes.
 //
-// The apology is the third, and it is the one that shows up over broadcast
-// rather than over silence: handed a stretch it cannot make words out of, the
-// model says it is sorry. It is not a transcription of anything — the audio
-// underneath is music, or a crowd, or an announcer under a mix — and it arrives
-// alone, as the whole of a caption, which is what makes it safe to catch.
+// The apology is the third: handed a stretch it cannot make words out of, the
+// model says it is sorry.
 //
-// All three are matched against the whole phrase and never part of one. Somebody
-// saying thank you mid-sentence keeps it, an actor apologizing in a scene keeps
-// it, and a real sentence containing an aside in brackets keeps the aside. What
-// is being caught is a caption that is entirely a stage direction, not a caption
-// with one in it.
+// What the documentation actually says, because the rest of this comment used to
+// invent a reason and state it confidently. The model card names the behavior and
+// names one fix, and it is not this one:
+//
+//	"Like most AED speech models, Cohere Transcribe is eager to transcribe,
+//	even non-speech sounds. The model thus benefits from prepending a noise
+//	gate or VAD (voice activity detection) model in order to prevent
+//	low-volume, floor noise from turning into hallucinations."
+//
+// So the documented mitigation is the noise gate in captions.go, and this list is
+// only the backstop behind it — for audio that clears the gate honestly because
+// it has real energy, which is what a commercial bed or a crowd is. The card
+// publishes no stock phrases and neither does anyone else; every entry below is
+// here because it was seen coming out of this model, and nothing is here because
+// it seemed likely. Sources are in the commit that added each one.
+//
+// All three kinds are matched against the whole phrase and never part of one.
+// Somebody saying thank you mid-sentence keeps it, an actor apologizing in a
+// scene keeps it, and a real sentence containing an aside in brackets keeps the
+// aside. What is being caught is a caption that is entirely a stage direction,
+// not a caption with one in it.
 func cohereSuppresses(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	if isSoundEventTag(t) {
@@ -197,7 +210,9 @@ var cohereStockPhrases = map[string]bool{
 	"thanks for watching": true, "thank you for watching": true,
 	"you": true, "bye": true, "bye.": true, "okay": true,
 	"please subscribe": true, "subtitles by the amara.org community": true,
-	// The apology, in the spellings it has actually been seen in.
-	"i'm sorry": true, "i am sorry": true, "sorry": true,
-	"i'm sorry.": true, "i'm so sorry": true,
+	// The apology. Reported against this model on this machine, 2026-08-17.
+	// "i am sorry", "i'm so sorry" and a bare "sorry" were in here briefly and
+	// have been taken out: nobody saw those, I guessed at them, and a bare
+	// "sorry" is an entirely ordinary line of dialogue to throw away on a guess.
+	"i'm sorry": true,
 }
