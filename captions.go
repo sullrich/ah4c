@@ -2777,6 +2777,9 @@ func (c *cea608) newRow() {
 // where it was meant to be.
 const ccMaxBacklogSec = 5.0
 
+// cc608Dropped counts how often line 21 has thrown its backlog away.
+var cc608Dropped int64
+
 // push queues a complete phrase and closes the line after it.
 func (c *cea608) push(text string) { c.pushText(text, true) }
 
@@ -2802,6 +2805,15 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	// the text permanently behind the picture, so drop what has not aired and
 	// start the roll-up again on the current phrase.
 	if float64(len(c.queue)) > ccMaxBacklogSec*c.pairRate() {
+		// Say so. Every path that discards audio counts and reports; this one
+		// discards words that were recognized correctly and were on their way
+		// to the screen, and said nothing at all — so "we seem to be missing
+		// words" had no counter to check it against.
+		n := atomic.AddInt64(&cc608Dropped, 1)
+		if n == 1 || n%10 == 0 {
+			logger("[CC] line 21 was %.1fs behind and %d pairs were dropped to catch up (%d times so far); the digital track is unaffected",
+				float64(len(c.queue))/c.pairRate(), len(c.queue), n)
+		}
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
