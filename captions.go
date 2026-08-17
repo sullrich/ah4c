@@ -636,10 +636,16 @@ func saveCaptionConfig(cfg captionConfig) error {
 		return err
 	}
 	captionCfgLock.Lock()
+	was := captionCfg.Enabled
 	captionCfg = cfg
 	captionCfgLock.Unlock()
-	// A loaded model is brought into line with the new setting rather than
-	// keeping the number it happened to start with.
+	// Switching captions on is what asks for the graphics driver, because
+	// startup no longer installs one for a container that was not captioning.
+	// It runs behind the same gates as any other install now that the server is
+	// up, and it is a no-op if startup already did it.
+	if cfg.Enabled && !was && runtime.GOOS == "linux" {
+		go restoreSavedDriver()
+	}
 	return nil
 }
 
@@ -2103,19 +2109,48 @@ func restoreGPURuntime() {
 	}
 }
 
+// releaseDriverWaiters lets the engine's first open proceed. Called from more
+// than one place and possibly more than once, so it closes exactly once:
+// closing a channel twice is a panic that takes every tuner with it.
+func releaseDriverWaiters() {
+	driverReleased.Do(func() { close(driverRestoreDone) })
+}
+
+var (
+	driverReleased   sync.Once
+	driverRestoreRun sync.Once
+)
+
 func restoreGPURuntimeQuietly() {
-	// released records that the engine has already been let go, so the close
-	// below does not repeat it. Closing a channel twice is a panic that takes
-	// every tuner with it.
-	released := false
-	defer func() {
-		if !released {
-			close(driverRestoreDone)
-		}
-	}()
+	defer releaseDriverWaiters()
 	if runtime.GOOS != "linux" {
 		return
 	}
+	// A graphics driver is for captioning and nothing else here, so a container
+	// with captions switched off does not install one. It is not free: on a
+	// fresh bind mount it is a package at a time through dpkg, and that is
+	// forty seconds of a startup nobody asked for.
+	//
+	// It is not simply skipped, though. This is the only stretch of a
+	// container's life where nothing can be tuning, so refusing to install here
+	// means the install has to happen later, beside live tunes, which is the
+	// case that has cost recordings. Switching captions on is what asks for it,
+	// and that is where it now runs from — gated and divided, as it has to be
+	// once the door is open.
+	if !currentCaptionConfig().Enabled {
+		logger("[CC] Captions are off, so the graphics driver is left where it is. It goes in when captions are switched on.")
+		warmEngineCache()
+		return
+	}
+	restoreSavedDriver()
+}
+
+// restoreSavedDriver puts the saved driver back, at most once per process.
+func restoreSavedDriver() {
+	driverRestoreRun.Do(restoreSavedDriverNow)
+}
+
+func restoreSavedDriverNow() {
 	// Before the quiet gate, only the check that costs nothing: is anything
 	// saved at all. One directory read. The common case — no GPU driver in
 	// use — settles instantly and the engine init never waits.
@@ -2171,8 +2206,7 @@ func restoreGPURuntimeQuietly() {
 	// for, now the exception rather than the rule.
 	if !waitTuneQuietHeld(10*time.Second, 40*time.Second) {
 		logger("[CC] No quiet stretch for the graphics driver install yet. Captions will run on the processor this session; the driver goes in when the machine is idle and is used from the next start.")
-		close(driverRestoreDone)
-		released = true
+		releaseDriverWaiters()
 		// Five more minutes of looking for a quiet stretch, and then it goes in
 		// anyway. Everything below is divided a package at a time and runs
 		// behind nice and ionice, so proceeding is a second of polite work per
