@@ -1925,8 +1925,21 @@ func restoreGPURuntimeQuietly() {
 	// playback confirmation. A minute of proven quiet tells the calm before
 	// from the calm after; if it never comes, the install simply waits, and
 	// captions run on the processor in the meantime.
-	for !waitTuneQuietHeld(time.Minute, 5*time.Minute) {
-		logger("[CC] Still waiting for a quiet minute before touching the graphics driver; tunes come first")
+	// Bounded, and it has to be. The engine's one-time open waits on this
+	// finishing, and a caption attempt gives up on that open long before a
+	// busy ten-tuner machine offers a full quiet minute — so waiting for one
+	// unconditionally did not delay captions, it stopped them, on every tune,
+	// for as long as the DVR stayed busy. A gate the rest of the system waits
+	// behind may not be a gate that can stay shut for ever.
+	//
+	// Ten seconds of held quiet is enough to tell the calm before the storm
+	// from the calm after: a container that has just come up is asked for
+	// something within a second or two, so surviving ten says the storm is
+	// not this moment. If forty seconds pass without finding ten, the install
+	// goes ahead anyway — under nice and ionice, at the bottom of the
+	// processor and disk queues, which is what makes going ahead acceptable.
+	if !waitTuneQuietHeld(10*time.Second, 40*time.Second) {
+		logger("[CC] No quiet stretch for the graphics driver install; going ahead at the lowest priority so tunes keep the machine")
 	}
 	need := false
 	for _, g := range gpuRuntimes {
@@ -3691,8 +3704,8 @@ func initTranscribe(variant string) error {
 		// that is stuck does not get to hold captions hostage.
 		select {
 		case <-driverRestoreDone:
-		case <-time.After(90 * time.Second):
-			logger("[CC] The driver restore is still running after 90s; opening the engine with whatever is loadable now")
+		case <-time.After(120 * time.Second):
+			logger("[CC] The driver restore is still running after two minutes; opening the engine with whatever is loadable now")
 		}
 		lib := runtimeLibPath(rtTranscribe, variant)
 		if lib == "" {
@@ -4727,9 +4740,22 @@ func runWithDeadline(d time.Duration, what string, fn func()) (finished bool, do
 // initTranscribeDeadline is initTranscribe with the waiting bounded. The Once
 // inside initTranscribe means a wedged first call would block every later
 // caller forever; this way they get an error and their tunes run uncaptioned.
+// The budget is longer than anything the open legitimately waits on, which is
+// the whole trick to setting it. It was sixty seconds while the open itself
+// waited up to ninety for the driver restore, so a restore that took its time
+// did not delay captions — it failed them, every attempt, because the caller
+// gave up thirty seconds before the thing it was waiting for could possibly
+// have finished. A deadline shorter than the work it bounds is not a deadline,
+// it is a guarantee of failure.
+//
+// Three minutes covers the driver restore's two, plus the open itself. Nothing
+// is on the tune path here: this runs on a goroutine, a second after the
+// stream's video is already flowing, and the caller retries while the stream
+// plays. What it costs is captions arriving late on the first tune of a fresh
+// container. What it buys is their arriving at all.
 func initTranscribeDeadline(variant string) error {
 	var err error
-	ok, _ := runWithDeadline(60*time.Second, "loading the speech engine", func() { err = initTranscribe(variant) })
+	ok, _ := runWithDeadline(3*time.Minute, "loading the speech engine", func() { err = initTranscribe(variant) })
 	if !ok {
 		return fmt.Errorf("the speech engine is not responding")
 	}
