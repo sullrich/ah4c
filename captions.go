@@ -1583,7 +1583,13 @@ func applyDriver(g gpuRuntime) (string, error) {
 		return "", fmt.Errorf("no saved packages to install")
 	}
 	logger("[CC] Installing %d saved packages for %s", len(debs), g.Name)
-	cmd := politeCommand("dpkg", append([]string{"-i", "--force-depends"}, debs...)...)
+	// --force-unsafe-io because the fsync per file is the entire weight of
+	// this. dpkg syncs to be certain a package survives a power cut mid
+	// install; these packages exist in the bind mount either way, and a
+	// container that loses power reinstalls them from there on the way back
+	// up. What it buys is nothing, and what it costs is an array full of
+	// synchronous writes beside a tuner trying to prove it is playing.
+	cmd := politeCommand("dpkg", append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)...)
 	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	out, err := cmd.CombinedOutput()
 	if err != nil && !driverActive(g) {
@@ -1893,7 +1899,15 @@ func restoreGPURuntime() {
 }
 
 func restoreGPURuntimeQuietly() {
-	defer close(driverRestoreDone)
+	// released records that the engine has already been let go, so the close
+	// below does not repeat it. Closing a channel twice is a panic that takes
+	// every tuner with it.
+	released := false
+	defer func() {
+		if !released {
+			close(driverRestoreDone)
+		}
+	}()
 	if runtime.GOOS != "linux" {
 		return
 	}
@@ -1923,38 +1937,32 @@ func restoreGPURuntimeQuietly() {
 		warmEngineCache()
 		return
 	}
-	// Everything else waits for the machine to go quiet — including the
-	// probe that judges whether the drivers load. Judging means dlopening
-	// them, and a driver library drags in its whole dependency chain — on a
-	// cold container, hundreds of megabytes of disk read, beside the DVR
-	// re-tuning everything it was recording. The probe is heavy work and
-	// takes its turn like the rest.
+	// The install never runs while a tune is in flight. Never, not "unless it
+	// has been waiting a while".
 	//
-	// Quiet has to be held, not merely observed. A container that has just
-	// come up is quiet because the DVR has not asked for anything yet: asking
-	// once and starting is starting an uninterruptible thirty-second package
-	// install directly into the storm that is two seconds away, and dpkg
-	// cannot be paused for a tune the way a file read can. That is exactly
-	// what happened — a driver set that grew from two packages to
-	// thirty-seven ran straight through two tunes and both missed their
-	// playback confirmation. A minute of proven quiet tells the calm before
-	// from the calm after; if it never comes, the install simply waits, and
-	// captions run on the processor in the meantime.
-	// Bounded, and it has to be. The engine's one-time open waits on this
-	// finishing, and a caption attempt gives up on that open long before a
-	// busy ten-tuner machine offers a full quiet minute — so waiting for one
-	// unconditionally did not delay captions, it stopped them, on every tune,
-	// for as long as the DVR stayed busy. A gate the rest of the system waits
-	// behind may not be a gate that can stay shut for ever.
+	// This waited forty seconds for a quiet stretch and then went ahead
+	// anyway, on the theory that nice and ionice made that safe. They do not.
+	// dpkg fsyncs its way through thirty-seven packages and an array does not
+	// care what priority the process asking is; the tune that was running
+	// missed its playback confirmation and the recording died. That was my
+	// fallback, not the gate — the gate was working, and I overrode it.
 	//
-	// Ten seconds of held quiet is enough to tell the calm before the storm
-	// from the calm after: a container that has just come up is asked for
-	// something within a second or two, so surviving ten says the storm is
-	// not this moment. If forty seconds pass without finding ten, the install
-	// goes ahead anyway — under nice and ionice, at the bottom of the
-	// processor and disk queues, which is what makes going ahead acceptable.
+	// It was bounded because the engine's one-time open waits on this
+	// finishing, and an unbounded wait starved captions completely. So the two
+	// are separated instead. If no quiet stretch turns up in the first forty
+	// seconds, the engine is released to start without the driver — captions
+	// run on the processor for this session and say so — while the install
+	// goes on waiting for a moment when it can run without costing anybody a
+	// recording. It takes effect at the next container start, because the
+	// engine scans for backends once and has already done it by then.
+	//
+	// A driver is a convenience. A recording is not.
 	if !waitTuneQuietHeld(10*time.Second, 40*time.Second) {
-		logger("[CC] No quiet stretch for the graphics driver install; going ahead at the lowest priority so tunes keep the machine")
+		logger("[CC] No quiet stretch for the graphics driver install yet. Captions will run on the processor this session; the driver goes in when the machine is idle and is used from the next start.")
+		close(driverRestoreDone)
+		released = true
+		for !waitTuneQuietHeld(10*time.Second, 5*time.Minute) {
+		}
 	}
 	need := false
 	for _, g := range gpuRuntimes {
