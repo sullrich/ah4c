@@ -2050,13 +2050,61 @@ func gpuAvailable() bool {
 // on the processor for the life of the process.
 var driverRestoreDone = make(chan struct{})
 
-// restoreGPURuntime is called once at startup and returns immediately: the
-// work happens in the background, behind the tune gate. A container that
-// just restarted faces every recording the DVR wants back immediately, so
-// the server comes up first and the installation waits its turn like every
-// other heavy thing here.
+// serving reports whether ah4c has opened its door yet.
+//
+// This is the difference between quiet that is observed and quiet that is
+// guaranteed, and every gate in this file has been arguing about the former for
+// want of the latter. Startup is the one stretch in a container's life where a
+// tune cannot arrive: the port is not bound, so the DVR gets connection refused
+// rather than a request nobody answers. Not "the machine looks quiet" — the
+// door is shut.
+//
+// So while this is false the gates stop guessing and say yes. Nothing they are
+// protecting against can happen yet.
+var serving atomic.Bool
+
+// driverRestoreBudget is how long startup will wait for the driver before
+// coming up without it.
+//
+// It has to be finite. A container that cannot install its driver must still
+// answer the DVR — ah4c that never listens is worse than ah4c with no graphics
+// acceleration, by a distance. Restoring an already-downloaded set is
+// thirty-odd packages of a second or two, so this is roughly double what it
+// takes and nowhere near what it costs to be wrong.
+const driverRestoreBudget = 2 * time.Minute
+
+// restoreGPURuntime puts the graphics driver back, and does it before ah4c
+// starts serving.
+//
+// This used to return immediately and install in the background behind the tune
+// gate, on the reasoning that a container which has just restarted faces every
+// recording the DVR wants back at once and the server should come up first.
+// Both halves of that were true and the conclusion was still wrong, because it
+// put the one piece of un-pausable work in this program into a permanent race
+// with the tunes it must not interrupt — and the gate that was supposed to
+// referee the race could only ever report on the instant it was asked.
+//
+// Running it here removes the race rather than refereeing it. main calls this
+// before it binds the port, so for as long as this takes there is no tune to
+// interrupt and no gate to satisfy: dpkg can fsync its way through the whole
+// set at full speed and the worst it can do is delay the door opening.
+//
+// Bounded, because it is now in front of everything. If the install has not
+// finished inside the budget, ah4c comes up regardless and the rest of it
+// carries on behind the gates like before.
 func restoreGPURuntime() {
-	go restoreGPURuntimeQuietly()
+	// The door opens the moment this returns, whichever way it returns.
+	defer serving.Store(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		restoreGPURuntimeQuietly()
+	}()
+	select {
+	case <-done:
+	case <-time.After(driverRestoreBudget):
+		logger("[CC] The graphics driver has been going in for %s and is not finished. ah4c is coming up now; the rest of it waits for quiet like everything else does.", driverRestoreBudget)
+	}
 }
 
 func restoreGPURuntimeQuietly() {
@@ -2118,6 +2166,13 @@ func restoreGPURuntimeQuietly() {
 	// engine scans for backends once and has already done it by then.
 	//
 	// A driver is a convenience. A recording is not.
+	//
+	// On the ordinary path none of that applies any more: this runs before the
+	// port is bound, the gate answers yes immediately because nothing can be
+	// tuning, and the install is finished before anybody could have asked. All
+	// of the above is what happens when it overruns the startup budget and finds
+	// itself running beside real tunes after all — the case this was written
+	// for, now the exception rather than the rule.
 	if !waitTuneQuietHeld(10*time.Second, 40*time.Second) {
 		logger("[CC] No quiet stretch for the graphics driver install yet. Captions will run on the processor this session; the driver goes in when the machine is idle and is used from the next start.")
 		close(driverRestoreDone)
@@ -2138,6 +2193,9 @@ func restoreGPURuntimeQuietly() {
 		}
 	}
 	if need {
+		if !serving.Load() {
+			logger("[CC] Putting the saved graphics driver back before the web server starts. Nothing can be tuning yet, so this is the one time it costs nobody anything; ah4c answers as soon as it is done.")
+		}
 		reinstallSavedDriver()
 	}
 	warmEngineCache()
@@ -8036,6 +8094,12 @@ func waitTuneQuiet(bound time.Duration) bool {
 // Returns false if hold could not be held within bound, and the caller is
 // expected to try again rather than proceed anyway.
 func waitTuneQuietHeld(hold, bound time.Duration) bool {
+	// Held quiet exists to tell the calm before a storm from the calm after
+	// one. With the door shut there is no storm to be on either side of, and
+	// sleeping out the hold would be a pure delay in front of the door opening.
+	if !serving.Load() {
+		return true
+	}
 	deadline := time.Now().Add(bound)
 	for {
 		if !waitTuneQuiet(time.Until(deadline)) {
@@ -8107,6 +8171,13 @@ func (t *tuneSettleReader) Close() error {
 // tuneQuiet reports whether every tune on the machine is out of its fragile
 // stretch, and if not, roughly how long to wait before asking again.
 func tuneQuiet() (bool, time.Duration) {
+	// Before the port is bound there is nothing to be quiet about: a request
+	// cannot arrive, so no tune can be in its fragile stretch and none can start
+	// during whatever the caller is about to do. This is the only time the
+	// answer is certain rather than inferred.
+	if !serving.Load() {
+		return true, 0
+	}
 	now := time.Now()
 	tuneMu.Lock()
 	live := tunePending[:0]
