@@ -1224,9 +1224,15 @@ func fetchDriver(g gpuRuntime) (string, error) {
 		return "", err
 	}
 	var log strings.Builder
+	// Polite, like everything else here. The two calls that go through this —
+	// refreshing the package lists and reading the dependency tree — are the
+	// part of the driver fetch that is neither gated nor divided: they run
+	// straight after the gate whatever the gate answered, and one of them
+	// rewrites every package list in the container. Losing to a tuner is the
+	// least they can do.
 	run := func(args ...string) error {
 		logger("[CC] %v", args)
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := politeCommand(args[0], args[1:]...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		log.Write(b)
@@ -1522,7 +1528,7 @@ func driverClosure(pkgs []string, suite string, opts []string, log *strings.Buil
 	args = append(args, "depends", "--recurse", "--no-recommends", "--no-suggests",
 		"--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances")
 	args = append(args, pkgs...)
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	out, err := politeCommand(args[0], args[1:]...).CombinedOutput()
 	log.Write(out)
 	if err != nil {
 		return nil, err
