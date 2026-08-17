@@ -5231,9 +5231,11 @@ type txBatchService struct {
 	// Telemetry.
 	telMu       sync.Mutex
 	tDispatches int64
-	tPhrases    int64
-	tCompute    time.Duration
-	tAudio      time.Duration
+	// tWinN is dispatches inside the current window, for the page's average.
+	tWinN    int64
+	tPhrases int64
+	tCompute time.Duration
+	tAudio   time.Duration
 	// advise-once bookkeeping: the first dispatches decide whether this
 	// backend is pulling its weight.
 	advN       int64
@@ -5743,9 +5745,22 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		}
 	}
 	svc.tDispatches++
+	svc.tWinN++
 	svc.tPhrases += int64(len(batch))
 	svc.tCompute += compute
 	svc.tAudio += audio
+	// The page is published every dispatch, from the window so far.
+	//
+	// It was published at the window boundary, which meant the page showed
+	// nothing at all until a hundred dispatches had gone by — several minutes on
+	// one stream — and showing nothing is what "I put it on the page" turned out
+	// to mean in practice. The log wants a settled average over a long window;
+	// the page wants the current answer. They are different needs and they now
+	// have different cadences instead of sharing the log's.
+	if svc.tCompute > 0 {
+		noteRecognizerSpeed(float64(svc.tAudio)/float64(svc.tCompute),
+			float64(svc.tPhrases)/float64(svc.tWinN), txBackendName(svc.backend))
+	}
 	if svc.tDispatches%telemetryWindow == 0 {
 		speed := float64(svc.tAudio) / float64(svc.tCompute)
 		// The multiplier is also the answer to "how many tuners will this
@@ -5773,8 +5788,7 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 			"%.1fx real time — about %d streams' worth — over the last %d dispatches",
 			phrases, svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
 			speed, int(speed), telemetryWindow)
-		noteRecognizerSpeed(speed, phrases, txBackendName(svc.backend))
-		svc.tPhrases, svc.tCompute, svc.tAudio = 0, 0, 0
+		svc.tPhrases, svc.tCompute, svc.tAudio, svc.tWinN = 0, 0, 0, 0
 	}
 	svc.telMu.Unlock()
 }
@@ -7697,7 +7711,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		}
 		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
 		cutThisMinute++
-		e.queue(audio, carried)
+		e.queue(audio, carried, ended)
 	}
 }
 
@@ -7711,6 +7725,9 @@ type phraseItem struct {
 	// previous one. Only these can contain a repeated word, and only these
 	// are trimmed for it; see trimOverlap.
 	carried bool
+	// atPause marks a phrase that ended because the speaker stopped, rather
+	// than because the segmenter ran out of room. See trimFalseStop.
+	atPause bool
 }
 
 // phraseStaleAfter is how old a phrase may be before it is abandoned. Normal
@@ -7723,9 +7740,9 @@ type phraseItem struct {
 const phraseStaleAfter = 6 * time.Second
 
 // queue hands a phrase to the recognizer, and never waits for it.
-func (e *captionEngine) queue(audio []float32, carried bool) {
+func (e *captionEngine) queue(audio []float32, carried, atPause bool) {
 	select {
-	case e.phrases <- phraseItem{pcm: audio, cut: time.Now(), carried: carried}:
+	case e.phrases <- phraseItem{pcm: audio, cut: time.Now(), carried: carried, atPause: atPause}:
 	default:
 		// The recognizer is still working through what it has. Losing this
 		// phrase costs a sentence; waiting here would cost the audio stream,
@@ -7938,6 +7955,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		}
 	}
 	text = e.trimOverlap(text, item.carried)
+	text = trimFalseStop(text, item.atPause)
 	if text == "" {
 		return
 	}
@@ -7955,6 +7973,43 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		return
 	}
 	e.write(text, true)
+}
+
+// trimFalseStop removes a full stop the speaker did not make.
+//
+// A phrase model transcribes one cut phrase at a time and punctuates what it is
+// given as though that were the whole utterance, because from where it sits that
+// is exactly what it looks like. But only one of the three reasons this code cuts
+// is the speaker finishing: a real pause of vadSilence or more. The other two —
+// a quarter-second word gap once the phrase is long enough, and the hard ceiling
+// at maxPhrase — land in the middle of a sentence by design, and the model ends
+// the fragment with a full stop anyway. "The president said, and I quote" comes
+// back as "The president said." followed by "And I quote." That is not a
+// transcription error; it is punctuation applied to a boundary the speaker never
+// made, and on screen it is the ugliest thing captions do.
+//
+// So a phrase that did not end at a pause gives up its closing full stop. The
+// comma that belongs there instead is not put in: the model did not offer one
+// and inventing punctuation is a worse habit than omitting it. In roll-up caps,
+// which is the default, running the two fragments together reads correctly.
+//
+// Only the full stop, and only one of them. A question mark or an exclamation
+// mark is a claim about the sentence's shape that a mid-sentence cut is unlikely
+// to produce by accident, and an ellipsis is a trailing-off the model meant.
+//
+// The capitalization of the next fragment is left alone. Lowercasing it would
+// read better in mixed case and would eventually lowercase a proper noun, which
+// is a worse error than a capital in the middle of a sentence — and in the
+// default all-caps presentation there is nothing to see either way.
+func trimFalseStop(text string, atPause bool) string {
+	if atPause {
+		return text
+	}
+	t := strings.TrimRight(text, " ")
+	if !strings.HasSuffix(t, ".") || strings.HasSuffix(t, "..") {
+		return text
+	}
+	return strings.TrimRight(t[:len(t)-1], " ")
 }
 
 // trimOverlap drops the beginning of a phrase where it repeats the end of the
