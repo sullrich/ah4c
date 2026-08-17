@@ -36,7 +36,11 @@
             font-family: var(--mono);
             font-size: 0.68rem;
             color: var(--text-faint);
-            word-break: break-all;
+            /* Break inside a word only when the word itself will not fit, which
+               is what this is for: a model URL with no spaces in it. break-all
+               takes that permission everywhere and hyphenates ordinary prose
+               mid-word — "as a fallback, an / d kept in the bind mount". */
+            overflow-wrap: break-word;
             line-height: 1.4;
         }
         .model-src a { color: var(--text-faint); text-decoration: underline; }
