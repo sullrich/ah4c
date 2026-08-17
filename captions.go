@@ -2261,6 +2261,9 @@ type cea608 struct {
 	// minRollGap is the least time between two rolls, from the page's roll
 	// speed setting.
 	minRollGap time.Duration
+	// pendingBreak is a carriage return the last phrase finished with and this
+	// one has yet to spend. See pushText.
+	pendingBreak bool
 }
 
 // pairRate is how many byte pairs a second this channel is clearing, measured.
@@ -2411,6 +2414,20 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	if !c.started {
 		c.begin()
 	}
+	// The break owed by the previous phrase is taken now, with this phrase's
+	// words behind it, and not when that phrase ended.
+	//
+	// Rolling at the end of a phrase rolls to a blank row. The line just read
+	// moves up — off the screen entirely at two rows — and the viewer is left
+	// looking at nothing for as long as it takes the speaker to say the next
+	// thing, which is most of three seconds. That is the hold: not the pace of
+	// the roll, but a roll performed before there was anything to roll to.
+	// A broadcast encoder rolls when the new line arrives, because the roll is
+	// how the new line gets its row, and that is all this is.
+	if c.pendingBreak {
+		c.pendingBreak = false
+		c.newRow()
+	}
 	c.lastText = time.Now()
 	for _, w := range strings.Fields(text) {
 		runes := []rune(w)
@@ -2428,8 +2445,8 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		}
 	}
 	if breakAfter {
-		// Finish the phrase on its own line so the next one rolls up under it.
-		c.newRow()
+		// Owed, not taken: the next phrase collects it on the way in.
+		c.pendingBreak = true
 	}
 }
 
@@ -2618,6 +2635,7 @@ const (
 	dtvccDSW = 0x89 // display windows, followed by a window bitmap
 	dtvccDLW = 0x8C // delete windows, followed by a window bitmap
 	dtvccSPA = 0x90 // set pen attributes, two bytes
+	dtvccSPL = 0x92 // set pen location, two bytes
 	dtvccSWA = 0x97 // set window attributes, four bytes
 	dtvccDF0 = 0x98 // define window 0, six bytes
 )
@@ -2648,7 +2666,47 @@ type cea708 struct {
 	lastText time.Time
 	lastCR   time.Time
 	minRoll  time.Duration
+	// pendingBreak is a carriage return the last phrase finished with and this
+	// one has yet to spend. See pushText.
+	pendingBreak bool
+	// credit meters the outgoing constructs and fps is what it is metered
+	// against; see next.
+	credit float64
+	fps    float64
 }
+
+// setPictureRate takes the rate the injector read out of the stream, which is
+// how often next will be called. The pace is a rate per second and this is what
+// turns it into a rate per picture.
+func (c *cea708) setPictureRate(fps float64) {
+	if fps <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.fps = fps
+	c.mu.Unlock()
+}
+
+// dtvccPace is how fast text is let onto the screen, in constructs a second.
+//
+// The channel can carry far more than this — sixty constructs a second at
+// sixty pictures — and letting it is what makes captions arrive in bursts: a
+// phrase is recognized as a block, three seconds of speech goes out in half a
+// second, and then nothing happens until the speaker finishes the next one.
+// What a viewer sees is a paragraph appearing at once, a wait, and another
+// paragraph, which reads nothing like somebody talking.
+//
+// Twenty constructs a second is forty characters a second, three times what
+// ordinary speech produces — so the text keeps up with the
+// speaker and still arrives at something like the rate it was spoken at. It
+// also means a receiver joining part way through finds caption data flowing
+// rather than a gap between bursts.
+const dtvccPace = 20.0
+
+// dtvccCatchUp is the backlog, in constructs, past which the pace is abandoned.
+// Something has gone wrong upstream — a burst of recognition after a stall —
+// and being current matters more than reading evenly.
+const dtvccCatchUp = 120
 
 func newCEA708(style string, upper bool, rollSpeed string) *cea708 {
 	rows := 3
@@ -2715,11 +2773,40 @@ func (c *cea708) pushText(text string, breakAfter bool) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// The window is restated about every half minute, so a receiver that
-	// joined in the middle catches up without waiting for the next channel
-	// change. The 608 side restates its style for exactly the same reason.
-	if !c.defined || time.Since(c.lastDef) > 30*time.Second {
-		c.defineWindow()
+	// The window is restated every couple of seconds, so a receiver that
+	// joined in the middle catches up almost at once rather than waiting for
+	// the next one. Half a minute was tried and a player seeking three seconds
+	// into a recording found no window defined and drew nothing — the same
+	// fault the 608 side had before it began restating its style on every row,
+	// and the same fix.
+	//
+	// On every phrase, which is the analogue of what the 608 side does on every
+	// row, and for the identical reason. A clock does not work here: text
+	// arrives in bursts, so an interval measured at the moment of writing can
+	// pass a whole recording's worth of phrases without expiring, and the
+	// seeking player still finds nothing. Every phrase is a statement about
+	// the stream rather than about the wall.
+	//
+	// It costs about eighteen bytes against the thousand a second the channel
+	// has spare. Re-asserting a window a decoder already has, with the same
+	// parameters, is meant to be idempotent — that is what makes periodic
+	// re-assertion the standard way to let a receiver join — but if a decoder
+	// treats it as a reset the symptom is unmistakable: the display clears
+	// once a phrase.
+	c.defineWindow()
+	// The break owed by the previous phrase is taken now, with this phrase's
+	// words behind it, and not when that phrase ended.
+	//
+	// Rolling at the end of a phrase rolls to a blank row: the line just read
+	// moves up, off the screen entirely in a two row window, and the viewer is
+	// left looking at nothing for as long as the speaker takes to say the next
+	// thing. That is the hold. It is not the pace of the roll — it is a roll
+	// performed before there was anything to roll to. A broadcast encoder
+	// rolls when the new line arrives, because the roll is how the new line
+	// gets its row, and that is all this is.
+	if c.pendingBreak {
+		c.pendingBreak = false
+		c.newRow()
 	}
 	c.lastText = time.Now()
 	for _, w := range strings.Fields(text) {
@@ -2743,7 +2830,8 @@ func (c *cea708) pushText(text string, breakAfter bool) {
 		}
 	}
 	if breakAfter {
-		c.newRow()
+		// Owed, not taken: the next phrase collects it on the way in.
+		c.pendingBreak = true
 	}
 	c.packetize()
 }
@@ -2829,6 +2917,34 @@ func (c *cea708) next(n int) []dtvccPair {
 	if len(c.queue) == 0 {
 		return nil
 	}
+	// Metered, unless there is so much waiting that evenness has stopped being
+	// the point. Credit accrues with time and is spent one construct at a
+	// time, so the rate holds whatever the picture rate happens to be and
+	// whatever size the caller asks for.
+	// Credit accrues per picture rather than per second, because a picture is
+	// what the stream is made of. Timing it against the wall would meter a
+	// recording being processed at ten times real time as though it were being
+	// watched, and would mean the rate depended on how busy the machine was.
+	fps := c.fps
+	if fps <= 0 {
+		fps = cc608NominalRate
+	}
+	if len(c.queue) < dtvccCatchUp {
+		c.credit += dtvccPace / fps
+		if c.credit > dtvccPace {
+			// Do not bank a long silence and then spend it in one picture.
+			c.credit = dtvccPace
+		}
+		if allowed := int(c.credit); n > allowed {
+			n = allowed
+		}
+		if n <= 0 {
+			return nil
+		}
+		c.credit -= float64(n)
+	} else {
+		c.credit = 0
+	}
 	if n > len(c.queue) {
 		n = len(c.queue)
 	}
@@ -2850,7 +2966,7 @@ func (c *cea708) backlog() int {
 // buildCCData assembles the cc_data() structure from A/53 Part 4. ccCount is
 // fixed by the frame rate: the caption channel runs at 9600 bits per second, so
 // each frame carries 600/fps constructs of two bytes each.
-func buildCCData(pair [2]byte, dtv []dtvccPair, ccCount int) []byte {
+func buildCCData(dtv []dtvccPair, ccCount int) []byte {
 	if ccCount < 2 {
 		ccCount = 2
 	}
@@ -2871,13 +2987,17 @@ func buildCCData(pair [2]byte, dtv []dtvccPair, ccCount int) []byte {
 	for i := 0; i < ccCount; i++ {
 		// marker_bits(5)=11111, cc_valid(1), cc_type(2)
 		switch {
-		case i == 0: // field 1: the 608 bytes
-			b = append(b, 0xFC, pair[0], pair[1])
+		case i == 0:
+			// Field 1, marked not valid. The line 21 service is not carried
+			// any more: everything it could say, the digital service says on a
+			// wider row and in the letters the words were actually written
+			// with. Its construct stays in the block because that is where the
+			// format puts the two analogue fields, and a decoder counting its
+			// way along expects to find them.
+			b = append(b, 0xF8, 0x00, 0x00)
 		case i == 1:
-			// Field 2 is marked not valid. Nothing is ever written to it, and
-			// claiming otherwise makes a player advertise a second caption
-			// service, and the 708 services derived from the pair, so a viewer
-			// is offered four tracks where only the first has anything in it.
+			// Field 2, likewise. Claiming a field carries something it does not
+			// makes a player offer a caption track with nothing in it.
 			b = append(b, 0xF9, 0x00, 0x00)
 		case len(dtv) > 0:
 			// The digital channel. cc_type 3 begins a packet and 2 continues
@@ -2930,8 +3050,8 @@ func seiPayloadSize(n int) []byte {
 
 // buildCaptionSEI produces a complete Annex-B NAL, start code included, that
 // carries the frame's caption bytes as registered ITU-T T.35 user data.
-func buildCaptionSEI(pair [2]byte, dtv []dtvccPair, ccCount int, hevc bool) []byte {
-	payload := buildCCData(pair, dtv, ccCount)
+func buildCaptionSEI(dtv []dtvccPair, ccCount int, hevc bool) []byte {
+	payload := buildCCData(dtv, ccCount)
 
 	rbsp := make([]byte, 0, len(payload)+8)
 	rbsp = append(rbsp, 0x04) // payloadType 4, user_data_registered_itu_t_t35
@@ -3322,20 +3442,18 @@ func mpegCRC(b []byte) uint32 {
 // looking for caption messages finds out captions exist from this and nothing
 // else, which is why some show none without it.
 var captionDescriptor = []byte{
-	0x86, 0x0D, // tag, length
-	0xE2, // reserved, two services
+	0x86, 0x07, // tag, length
+	0xE1, // reserved, one service
 
-	// The line 21 service, on field 1.
-	'e', 'n', 'g', // language
-	0x7F, // analogue service on field 1
-	0x7F, // not easy reader, wide aspect
-	0xFF, // reserved
-
-	// The digital service, number one — which is the one a television offers
+	// The digital service, number one, which is the one a television offers
 	// first. Announcing it is not optional decoration: a player that reads
-	// this table and finds only a line 21 entry has been told the digital
-	// channel carries nothing, and will not go looking however much is
-	// actually in it. Half of why the wide window was invisible.
+	// this table and does not find it has been told the digital channel
+	// carries nothing, and will not go looking however much is in it.
+	//
+	// It is the only service announced. Line 21 is not offered because it is
+	// not carried, and announcing a track that turns out to be empty is worse
+	// than announcing nothing — the viewer picks it, sees silence, and
+	// concludes the captions are broken.
 	'e', 'n', 'g', // language
 	0xC1, // digital service, caption service number 1
 	0x7F, // not easy reader, wide aspect
@@ -3551,7 +3669,7 @@ func (ci *captionInjector) flush() error {
 	if ci.enc708 != nil && ci.ccCount > 2 {
 		dtv = ci.enc708.next(ci.ccCount - 2)
 	}
-	sei := buildCaptionSEI(ci.enc.next(), dtv, ci.ccCount, ci.hevc)
+	sei := buildCaptionSEI(dtv, ci.ccCount, ci.hevc)
 	newES := injectSEI(es, sei, ci.hevc)
 	if len(newES) == len(es) {
 		// No slice NAL found; leave this access unit alone.
@@ -3621,6 +3739,9 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 				// should be guessing which. It is measured independently as
 				// well; this is so the first second is right too.
 				ci.enc.setPictureRate(fps)
+				if ci.enc708 != nil {
+					ci.enc708.setPictureRate(fps)
+				}
 				logger("[CC] %s picture rate is %.2f fps, cc_count %d", ci.log, fps, n)
 			}
 		}
@@ -6519,7 +6640,6 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 // write puts a phrase into both caption formats. They carry the same words to
 // the same viewer; which one a television reads is the television's business.
 func (e *captionEngine) write(text string, breakAfter bool) {
-	e.enc.pushText(text, breakAfter)
 	if e.enc708 != nil {
 		e.enc708.pushText(text, breakAfter)
 	}
