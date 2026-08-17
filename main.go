@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,6 +95,8 @@ type reader struct {
 	gateReady     chan struct{}
 	gateDone      chan struct{}
 	gateStop      sync.Once
+	gateBase      map[string]bool
+	gateSig       string
 	startedAt     time.Time
 }
 
@@ -222,10 +225,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		r.started = true
 		addReader(r)
 		go func() {
-			var base map[string]bool
-			if r.gateReady != nil {
-				base = audioBaseline(r.t.tunerip)
-			}
+			base := r.gateBase
 			if err := execute(r.t.start, r.channel, r.t.tunerip); err != nil {
 				logger("[ERR] Failed to run start script: %v", err)
 				if r.gateReady != nil {
@@ -235,7 +235,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 			if r.gateReady != nil {
 				if base != nil {
-					waitForPlayback(r.t.tunerip, base, r.gateDone)
+					waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone)
 				} else {
 					logger("[PLAYBACK] %s no audio baseline, gating on motion alone", r.t.tunerip)
 				}
@@ -418,14 +418,18 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			// Network encoder
 			logger("Attempting network tune for device %s %s %v %v", t.url, t.tunerip, channel, idx)
 			tuneStart := time.Now()
+			var ready chan struct{}
+			var base map[string]bool
+			var sig string
+			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
+				ready = make(chan struct{})
+				base = audioBaseline(t.tunerip)
+				sig = mediaSignature(t.tunerip)
+			}
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				t.active = false
 				continue
-			}
-			var ready chan struct{}
-			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
-				ready = make(chan struct{})
 			}
 			if secs, _ := strconv.Atoi(os.Getenv("PLAYBACK_DELAY")); secs > 0 && ready == nil {
 				if secs > 30 {
@@ -491,8 +495,6 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			if ready != nil {
 				body = newGateReader(body, ready)
 			}
-			// Captions wrap the outermost reader so they see the same bytes the
-			// DVR will, after any stall filling or playback gating.
 			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
@@ -502,6 +504,8 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t:          t,
 				gateReady:  ready,
 				gateDone:   make(chan struct{}),
+				gateBase:   base,
+				gateSig:    sig,
 			}
 			return r, nil
 		}
@@ -803,7 +807,6 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
-	// Closed captions
 	r.GET("/captions", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "captions.html", nil)
 	})
@@ -843,7 +846,7 @@ func run() error {
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
-		if err := startRuntimeDownload(c.Param("variant")); err != nil {
+		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
@@ -1779,17 +1782,19 @@ func (s *stallTolerantReader) Close() error {
 }
 
 const (
-	adbTimeout      = 5 * time.Second
-	adbGiveUp       = 3
-	playbackPoll    = 250 * time.Millisecond
-	playbackConfirm = 2
-	playbackTimeout = 40 * time.Second
-	keyframeWait    = 8 * time.Second
-	riseWindow      = 250 * time.Millisecond
-	riseFactor      = 4
-	riseWait        = time.Second
-	minWindow       = 8 * 188
-	busyWindow      = 46875
+	adbTimeout           = 5 * time.Second
+	adbGiveUp            = 3
+	playbackPoll         = 250 * time.Millisecond
+	playbackConfirm      = 2
+	playbackStaticFor    = 2 * time.Second
+	playbackSessionEvery = time.Second
+	playbackTimeout      = 12 * time.Second
+	keyframeWait         = 8 * time.Second
+	riseWindow           = 250 * time.Millisecond
+	riseFactor           = 4
+	riseWait             = time.Second
+	minWindow            = 8 * 188
+	busyWindow           = 46875
 )
 
 type gateReader struct {
@@ -2118,6 +2123,52 @@ func adbControl(tunerip string, action string) error {
 	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
 }
 
+func samePiids(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if !b[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func piidList(m map[string]bool) string {
+	if len(m) == 0 {
+		return "no started players"
+	}
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
+func mediaSignature(tunerip string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "dumpsys media_session").Output()
+	if err != nil {
+		return ""
+	}
+	return parseMediaSignature(string(out))
+}
+
+func parseMediaSignature(dump string) string {
+	var parts []string
+	for _, line := range strings.Split(dump, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "description=") || strings.Contains(line, "metadata:") ||
+			strings.Contains(line, "PlaybackState {") {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, "|")
+}
+
 func audioBaseline(tunerip string) map[string]bool {
 	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
 	exec.CommandContext(ctx, "adb", "connect", tunerip).Run()
@@ -2129,11 +2180,25 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
-func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
+func playbackBudget() time.Duration {
+	if s := os.Getenv("PLAYBACK_TIMEOUT"); s != "" {
+		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		logger("[PLAYBACK] PLAYBACK_TIMEOUT %q is not a positive number of seconds, using %v", s, playbackTimeout)
+	}
+	return playbackTimeout
+}
+
+func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) {
 	t0 := time.Now()
-	deadline := t0.Add(playbackTimeout)
+	budget := playbackBudget()
+	deadline := t0.Add(budget)
 	held := map[string]int{}
+	last := map[string]bool{}
 	fails := 0
+	var staticSince, sigAt time.Time
+	nowSig := sig
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
@@ -2146,16 +2211,41 @@ func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{})
 				logger("[PLAYBACK] %s unreachable over adb, gating on motion alone", tunerip)
 				return
 			}
-		} else {
-			fails = 0
-			if heldNewID(base, audioPiids(string(out)), held) {
+			time.Sleep(playbackPoll)
+			continue
+		}
+		fails = 0
+		last = audioPiids(string(out))
+		if heldNewID(base, last, held) {
+			logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
+			return
+		}
+		if sig != "" && time.Since(sigAt) >= playbackSessionEvery {
+			nowSig, sigAt = mediaSignature(tunerip), time.Now()
+			if nowSig != "" && nowSig != sig {
 				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
 				return
 			}
 		}
+		if sig != "" && nowSig == sig && samePiids(base, last) {
+			if staticSince.IsZero() {
+				staticSince = time.Now()
+			} else if time.Since(staticSince) >= playbackStaticFor {
+				logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
+					tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
+				return
+			}
+		} else {
+			staticSince = time.Time{}
+		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone", tunerip, playbackTimeout)
+	session := "not readable"
+	if sig != "" {
+		session = map[bool]string{true: "unchanged", false: "changed"}[nowSig == sig]
+	}
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
+		tunerip, budget, piidList(base), piidList(last), session)
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
