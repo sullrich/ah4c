@@ -5462,12 +5462,41 @@ func txGoString(p *byte) string {
 }
 
 // captionPhraseWindow is how long a phrase may run before it is cut, on the
-// phrase-at-a-time path. Four seconds is the operating point the model
-// prefers — two to four seconds behind the picture, which is what live
-// broadcast captioning runs. Shorter starves the model of context and
-// multiplies per-phrase overhead; there is deliberately no knob. Streaming
-// models run their families' own trained defaults the same way.
-const captionPhraseWindow = 4.0
+// phrase-at-a-time path.
+//
+// This is the whole of what a viewer waits for now. Everything downstream has
+// been taken apart — the recognizer answers in about four tenths of a second on
+// the graphics chip, the display queue is empty, the roll happens when the line
+// arrives — so what is left is the front: a word spoken at the start of a
+// phrase waits for the phrase to end before anything begins.
+//
+// It was four seconds, chosen to sit where live broadcast captioning sits, two
+// to four seconds behind the picture. Broadcast is not the target. Broadcast is
+// a human stenographer typing what they just heard, and there is no reason a
+// machine that has already finished thinking should wait around to match them.
+//
+// Two seconds is the operating point now. It roughly halves the wait at the
+// front and costs two things, both real and both affordable here. The model
+// sees less of a sentence at once, which is a genuine loss for a phrase model
+// and shows up first in punctuation rather than in words. And the per-phrase
+// cost is paid more often: the encoder runs once per dispatch whatever the
+// dispatch holds, so half the audio per phrase is not half the work. Measured
+// on the machine this was cut for — four tenths of a second of compute per
+// three seconds of audio, seven times real time on an integrated graphics
+// chip — there is room for that several times over.
+//
+// There is a floor somewhere below this where a phrase model starts returning
+// fragments rather than short sentences, and fragments read worse than waiting
+// does. Where exactly is a judgement rather than a measurement — it depends on
+// the model, and this one has not been tested against phrase length — so the
+// cut is set where sentences still look like sentences and the number is left
+// somewhere obvious for whoever wants to argue with it by watching.
+//
+// If genuinely sub-second captions are wanted, the answer is not a smaller
+// number here but a streaming model, which emits as the audio arrives instead
+// of waiting for a phrase at all. A phrase model cannot be real time; it can
+// only be quick.
+const captionPhraseWindow = 2.0
 
 // transcribeModel is a loaded model and the session that runs it.
 type transcribeModel struct {
@@ -6410,10 +6439,10 @@ func (e *captionEngine) pumpAudio() {
 const (
 	vadFrame     = asrSampleRate / 50 // 20 ms
 	vadMinSpeech = 0.6                // ignore blips shorter than this
-	vadMinPhrase = 1.8                // past this, a word gap is enough to cut
+	vadMinPhrase = 1.2                // past this, a word gap is enough to cut
 	vadWordGap   = 0.15               // the gap between two spoken words
 	vadSilence   = 0.45               // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 3.5                // backstop, so captions never fall this far behind
+	vadMaxPhrase = 2.0                // backstop, so captions never fall this far behind
 	vadLead      = 0.20               // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
