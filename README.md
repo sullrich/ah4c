@@ -209,9 +209,10 @@ encoder inside a batch runs serially and why batching relieves the decode withou
 the encode.
 
 So **each recognizer is another complete copy of the weights**, 2.4 GB apiece for Cohere
-Transcribe, held for as long as any tuner is being captioned. The setting takes effect when
-the model is next loaded — while streams are already captioning, the copy in memory keeps
-the number it started with, and the log says so. The page offers every number
+Transcribe, held for as long as any tuner is being captioned. Changing the setting takes effect at
+once: recognizers are added to a model that is already loaded, and one that is no longer
+wanted gives its weights back between batches rather than waiting for every stream to
+stop. The page offers every number
 the model allows, up to eight, and prints the running total in gigabytes beside each one
 with a warning above the list once it is past one. Check that figure against what the
 machine actually has free. Nothing here is chosen for you: a graphics chip runs two
