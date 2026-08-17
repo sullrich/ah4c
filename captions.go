@@ -547,22 +547,16 @@ type captionConfig struct {
 	Language string `json:"language"`
 	// Style selects the CEA-608 presentation mode.
 	Style string `json:"style"`
-	// RollSpeed is how long a finished line is held before the display rolls
-	// it up, when there is nothing waiting to take its place. Taste, eyesight
-	// and the number of rows all bear on it, so it is asked rather than
-	// assumed; empty means the broadcast pace this always ran at.
-	RollSpeed string `json:"rollSpeed"`
 	// Uppercase renders captions in capitals, which is the long-standing
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
 	Uppercase bool `json:"uppercase"`
-	// OffsetSec delays caption display, for trimming sync by hand. It never
-	// delays the video: the stream is passed through untouched apart from the
-	// caption bytes, so a tune is exactly as fast with captions on as off.
-	OffsetSec int `json:"offsetSec"`
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
+	// OnScreenSec is the least time a line stays readable before it is allowed
+	// to leave, in seconds. Zero means the guidance minimum for the row count.
+	OnScreenSec float64 `json:"onScreenSec"`
 	// SpeedWPM is how fast captions are let onto the screen, in words a minute.
 	// Zero means the default. The guidance ranges from 120 to 160 and the page
 	// offers exactly that.
@@ -579,14 +573,13 @@ type captionConfig struct {
 
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
-		Enabled:   false,
-		Model:     "cohere-transcribe",
-		Language:  "en",
-		Style:     "rollup3",
-		RollSpeed: "broadcast",
-		Uppercase: true,
-		Engine:    "auto",
-		OffsetSec: 0,
+		Enabled:     false,
+		Model:       "cohere-transcribe",
+		Language:    "en",
+		Style:       "rollup3",
+		OnScreenSec: 3,
+		Uppercase:   true,
+		Engine:      "auto",
 	}
 }
 
@@ -2744,7 +2737,7 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool, rollSpeed string, wpm int) *cea608 {
+func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -2760,7 +2753,7 @@ func newCEA608(style string, upper bool, rollSpeed string, wpm int) *cea608 {
 		n = 4
 	}
 	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm),
-		minRollGap: rollGapFloor(rollGapFor(rollSpeed), n)}
+		minRollGap: rollGapFor(onScreen, n)}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2914,24 +2907,7 @@ const ccStaleAfter = 20 * time.Second
 // the edge of the screen, while at four it has three more rows to travel. So it
 // is a setting rather than a number, and the default is the broadcast one it
 // has always been.
-const (
-	rollGapBroadcast = 1200 * time.Millisecond
-	rollGapBrisk     = 600 * time.Millisecond
-	rollGapInstant   = 0
-)
-
-// rollGapFor maps the page's roll speed onto that floor. Anything unrecognized,
-// including the empty string a configuration written before this setting
-// existed will have, is the broadcast pace it was already running at.
-func rollGapFor(speed string) time.Duration {
-	switch speed {
-	case "brisk":
-		return rollGapBrisk
-	case "instant":
-		return rollGapInstant
-	}
-	return rollGapBroadcast
-}
+const ()
 
 // waiting reports whether anything is queued behind the carriage return at the
 // head — that is, whether holding the roll is holding words back.
@@ -2984,8 +2960,9 @@ const cc608NominalRate = 29.97
 // next returns the pair of bytes to attach to the next video frame.
 // cc608Pace is how fast characters are let onto the screen, per second.
 //
-// Line 21 field 1 carries one pair per picture — sixty characters a second on a
-// sixty hertz stream, four times the rate anybody speaks. So a phrase emptied
+// The caption channel carries one character pair per picture — sixty characters
+// a second on a sixty hertz stream, four times the rate anybody speaks. So a
+// phrase emptied
 // onto the display in a quarter of the time it took to say, the display then sat
 // idle until the next phrase arrived, and the carriage return dwell added
 // another pause on top of that. Text flew, then stopped, then flew. It is the
@@ -3030,15 +3007,29 @@ func ccMinOnScreen(rows int) time.Duration {
 	}
 }
 
-// rollGapFloor raises a chosen roll gap to whatever keeps a line on screen for
-// ccMinOnScreen. Immediate becomes the fastest the guidance allows rather than
-// no gap at all.
-func rollGapFloor(gap time.Duration, rows int) time.Duration {
+// captionOnScreen is what the page offers for the least time a line stays
+// readable, in seconds. The guidance minimum for three rows is two; the rest is
+// room for anybody who wants longer.
+var captionOnScreen = []float64{2, 3, 4, 5, 6, 8}
+
+// rollGapFor turns a wanted time on screen into the gap between rolls.
+//
+// A roll-up does not put lines up together — each row is added and the oldest
+// scrolls away — so a row is readable for the gap between rolls multiplied by
+// the number of rows above it. Asking for six seconds at three rows is a two
+// second gap.
+//
+// Floored at the guidance whatever is asked for: a minimum of one second for a
+// single line, one and a half for two, two for three. Time on screen is taste
+// above that floor and not below it, because a line leaving before it can be
+// read is not a preference, it is a caption nobody got to have.
+func rollGapFor(want float64, rows int) time.Duration {
 	if rows < 1 {
 		rows = 1
 	}
+	gap := time.Duration(want * float64(time.Second) / float64(rows))
 	if min := ccMinOnScreen(rows) / time.Duration(rows); gap < min {
-		return min
+		gap = min
 	}
 	return gap
 }
@@ -3074,7 +3065,13 @@ func (c *cea608) next() [2]byte {
 	// Metered at speaking speed unless there is a real backlog, in which case
 	// being current matters more than reading evenly and the channel is used
 	// for what it is worth.
-	if rate := c.pairRate(); rate > 0 && !c.waiting() {
+	//
+	// Characters only. A control code is sent twice and a decoder is only
+	// guaranteed to drop the repeat when the two arrive back to back — so
+	// withholding between them turns one carriage return into two, which rolls
+	// twice and leaves a blank row between every pair of lines. The meter is
+	// about how fast words appear; it has no business inside a control pair.
+	if rate := c.pairRate(); rate > 0 && !c.waiting() && !c.headIsControl() {
 		c.credit += c.pace / rate
 		if c.credit > c.pace {
 			c.credit = c.pace
@@ -3117,6 +3114,12 @@ func (c *cea608) next() [2]byte {
 	return p
 }
 
+// headIsControl reports whether the next thing out is a control code rather
+// than text. Callers hold the lock.
+func (c *cea608) headIsControl() bool {
+	return len(c.queue) > 0 && c.queue[0][0] == odd608(ccCtrlCC1)
+}
+
 func (c *cea608) backlog() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -3152,18 +3155,7 @@ func buildCCData(pair [2]byte, ccCount int) []byte {
 		// marker_bits(5)=11111, cc_valid(1), cc_type(2)
 		switch {
 		case i == 0:
-			// Field 1: the line 21 service, carried as a fallback.
-			//
-			// The digital service is the one worth watching — wider rows, the
-			// letters the words were written with — and on a television it is
-			// what gets picked. But not everything downstream of here is a
-			// television. Tools that read captions out of a recording largely
-			// decode line 21 and stop there, so dropping it means a stream
-			// that captions beautifully on screen and appears to have no
-			// captions at all to anything that reads it later.
-			//
-			// It costs one construct of the ten this picture has and no
-			// thought at all, and it is what a broadcast stream carries.
+			// Field 1, which carries the captions.
 			b = append(b, 0xFC, pair[0], pair[1])
 		case i == 1:
 			// Field 2, likewise. Claiming a field carries something it does not
@@ -3592,13 +3584,12 @@ func mpegCRC(b []byte) uint32 {
 	return crc
 }
 
-// captionDescriptor announces line 21, which is what is carried.
+// captionDescriptor announces the one service this stream carries.
 //
 // A player that does not decode the video looking for caption messages finds
 // out captions exist from this and nothing else, which is why some show none
-// without it. It announced a digital service as well while one was being sent;
-// announcing one now would tell a television the channel it offers first is
-// empty, and it would show a blank rather than falling back to line 21.
+// without it. Announcing a service that turns out to be empty is the thing to
+// avoid: a decoder told it is there and finding nothing shows a blank.
 var captionDescriptor = []byte{
 	0x86, 0x07, // tag, length
 	0xE1, // reserved, one service
@@ -6562,7 +6553,7 @@ type captionEngine struct {
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
 		quirks:  quirksFor(m),
-		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.RollSpeed, cfg.SpeedWPM),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
@@ -7428,16 +7419,12 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	}
 }
 
-// show puts recognized text on screen, honoring the configured offset.
+// show puts recognized text on screen.
 func (e *captionEngine) show(text string, breakAfter bool) {
-	if d := e.cfg.OffsetSec; d > 0 {
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, breakAfter) })
-		return
-	}
 	e.write(text, breakAfter)
 }
 
-// write puts a phrase on line 21.
+// write puts a phrase into the caption encoder.
 func (e *captionEngine) write(text string, breakAfter bool) {
 	e.enc.pushText(text, breakAfter)
 }
@@ -7934,18 +7921,9 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	// trimFalseStop, which strips the full stop the model puts on a fragment
 	// this code cut mid-sentence. The same fragments should not end a line
 	// either: they flow on, fill the width, and wrap where the window wraps.
-	// A real pause ends the line, which is what a pause is.
-	// Break where speech would naturally pause, which is the whole of the
-	// broadcast guidance on this: a real pause, or a place the model closed the
-	// sentence off. Not where the length ceiling happened to fall.
-	brk := item.atPause || (!item.hardCut && endsSentence(text))
-	if d := e.cfg.OffsetSec; d > 0 {
-		// Hold the phrase back for hand-tuned sync. The video is never delayed,
-		// so this only ever pushes text later.
-		time.AfterFunc(time.Duration(d)*time.Second, func() { e.write(text, brk) })
-		return
-	}
-	e.write(text, brk)
+	// A real pause ends the line, or a place the model closed the sentence off;
+	// not where the length ceiling happened to fall.
+	e.write(text, item.atPause || (!item.hardCut && endsSentence(text)))
 }
 
 // trimFalseStop removes a full stop the speaker did not make.
@@ -8725,8 +8703,10 @@ type captionStatus struct {
 	// Recognizer is the measured throughput, so the page can answer "will this
 	// keep up" without anybody reading a log.
 	Recognizer recognizerReport `json:"recognizer"`
-	// Speeds is what the page offers for caption speed, in words a minute.
-	Speeds []int `json:"speeds"`
+	// Speeds is what the page offers for caption speed, in words a minute, and
+	// OnScreen what it offers for the least time a line stays readable.
+	Speeds   []int     `json:"speeds"`
+	OnScreen []float64 `json:"onScreen"`
 	// Streaming is how many tuners are busy, so the page can refuse to switch
 	// captions on in the middle of a recording.
 	Streaming      int    `json:"streaming"`
@@ -9292,6 +9272,7 @@ func captionStatusPayload() captionStatus {
 		RuntimeURL:     engineURL,
 		Recognizer:     recog,
 		Speeds:         captionSpeeds,
+		OnScreen:       captionOnScreen,
 		Streaming:      tunersStreaming(),
 		Persistent:     persistent,
 		PersistWarning: persistWarning,
