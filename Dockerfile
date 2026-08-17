@@ -24,6 +24,7 @@ WORKDIR /go/src/github.com/mackid1993
 ARG AH4C_SHA=main
 RUN git clone https://github.com/mackid1993/ah4c . \
     && git checkout ${AH4C_SHA} \
+    && sh scripts/bump-version.sh \
     && go build -o /opt/ah4c
 
 # Second Stage: Create the Runtime Environment
