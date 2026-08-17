@@ -1968,6 +1968,21 @@ func restoreGPURuntimeQuietly() {
 	}
 }
 
+// awaitDriverRestore blocks until the startup driver restore has finished, or
+// until waiting stops being worth it.
+//
+// Bounded, because a restore that cannot find its quiet stretch may take
+// minutes and a stream should not be silent for all of them. Two minutes
+// matches what the engine's own open allows, so a caller that waits here and
+// then opens the engine cannot be caught out twice by the same delay.
+func awaitDriverRestore() {
+	select {
+	case <-driverRestoreDone:
+	case <-time.After(2 * time.Minute):
+		logger("[CC] The graphics driver is still being put back after two minutes; choosing a backend with whatever loads now")
+	}
+}
+
 // txInited reports whether the engine's one-time initialization has run.
 func txInited() bool {
 	select {
@@ -4412,7 +4427,34 @@ func txBackendName(k int32) string {
 // no CUDA build would otherwise pass the gate and then quietly run on the
 // processor anyway, which is the exact failure the gate exists to prevent.
 func captionVariantFor(m captionModel) (string, error) {
+	// Nothing chooses a backend while the answer is still changing.
+	//
+	// The driver restore runs behind the quiet gate, so on a fresh container
+	// there is a stretch where the Vulkan loader is not installed yet and the
+	// honest answer to "can this machine run the GPU build" is no. A stream
+	// that asked during that stretch got the processor — and then loaded the
+	// model strictly on the processor, and every stream after it shared that
+	// copy, because a loaded model is keyed by the backend it was loaded for.
+	// One early tune therefore put the whole container on the processor for
+	// the life of the process, with eight threads of a phrase model on it, and
+	// nothing said so: the log line reads "using cpu backend" whether that was
+	// chosen or merely settled for.
+	//
+	// Waiting costs this stream some of its first minute of captions and
+	// nothing else. It is not on the tune path — the video has been flowing
+	// for a second by the time anything here runs, the caller retries while it
+	// plays, and the alternative is a processor pinned until somebody notices
+	// the heat.
+	awaitDriverRestore()
 	variant := currentEngineVariant()
+	// Say it when the machine has a graphics device and is about to use its
+	// processor anyway. That is either a driver that has not arrived or a
+	// build that was never downloaded, and both are fixable from the page —
+	// but only by somebody who has been told.
+	if variant == "cpu" && len(renderNodes()) > 0 {
+		logger("[CC] WARNING: this container has a graphics device but no GPU build it can load, so %s will run on the processor. "+
+			"That is several times the work and all of it heat. Check the Closed Captions page: the driver, and the GPU build of the engine.", m.Name)
+	}
 	if !m.NeedsGPU {
 		return variant, nil
 	}
