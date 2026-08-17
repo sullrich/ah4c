@@ -8505,6 +8505,9 @@ type captionStream struct {
 	pr     *io.PipeReader
 	pw     *io.PipeWriter
 	once   sync.Once
+	// pump starts the reading loop, and not before something asks for a byte.
+	// See Read.
+	pump sync.Once
 }
 
 // maybeWrapCaptions returns src unchanged unless captions are switched on and
@@ -8563,7 +8566,6 @@ func maybeWrapCaptions(src io.ReadCloser, tunerIndex int, label string) io.ReadC
 
 	cs := &captionStream{src: src, engine: engine}
 	cs.pr, cs.pw = io.Pipe()
-	go cs.run()
 	return cs
 }
 
@@ -8624,7 +8626,34 @@ func (cs *captionStream) inject() {
 	}
 }
 
-func (cs *captionStream) Read(p []byte) (int, error) { return cs.pr.Read(p) }
+// Read starts the pump on the first call, and that timing is the whole point.
+//
+// The pump used to start in maybeWrapCaptions, one line above the return. It
+// reads from src in a loop, and src is the chain that ends at reader.Read —
+// which is where ah4c takes its audio baseline, runs the tune script and then
+// waits for the box to confirm playback. So captioning a tuner moved all of
+// that from "when the DVR pulls" to "the instant the reader was built", a
+// couple of hundred milliseconds earlier and before the HTTP response had even
+// been written.
+//
+// On a warm box that changes nothing. On the first tune after the container
+// starts, the box has been idle and is slow to bring its player up after the
+// wake, and those few hundred milliseconds land the deep link and the baseline
+// inside that transition instead of after it. The app folds the tune into the
+// session it is already building rather than starting a new one, no new audio
+// player id ever appears, and waitForPlayback times out — every time, on the
+// first tune, only when captions were on. With captions off the same box
+// confirms in about two and a half seconds.
+//
+// So the rule captions are supposed to obey is stricter than "be quick on the
+// tune path": nothing here may change *when* anything on the tune path
+// happens. Reading only when read from restores the un-captioned ordering
+// exactly, because the DVR is once again the thing that asks for the first
+// byte.
+func (cs *captionStream) Read(p []byte) (int, error) {
+	cs.pump.Do(func() { go cs.run() })
+	return cs.pr.Read(p)
+}
 
 func (cs *captionStream) Close() error {
 	// The encoder connection is released first and immediately: on a channel
