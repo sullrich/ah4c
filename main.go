@@ -28,7 +28,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -1394,30 +1393,6 @@ func statusPageHandler(c *gin.Context) {
 }
 
 // /status route code
-func sysfsGPU() (string, string) {
-	util, mem := "", ""
-	cards, _ := filepath.Glob("/sys/class/drm/card*/device")
-	for _, d := range cards {
-		if util == "" {
-			if b, err := os.ReadFile(d + "/gpu_busy_percent"); err == nil {
-				util = strings.TrimSpace(string(b))
-			}
-		}
-		if mem == "" {
-			u, e1 := os.ReadFile(d + "/mem_info_vram_used")
-			t, e2 := os.ReadFile(d + "/mem_info_vram_total")
-			if e1 == nil && e2 == nil {
-				uv, _ := strconv.ParseFloat(strings.TrimSpace(string(u)), 64)
-				tv, _ := strconv.ParseFloat(strings.TrimSpace(string(t)), 64)
-				if tv > 0 {
-					mem = fmt.Sprintf("%.2f", uv/tv*100)
-				}
-			}
-		}
-	}
-	return util, mem
-}
-
 func apiStatusHandler(c *gin.Context) {
 	// Fetch system stats
 	cpuStats, _ := cpu.Percent(0, false)
@@ -1517,11 +1492,17 @@ func apiStatusHandler(c *gin.Context) {
 
 		}
 	}
-	if gpuUtil == "" && memUsage == "" {
-		gpuUtil, memUsage = sysfsGPU()
-	}
-	if gpuUtil == "" {
-		gpuUtil, _ = intelGPUStrings()
+	if gpuUtil == "" || memUsage == "" || GPUpowerUsagePercent == "" {
+		u, m, p := otherGPU()
+		if gpuUtil == "" {
+			gpuUtil = u
+		}
+		if memUsage == "" {
+			memUsage = m
+		}
+		if GPUpowerUsagePercent == "" {
+			GPUpowerUsagePercent = p
+		}
 	}
 	// Response with JSON
 	c.JSON(http.StatusOK, gin.H{
