@@ -3333,7 +3333,18 @@ func popDwell(chars, rows int, pace float64, want time.Duration) popTiming {
 	if d > want {
 		d = want
 	}
+	// The floor is how long the caption needs at the fastest anyone should ever
+	// be asked to read, not merely the shortest a caption may legally be. Those
+	// are different numbers and only the second was here: two full rows have a
+	// guidance minimum of a second and a half, which is four hundred words a
+	// minute, and draining a backlog down to that puts captions on the screen
+	// nobody can read. Whichever is longer wins.
 	floor := ccMinOnScreen(rows)
+	if pace > 0 {
+		if fastest := time.Duration(float64(chars) / ccMaxPace * float64(time.Second)); fastest > floor {
+			floor = fastest
+		}
+	}
 	if d < floor {
 		d = floor
 	}
@@ -3784,17 +3795,27 @@ const ccCharsPerPair = 2.0
 // could sit just under that threshold for ever — captions a quarter of a minute
 // late, with nothing in the design to drain them.
 func (c *cea608) waiting() bool {
-	// A box is behind when captions are queued behind the one on screen, and
-	// that is the only reading of it that means anything here.
+	// A box is behind when there is a caption waiting to be shown, and that is
+	// the only reading of it that means anything here.
 	//
-	// The character count below asks how much reading time is waiting, which
-	// assumes the queue is text on its way to the screen. For a box it is not:
-	// a whole caption sits in the queue and then appears at once, so a single
-	// ordinary two line caption measures as five seconds of reading and would
-	// declare a backlog every time — standing the dwell down permanently and
-	// flipping captions as fast as they were recognized.
+	// It asked for more than one, which meant it was never behind. Captions and
+	// speech arrive at about the same rate, so the queue holds one and the test
+	// never fired — and a box that is never behind never catches up. Whatever
+	// lag it started the program with, it kept: the cadence looked right and
+	// the whole stream sat a few seconds late for ever, which is the difference
+	// between running slow and running offset.
+	//
+	// It is the caption's floor that keeps this safe rather than the count.
+	// Being behind shortens what is on screen to the time it takes to read at
+	// the fastest speed anyone should be asked to read at, and never below, so
+	// draining costs comfort and never legibility.
+	//
+	// The character count below is no use here either: it asks how much reading
+	// time is queued, which assumes the queue is text on its way to the screen.
+	// A box's queue is a whole caption that then appears at once, so one
+	// ordinary two row caption measures as five seconds of reading.
 	if c.popon {
-		return c.popPending > 1
+		return c.popPending > 0
 	}
 	if c.maxLag <= 0 {
 		return len(c.queue) > 2
@@ -4020,6 +4041,31 @@ func (c *cea608) next() [2]byte {
 		c.credit -= cost
 	}
 	if len(c.queue) == 0 {
+		// A box shows what it has the moment the screen is free.
+		//
+		// This is the difference between running slow and running offset, and
+		// it is where the offset was. A caption was only sent once it was full
+		// or a sentence had ended in it, so the box always held about a
+		// caption's worth of speech — two rows is four seconds of it — and
+		// everything reached the screen four seconds after it was said. The
+		// same four seconds whatever the model: a streaming model that commits
+		// a word a second still waited for sixty more characters before any of
+		// them went up.
+		//
+		// So the writer no longer decides when a caption is sent. The display
+		// asks: the moment the caption on screen has had its time and nothing
+		// is queued behind it, whatever has been held goes up, however short.
+		// That is self-correcting in both directions — when it is keeping up
+		// the captions are small and current, and when it falls behind they
+		// fill, because more has arrived by the time the screen frees.
+		if c.popon && len(c.held) > 0 && time.Since(c.lastBlock) >= c.popGap() {
+			c.flushPopon(true)
+			if len(c.queue) > 0 {
+				p := c.queue[0]
+				c.queue = c.queue[1:]
+				return p
+			}
+		}
 		// A box caption comes down when its time is up.
 		//
 		// A roll-up leaves its lines where they are because the next roll will
