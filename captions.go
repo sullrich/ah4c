@@ -7359,11 +7359,11 @@ func supportedToggles(model uintptr, q modelQuirks) (pnc, itn int32) {
 // hallucinates on silence, which is why the missing word was only ever seen on
 // that model.
 //
-// A phrase closed at a word gap or at the ceiling was closed with the speaker
-// still going, so the next stretch is the rest of that sentence: the bar was
-// already tripped by speech, and this code is the reason the remainder is short
-// and alone. Judging it as though it had arrived out of a quiet room is judging
-// it on a fact this code invented.
+// A phrase closed at a word gap was closed with the speaker still going, so the
+// next stretch is the rest of that sentence: the bar was already tripped by
+// speech, and this code is the reason the remainder is short and alone. Judging
+// it as though it had arrived out of a quiet room is judging it on a fact this
+// code invented.
 func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64, tailOfSplit bool) bool {
 	if tailOfSplit {
 		return false
@@ -7822,12 +7822,19 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		// code made, and whether the next one will be.
 		//
 		// A phrase closed at a real pause is a finished utterance and what
-		// follows it is a new one. A phrase closed at a word gap or at the
-		// ceiling is not: speech was still running, so the rest of that
-		// sentence is the next phrase, and it is the piece that can be one word
-		// long.
+		// follows it is a new one. A phrase closed at a word gap is not: speech
+		// was still running, and this is the only close that hands the next
+		// phrase nothing to start from, so that phrase can be a single word.
+		//
+		// The ceiling is deliberately not counted. It carries its audio forward
+		// rather than dropping it, so the phrase after it starts with up to
+		// seven tenths of a second already in hand and clears the floor on its
+		// own. Counting it would matter on continuous speech, where the ceiling
+		// is what fires and fires again: the flag would never clear, and the
+		// noise gate would be off for the length of a newscast — which is the
+		// content it exists for.
 		tailOfSplit := wasSplit
-		wasSplit = !ended && (gapped || forced)
+		wasSplit = gapped && !ended
 		// The next phrase starts with whatever was carried into it.
 		//
 		// A forced cut splits the audio exclusively — audio[:at] goes now and
