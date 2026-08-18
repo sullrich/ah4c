@@ -470,6 +470,7 @@ type captionModel struct {
 var captionModelCatalog = []captionModel{
 	cohereTranscribe,
 	nemotronStreaming,
+	nemotronEnglish,
 	parakeetTDT,
 }
 
@@ -5223,6 +5224,8 @@ func quirksFor(m captionModel) modelQuirks {
 		return cohereQuirks
 	case nemotronStreaming.Key:
 		return nemotronQuirks
+	case nemotronEnglish.Key:
+		return nemotronEnglishQuirks
 	case parakeetTDT.Key:
 		return parakeetQuirks
 	}
