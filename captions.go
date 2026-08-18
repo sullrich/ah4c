@@ -578,7 +578,7 @@ func defaultCaptionConfig() captionConfig {
 		Enabled:     false,
 		Model:       "canary-180m",
 		Language:    "en",
-		Style:       "rollup3",
+		Style:       "box2",
 		OnScreenSec: 4,
 		SpeedWPM:    160,
 		Uppercase:   true,

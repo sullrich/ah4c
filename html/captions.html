@@ -190,18 +190,19 @@
             <div class="field-row">
                 <label for="style">Presentation</label>
                 <select id="style" onchange="styleFields()">
+                    <option value="box2">Box, 2 lines (recommended)</option>
                     <option value="rollup2">Roll-up, 2 lines</option>
-                    <option value="rollup3">Roll-up, 3 lines (recommended)</option>
+                    <option value="rollup3">Roll-up, 3 lines</option>
                     <option value="rollup4">Roll-up, 4 lines</option>
-                    <option value="box2">Box, 2 lines</option>
                 </select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                <b>Roll-up</b> writes words as they are recognized and scrolls finished lines up. Nothing is
-                held back, so it is the closest to the sound. Use it unless you have a reason not to.<br>
                 <b>Box</b> shows a whole caption at once and replaces it whole, the way captions on recorded
-                programs look. It has to wait for enough of a sentence to show, and for the caption before it
-                to be read, so it always runs further behind. Choose it for the look, not for the timing.
+                programs look. Nothing types and nothing scrolls. It waits for enough of a sentence to show
+                and for the caption before it to be read, so it runs a little further behind.<br>
+                <b>Roll-up</b> writes words as they are recognized and scrolls finished lines up. Nothing is
+                held back, so it is the closest to the sound &mdash; the one to fall back to if a box feels
+                too far behind on your machine.
             </p>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="styleHelp"></p>
             <div class="field-row" id="phraseRow" style="display:none;">
@@ -540,9 +541,14 @@ function render() {
             `How long ${esc(model.name.split(' ')[0])} listens before it writes. Longer is more accurate and
              further behind the picture; shorter is quicker and guesses more.`;
     } else {
+        // Emptied, not just hidden. The options are the last model's, and
+        // collect() reads this select whether or not the row is on screen — so
+        // a hidden row was still saving a sentence length, belonging to a model
+        // that had been switched away from.
+        document.getElementById('phrase').innerHTML = '';
         document.getElementById('phraseHelp').innerHTML = '';
     }
-    document.getElementById('style').value = cfg.style || 'rollup3';
+    document.getElementById('style').value = cfg.style || 'box2';
     const speeds = state.speeds || [];
     const spd = document.getElementById('speed');
     spd.innerHTML = speeds.map(w =>
@@ -574,8 +580,8 @@ function render() {
 function styleFields() {
     const box = document.getElementById('style').value.startsWith('box');
     document.getElementById('styleHelp').innerHTML = box
-        ? `Set to Roll-up, 3 lines to go back to the faster one.`
-        : '';
+        ? ''
+        : `Set to Box, 2 lines for the broadcast look.`;
     document.getElementById('speedHelp').innerHTML = box
         ? `How fast you read, which is what decides how long each caption stays: a short one clears quickly
            and a full one is given the time it needs. Lower it if captions are replaced before you finish
