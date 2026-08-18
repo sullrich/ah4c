@@ -159,12 +159,12 @@
             </p>
             <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                <b>Cohere</b> waits for each sentence to finish, so it is the most accurate and always a
-                couple of seconds behind. <b>Canary</b> is close behind it on accuracy at a sixth of the
-                size, which is the one to pick when the graphics chip runs out before the tuners do.
+                <b>Canary</b> is the one to start with: within a point of the most accurate model here at a
+                sixth of the cost, so an ordinary machine captions several tuners at once. <b>Cohere</b> is
+                more accurate again and asks a great deal more of the graphics chip, which is worth it on a
+                tuner or two. Both wait for each sentence to finish, so both run a couple of seconds behind.
                 <b>Nemotron</b> writes as it listens, about a second behind, and reads thirty-two languages.
-                <b>Parakeet</b> is a tenth the size of any of them and the one to pick if the machine cannot
-                manage the others.<br>
+                <b>Parakeet</b> is the one to pick if the machine cannot manage the others.<br>
                 All of them share one copy across every tuner except Nemotron, which loads a copy per tuner
                 and wants the graphics chip continuously for each &mdash; so it is the one to watch when
                 captioning several tuners at once.
