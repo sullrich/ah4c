@@ -2652,6 +2652,13 @@ type cea608 struct {
 	// that carriage return are still owed; see next() for what they pace.
 	lastCR   time.Time
 	crCopies int
+	// box replaces the whole caption between phrases instead of scrolling one
+	// row into the next. lastBlock is when it was last replaced and blockCopies
+	// how many repeats of that erase are still owed, the same bookkeeping the
+	// roll keeps for its carriage return.
+	box         bool
+	lastBlock   time.Time
+	blockCopies int
 	rows     byte // ccRU2 / ccRU3 / ccRU4
 	started  bool
 	col      int
@@ -2753,11 +2760,14 @@ func captionLag(m captionModel, cfg captionConfig) float64 {
 
 func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float64) *cea608 {
 	rows := byte(ccRU3)
+	box := false
 	switch style {
 	case "rollup2":
 		rows = ccRU2
 	case "rollup4":
 		rows = ccRU4
+	case "box2":
+		rows, box = ccRU2, true
 	}
 	n := 3
 	switch rows {
@@ -2766,8 +2776,21 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 	case ccRU4:
 		n = 4
 	}
-	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
-		minRollGap: rollGapFor(onScreen, n)}
+	gap := rollGapFor(onScreen, n)
+	if box {
+		// A roll divides the wanted time on screen by the rows because a line
+		// survives that many rolls. A box does not divide it: the caption is
+		// replaced whole, so the whole of it is what the setting asks for.
+		//
+		// Floored at the guidance for two lines rather than for one, because
+		// two lines is what a box puts up.
+		gap = rollGapFor(onScreen, 1)
+		if min := ccMinOnScreen(2); gap < min {
+			gap = min
+		}
+	}
+	return &cea608{rows: rows, box: box, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
+		minRollGap: gap}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2777,7 +2800,17 @@ func (c *cea608) ctrl(code byte) {
 }
 
 // begin puts the decoder into roll-up mode on the bottom row.
+//
+// Box style clears the display first. Starting is not always starting from
+// nothing: the backlog cull below throws away the queue and starts again, and
+// whatever the decoder was showing when that happened is still on the screen.
+// A roll scrolls it away in its own time; a box has to erase it, or the old
+// caption sits beside the new one. Erasing a blank display costs a control code
+// and does nothing, which is what it does at a genuine stream start.
 func (c *cea608) begin() {
+	if c.box {
+		c.ctrl(ccEDM)
+	}
 	c.mode()
 	c.ctrl(ccCR)
 	c.started = true
@@ -2803,6 +2836,32 @@ func (c *cea608) mode() {
 // channel change.
 func (c *cea608) newRow() {
 	c.ctrl(ccCR)
+	c.mode()
+	c.col = 0
+}
+
+// newBlock starts the next caption, which is a different thing from starting
+// the next row.
+//
+// Those two are the same act in a roll-up and are not in a box. A roll-up has
+// one hand-off and one command for it: the carriage return scrolls what is
+// there up a row, which is both how a caption ends and how a wrapped line gets
+// somewhere to go. The line just read stays on the screen underneath the new
+// one, which is the style.
+//
+// A box replaces the caption instead. Nothing is meant to survive into the next
+// one, so the hand-off between captions erases the display and starts again at
+// the bottom row, while a wrap inside a caption still rolls — that is how the
+// second line of the pair gets its room.
+//
+// So the two hand-offs are separated. This one is between captions; the
+// newRow call inside the wrap is within one, and stays a roll for both styles.
+func (c *cea608) newBlock() {
+	if !c.box {
+		c.newRow()
+		return
+	}
+	c.ctrl(ccEDM)
 	c.mode()
 	c.col = 0
 }
@@ -2862,7 +2921,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	// how the new line gets its row, and that is all this is.
 	if c.pendingBreak {
 		c.pendingBreak = false
-		c.newRow()
+		c.newBlock()
 	}
 	c.lastText = time.Now()
 	for _, w := range strings.Fields(text) {
@@ -3154,6 +3213,12 @@ func (c *cea608) next() [2]byte {
 	if len(c.queue) == 0 {
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
+			// This erase is handed out below without passing the dwell, so the
+			// dwell is told about it here. Otherwise box style meets the second
+			// copy of a pair whose first copy it never saw, and can withhold
+			// it — which splits a doubled control code, the one thing this
+			// queue must never do.
+			c.lastBlock, c.blockCopies = time.Now(), 1
 			c.started = false
 			c.col = 0
 			c.lastText = time.Time{}
@@ -3165,18 +3230,41 @@ func (c *cea608) next() [2]byte {
 		}
 		return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 	}
-	// A carriage return waits for the dwell before it rolls the display. Its
-	// doubled copy is exempt: control codes go out twice back to back, and a
-	// decoder is only guaranteed to drop the repeat when it arrives as one.
-	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) && p[1] == odd608(ccCR) {
+	// The hand-off between captions waits for the dwell, so that what is on the
+	// screen has been there long enough to read. Which code that is depends on
+	// the style: a roll-up hands off with a carriage return, a box with an
+	// erase. Either one's doubled copy is exempt — control codes go out twice
+	// back to back, and a decoder is only guaranteed to drop the repeat when it
+	// arrives as one.
+	//
+	// A box also emits carriage returns, and they are deliberately not held.
+	// Those are the wrap from the first line of a caption to its second, and
+	// time on screen is a promise about a finished caption rather than about
+	// how soon its own second line may follow its first. Holding them would
+	// also push the erase that follows further out than the setting asked for,
+	// because the caption cannot be replaced until it has finished arriving.
+	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) {
 		switch {
-		case c.crCopies > 0:
-			c.crCopies--
-		case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
-			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
-		default:
-			c.lastCR = time.Now()
-			c.crCopies = 1
+		case c.box && p[1] == odd608(ccEDM):
+			switch {
+			case c.blockCopies > 0:
+				c.blockCopies--
+			case time.Since(c.lastBlock) < c.minRollGap && !c.waiting():
+				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+			default:
+				c.lastBlock = time.Now()
+				c.blockCopies = 1
+			}
+		case !c.box && p[1] == odd608(ccCR):
+			switch {
+			case c.crCopies > 0:
+				c.crCopies--
+			case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
+				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+			default:
+				c.lastCR = time.Now()
+				c.crCopies = 1
+			}
 		}
 	}
 	p := c.queue[0]
