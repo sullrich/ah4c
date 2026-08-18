@@ -2989,10 +2989,13 @@ func analyze608(words []string) []ccWord {
 	out := make([]ccWord, 0, len(words))
 	startOfSentence := true
 	for _, raw := range words {
+		// Trimmed for the rules and never for the text: a word is shown as it
+		// was recognized, quotation marks and all. Classifying the trimmed form
+		// and then displaying it would take the quotes off the caption.
 		w := ccTrimEdges(raw)
 		bare := strings.TrimRight(w, `.!?…,;:—–`)
 		lower := strings.ToLower(strings.TrimRight(bare, "."))
-		a := ccWord{text: w, class: ccWordClass[lower]}
+		a := ccWord{text: raw, class: ccWordClass[lower]}
 		if last := strings.TrimRight(w, `"'“”’)`); last != "" {
 			switch last[len(last)-1] {
 			case '.', '!', '?':
@@ -3195,33 +3198,30 @@ func segment608(w []ccWord, cols, rows int) [][]ccWord {
 			n = 1
 		}
 		cut := n
-		if n < len(w) {
-			// A caption that can end at the end of a sentence should, and one
-			// that can end at a clause should if it cannot end at a sentence.
-			// Only the back of the caption is searched: cutting early enough to
-			// leave a row nearly empty trades one fault for another.
-			// A full stop is searched for across the whole caption and a comma
-			// only across the back of it. They are not the same strength of
-			// cue: a caption that ends where the sentence ends is a complete
-			// thought whatever it leaves on the row, while cutting at an early
-			// comma trades a mid-clause ending for a half-empty caption and
-			// gains nothing.
-			for i := n; i >= 1; i-- {
-				if w[i-1].endsSentence {
+		// A caption ends where a sentence ends, whether or not the next one
+		// would have fitted beside it. Two sentences sharing a caption is not
+		// a caption of two sentences — it is the first one waiting for the
+		// second to be spoken before either can be read, which is delay bought
+		// for nothing. The search covers the whole caption because a full stop
+		// is the strongest boundary there is.
+		for i := n; i >= 1; i-- {
+			if w[i-1].endsSentence && i < len(w) {
+				cut = i
+				break
+			}
+		}
+		// A comma is a weaker cue and only worth taking near the back, where it
+		// saves a mid-clause ending. Taken early it trades that for a caption
+		// with a row nearly empty and gains nothing.
+		if cut == n && n < len(w) {
+			floor := n * 2 / 3
+			if floor < 1 {
+				floor = 1
+			}
+			for i := n; i >= floor; i-- {
+				if w[i-1].endsClause {
 					cut = i
 					break
-				}
-			}
-			if cut == n {
-				floor := n * 2 / 3
-				if floor < 1 {
-					floor = 1
-				}
-				for i := n; i >= floor; i-- {
-					if w[i-1].endsClause {
-						cut = i
-						break
-					}
 				}
 			}
 		}
@@ -3360,15 +3360,6 @@ type popTiming struct {
 	// hurrying itself.
 	last bool
 }
-
-// popPages is how many captions' worth may wait for an utterance to end.
-//
-// A box cannot show anything until the caption is complete, and a streaming
-// model only says a phrase is complete when the speaker stops. Somebody talking
-// without a break would otherwise hold every word until they did. Two captions
-// is the bound: past it the earlier rows go up on their own, which is what a
-// broadcast encoder does with a long sentence anyway.
-const popPages = 2
 
 // The preamble address code table, from 47 CFR 15.119.
 //
@@ -3592,17 +3583,26 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.begin()
 	}
 	if c.popon {
-		// Held rather than written. A box shows a caption complete or not at
-		// all, so there is nothing to send until the phrase is finished — and
-		// for a streaming model, which finalizes a few words at a time, that is
-		// the end of the utterance rather than the end of every arrival.
+		// Held only until there is a caption to show, and not a word longer.
+		//
+		// This waited for breakAfter, and breakAfter does not mean what it
+		// needs to mean here. It is the roll-up's flag for "end the line", and
+		// the phrase path sets it only where the speaker actually paused or the
+		// model closed a sentence off — a fragment cut at a word gap flows on
+		// instead, which is right for a roll-up and is what fills its rows.
+		//
+		// A box read that as "the caption is not finished" and held everything.
+		// On continuous speech, which is most of television, the pause never
+		// comes: the words sat until a second caption's worth had piled up
+		// behind them, so every caption reached the screen around eight seconds
+		// of speech after it started. That is the whole of the delay this style
+		// had over the roll-up, and none of it was the style.
+		//
+		// A caption is complete when it is full, or when a sentence ends inside
+		// it, and neither of those needs the speaker to stop.
 		c.lastText = time.Now()
 		c.held = append(c.held, strings.Fields(cased)...)
-		if breakAfter {
-			c.flushPopon()
-		} else if len(segment608(analyze608(c.held), c.maxCol, c.boxRows)) >= popPages {
-			c.flushPopon()
-		}
+		c.flushPopon(breakAfter)
 		return
 	}
 	// The break owed by the previous phrase is taken now, with this phrase's
@@ -3650,9 +3650,8 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 // screen, because a page nobody could read is not a page that was shown.
 //
 // Called with the lock held.
-func (c *cea608) flushPopon() {
+func (c *cea608) flushPopon(final bool) {
 	held := analyze608(c.held)
-	c.held = c.held[:0]
 	if len(held) == 0 {
 		return
 	}
@@ -3660,8 +3659,31 @@ func (c *cea608) flushPopon() {
 	// guidance puts them in. The other way round — rows filled greedily, then
 	// cut into captions every two rows — makes where a caption ends a side
 	// effect of where the wrapper ran out of room.
+	caps := segment608(held, c.maxCol, c.boxRows)
+	// The last of them may still be growing, so it is only shown when it is
+	// finished: when the speaker has stopped, when it fills the caption, or
+	// when a sentence ends in it. Otherwise it waits for the next few words.
+	// Everything before it is finished by definition — something came after.
+	shown := len(caps)
+	if !final && shown > 0 {
+		last := caps[shown-1]
+		full := len(rows608(last, c.maxCol)) >= c.boxRows
+		if !full && !last[len(last)-1].endsSentence {
+			shown--
+		}
+	}
+	if shown <= 0 {
+		return
+	}
+	var kept []string
+	for _, w := range caps[shown:] {
+		for _, x := range w {
+			kept = append(kept, x.text)
+		}
+	}
+	c.held = append(c.held[:0], kept...)
 	var captions int
-	for _, caption := range segment608(held, c.maxCol, c.boxRows) {
+	for _, caption := range caps[:shown] {
 		rows := rows608(caption, c.maxCol)
 		if c.upper {
 			for i := range rows {
