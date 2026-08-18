@@ -4329,7 +4329,9 @@ func (c *cea608) minCaptionChars() int {
 	if c.pace <= 0 {
 		return c.maxCol / 2
 	}
-	n := int(ccMinOnScreen(1).Seconds()*c.pace + 0.5)
+	// Rounded up, not to nearest: rounding down lands a character short of
+	// break-even, which is the one side of this that does not work.
+	n := int(math.Ceil(ccMinOnScreen(1).Seconds() * c.pace))
 	if n > c.maxCol {
 		n = c.maxCol
 	}
