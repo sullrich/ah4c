@@ -105,4 +105,15 @@ var nemotronStreaming = captionModel{
 // window does not apply to it — it keeps a running state rather than waiting
 // for a phrase — and it has not shown the hallucination on silence that earns a
 // noise gate. If it does, this is where that would go.
-var nemotronQuirks = modelDefaults
+var nemotronQuirks = modelQuirks{
+	PhraseWindow: modelDefaults.PhraseWindow,
+	// 1040 ms a feed, which is this family's own figure and not a guess.
+	//
+	// It is the lookahead the model is run at by default — the engine offers
+	// 0, 80, 480 and 1040 ms and ships 13 frames, the last of them — and it is
+	// the chunk the engine's own accuracy measurement for this model uses:
+	// --stream-chunk-ms 1040 --stream-att-right 13. Feeding less does not
+	// produce a word sooner, because the model will not commit one ahead of its
+	// lookahead; it only runs the same encoder pass more often.
+	StreamChunkSec: 1.04,
+}
