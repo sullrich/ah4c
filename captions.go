@@ -613,17 +613,6 @@ func loadCaptionConfig() {
 		logger("[CC] Ignoring malformed %s: %v", captionCfgFile, err)
 		return
 	}
-	// A model that has left the catalog leaves a saved config pointing at
-	// nothing, and captions then stop with "unknown model" until somebody
-	// happens to open the page. Moved to the default and said out loud instead:
-	// the wrong model transcribing is recoverable, and no captions at all with
-	// the reason only on a page nobody is looking at is the failure this file
-	// keeps a rule about.
-	if _, ok := findCaptionModel(cfg.Model); !ok {
-		was := cfg.Model
-		cfg.Model = defaultCaptionConfig().Model
-		logger("[CC] %q is no longer offered; using %s instead. Pick another on the Closed Captions page if you would rather.", was, cfg.Model)
-	}
 	captionCfgLock.Lock()
 	captionCfg = cfg
 	captionCfgLock.Unlock()
