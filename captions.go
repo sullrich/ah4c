@@ -2665,8 +2665,8 @@ type cea608 struct {
 	// one belonging to the caption on screen now, which is the time the next
 	// caption has to wait.
 	popPending  int
-	popDwells   []time.Duration
-	curDwell    time.Duration
+	popDwells   []popTiming
+	curDwell    popTiming
 	lastBlock   time.Time
 	blockCopies int
 	rows        byte // ccRU2 / ccRU3 / ccRU4
@@ -2914,7 +2914,7 @@ func wrap608(words []string, maxCol int) []string {
 // one is really asking for. The floor is the published guidance for that many
 // rows and it is applied last, because a caption gone before it could be read
 // is the one failure worth being slow to avoid.
-func popDwell(chars, rows int, pace float64, want time.Duration) time.Duration {
+func popDwell(chars, rows int, pace float64, want time.Duration) popTiming {
 	d := want
 	if pace > 0 {
 		d = time.Duration(float64(chars) / pace * float64(time.Second))
@@ -2922,10 +2922,27 @@ func popDwell(chars, rows int, pace float64, want time.Duration) time.Duration {
 	if d > want {
 		d = want
 	}
-	if min := ccMinOnScreen(rows); d < min {
-		d = min
+	floor := ccMinOnScreen(rows)
+	if d < floor {
+		d = floor
 	}
-	return d
+	return popTiming{want: d, floor: floor}
+}
+
+// popTiming is how long one caption asks for and how long it must have.
+//
+// The two are different numbers because falling behind is answered by giving
+// captions less time, and there is a point past which less time is no time.
+// A roll-up can be hurried down to nothing safely: the line it rolls away is
+// still on the screen, one row up, for another whole cycle. A box has no such
+// slack — hurrying a caption means replacing it, and a caption replaced before
+// anybody could read it was never shown at all.
+//
+// So the backlog is drained down to the floor and no further. Being late is
+// recoverable and being unreadable is not.
+type popTiming struct {
+	want  time.Duration
+	floor time.Duration
 }
 
 // popPages is how many rows of caption may wait for an utterance to end.
@@ -3430,7 +3447,7 @@ func (c *cea608) next() [2]byte {
 			switch {
 			case c.blockCopies > 0:
 				c.blockCopies--
-			case time.Since(c.lastBlock) < c.curDwell && !c.waiting():
+			case time.Since(c.lastBlock) < c.popGap():
 				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 			default:
 				c.lastBlock = time.Now()
@@ -3459,6 +3476,16 @@ func (c *cea608) next() [2]byte {
 	p := c.queue[0]
 	c.queue = c.queue[1:]
 	return p
+}
+
+// popGap is how long the caption on screen must stay before the next replaces
+// it: what it asks for, or the guidance floor when captions are queued behind
+// it. Callers hold the lock.
+func (c *cea608) popGap() time.Duration {
+	if c.waiting() {
+		return c.curDwell.floor
+	}
+	return c.curDwell.want
 }
 
 // headIsControl reports whether the next thing out is a control code rather
