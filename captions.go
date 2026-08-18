@@ -2733,25 +2733,19 @@ type cea608 struct {
 	// and popDwells how long each of them will need once it is. curDwell is the
 	// one belonging to the caption on screen now, which is the time the next
 	// caption has to wait.
-	popPending  int
-	popDwells   []popTiming
-	curDwell    popTiming
-	lastBlock   time.Time
+	popPending int
+	popDwells  []popTiming
+	curDwell   popTiming
+	lastBlock  time.Time
+	// pairs counts the byte pairs handed out, which is the presentation
+	// timeline in the only unit this encoder has. See streamNow.
+	pairs       int64
 	blockCopies int
 	rows        byte // ccRU2 / ccRU3 / ccRU4
 	started     bool
 	col         int
 	maxCol      int
 	upper       bool
-	// drains counts calls to next since drainFrom, which is how fast this
-	// channel actually clears its queue: one entry leaves per call, whatever
-	// the picture rate or the caption packet layout upstream turns out to be.
-	// Measuring it rather than assuming it is what lets the backlog be talked
-	// about in seconds — the only unit a model, a frame rate or a format can
-	// all be compared in.
-	drains    int
-	drainFrom time.Time
-	drainRate float64
 	// toldRate is the picture rate the injector read out of the stream, used
 	// until this channel has clocked itself.
 	toldRate float64
@@ -2769,16 +2763,38 @@ type cea608 struct {
 	pendingBreak bool
 }
 
-// pairRate is how many byte pairs a second this channel is clearing, measured.
+// streamNow is the time on the presentation timeline: what the viewer's clock
+// says, not what ours does.
+//
+// Every dwell in here was measured against time.Now, and that is the wrong
+// clock. Pairs do not leave at a steady rate in wall time — they leave when the
+// encoder hands over a picture, and a stream arrives in bursts: a socket
+// delivers two seconds of video in a moment and then nothing for a moment. So a
+// caption told to stay four seconds stayed four seconds of *our* time, which
+// was however many seconds of video the burst happened to contain. The same
+// setting produced a different result on every stretch of every stream, and a
+// player buffering differently saw something different again.
+//
+// A pair is one picture's worth of line 21 and line 21 runs at a fixed rate, so
+// counting pairs is counting presentation time exactly. Nothing here reads a
+// real clock any more; the whole encoder runs on this one, and a burst that
+// delivers a hundred pairs advances it by a hundred pairs' worth of video
+// whether that took a second or an instant.
+//
+// This is only correct because the channel now runs at the rate the format
+// defines. While a sixty picture stream was carrying twice as many pairs, a
+// pair was half a picture and this clock would have run at double speed.
+func (c *cea608) streamNow() time.Time {
+	return time.Unix(0, int64(float64(c.pairs)/c.pairRate()*float64(time.Second)))
+}
+
+// pairRate is how many byte pairs a second this channel carries.
 //
 // It settles within a second or two of the stream starting and is re-measured
 // on a rolling window, so a stream that changes rate mid-flight is followed
 // rather than remembered. Before there is enough to go on it answers with the
 // format's base rate, which is right for the common case and never far wrong.
 func (c *cea608) pairRate() float64 {
-	if c.drainRate > 0 {
-		return c.drainRate
-	}
 	if c.toldRate > 0 {
 		return c.toldRate
 	}
@@ -2799,32 +2815,15 @@ func (c *cea608) setPictureRate(fps float64) {
 	c.mu.Unlock()
 }
 
-// countDrain records one call and re-measures the rate once a window's worth
-// has gone by. Called with the lock held.
-func (c *cea608) countDrain() {
-	now := time.Now()
-	if c.drainFrom.IsZero() {
-		c.drainFrom, c.drains = now, 0
-		return
-	}
-	c.drains++
-	// The first window is short, because until it closes the only thing to go
-	// on is an assumption about the format, and an assumption about the format
-	// is what gets this wrong on a sixty-picture stream. One second of real
-	// counting replaces it. After that the window widens: the rate is known,
-	// and what is wanted is a steady figure that still follows a stream which
-	// changes underneath it.
-	window := 4 * time.Second
-	if c.drainRate == 0 {
-		window = time.Second
-	}
-	if elapsed := now.Sub(c.drainFrom); elapsed >= window {
-		if r := float64(c.drains) / elapsed.Seconds(); r > 1 {
-			c.drainRate = r
-		}
-		c.drainFrom, c.drains = now, 0
-	}
-}
+// The drain measurement is gone, and it was measuring the wrong thing.
+//
+// It counted pairs against the wall clock, because the rate they left at was
+// not known and had to be inferred. It is known now: the injector puts one pair
+// in every picture the format allows and tells the encoder what that works out
+// at, which is authoritative rather than inferred. And the figure it produced
+// was the delivery rate, not the presentation rate — a stream arriving in
+// bursts measures fast and then slow, and every dwell computed from it moved
+// with the network.
 
 // captionLag is how much unread text the meter may hold for this model.
 func captionLag(m captionModel, cfg captionConfig) float64 {
@@ -3715,7 +3714,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		//
 		// A caption is complete when it is full, or when a sentence ends inside
 		// it, and neither of those needs the speaker to stop.
-		c.lastText = time.Now()
+		c.lastText = c.streamNow()
 		c.held = append(c.held, strings.Fields(cased)...)
 		c.flushPopon(breakAfter)
 		return
@@ -3734,7 +3733,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.pendingBreak = false
 		c.newRow()
 	}
-	c.lastText = time.Now()
+	c.lastText = c.streamNow()
 	for _, w := range strings.Fields(text) {
 		runes := []rune(w)
 		if c.col > 0 && c.col+1+len(runes) > c.maxCol {
@@ -4141,7 +4140,10 @@ func (c *cea608) meterPace() float64 {
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.countDrain()
+	// One pair leaves per call, and that is the tick this encoder's clock runs
+	// on. Counted before anything else, so every dwell below is measured on the
+	// presentation timeline and not on ours.
+	c.pairs++
 	// Metered at speaking speed, and at the catch-up ceiling when there is a
 	// backlog — never at whatever the channel happens to be worth.
 	//
@@ -4196,7 +4198,7 @@ func (c *cea608) next() [2]byte {
 		// That is self-correcting in both directions — when it is keeping up
 		// the captions are small and current, and when it falls behind they
 		// fill, because more has arrived by the time the screen frees.
-		if c.popon && c.worthShowing() && time.Since(c.lastBlock) >= c.popGap() {
+		if c.popon && c.worthShowing() && c.streamNow().Sub(c.lastBlock) >= c.popGap() {
 			c.flushPopon(true)
 			if len(c.queue) > 0 {
 				p := c.queue[0]
@@ -4218,7 +4220,7 @@ func (c *cea608) next() [2]byte {
 		// for, with a moment's grace in case the next caption is a breath away.
 		// Broadcast pop-on has an out time for every caption; this is that.
 		if c.popon && c.started && len(c.held) == 0 && !c.lastBlock.IsZero() &&
-			time.Since(c.lastBlock) > c.curDwell.want+ccPopLinger {
+			c.streamNow().Sub(c.lastBlock) > c.curDwell.want+ccPopLinger {
 			c.ctrl(ccEDM)
 			c.started = false
 			c.col = 0
@@ -4228,7 +4230,7 @@ func (c *cea608) next() [2]byte {
 			c.queue = c.queue[1:]
 			return p
 		}
-		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
+		if c.started && !c.lastText.IsZero() && c.streamNow().Sub(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
 			c.started = false
 			c.col = 0
@@ -4259,10 +4261,10 @@ func (c *cea608) next() [2]byte {
 			switch {
 			case c.blockCopies > 0:
 				c.blockCopies--
-			case time.Since(c.lastBlock) < c.popGap():
+			case c.streamNow().Sub(c.lastBlock) < c.popGap():
 				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 			default:
-				c.lastBlock = time.Now()
+				c.lastBlock = c.streamNow()
 				c.blockCopies = 1
 				// The caption going up now decides how long the one after it
 				// waits, because that is how long this one is on the screen.
@@ -4277,10 +4279,10 @@ func (c *cea608) next() [2]byte {
 			switch {
 			case c.crCopies > 0:
 				c.crCopies--
-			case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
+			case c.streamNow().Sub(c.lastCR) < c.minRollGap && !c.waiting():
 				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 			default:
-				c.lastCR = time.Now()
+				c.lastCR = c.streamNow()
 				c.crCopies = 1
 			}
 		}
@@ -4348,7 +4350,7 @@ func (c *cea608) worthShowing() bool {
 	if last := c.held[len(c.held)-1]; endsSentence(last) {
 		return true
 	}
-	return time.Since(c.lastText) >= ccPopGather
+	return c.streamNow().Sub(c.lastText) >= ccPopGather
 }
 
 // popGap is how long the caption on screen must stay before the next replaces
