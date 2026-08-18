@@ -29,7 +29,10 @@ package main
 var canaryFlash = captionModel{
 	Key:  "canary-180m",
 	Name: "Canary 180M Flash",
-	Role: "Recommended",
+	// Not "Recommended": the page works that out for the machine it is running
+	// on and puts a badge on whichever model it picks. Saying it here as well
+	// put the word beside two different models at once.
+	Role: "Accurate and light",
 	Desc: "Nearly the accuracy of the best one at a sixth of the cost, so an ordinary machine captions several tuners at once rather than four or five. English, German, Spanish and French. Start here.",
 	// A phrase model: nothing is transcribed until the sentence is complete.
 	Latency:   "A couple of seconds behind",
