@@ -577,7 +577,8 @@ func defaultCaptionConfig() captionConfig {
 		Model:       "cohere-transcribe",
 		Language:    "en",
 		Style:       "rollup3",
-		OnScreenSec: 3,
+		OnScreenSec: 4,
+		SpeedWPM:    160,
 		Uppercase:   true,
 		Engine:      "auto",
 	}
@@ -2924,33 +2925,38 @@ const ()
 //
 // Two, because a control code occupies the queue twice: the pair and the copy
 // a decoder is only guaranteed to recognize when it arrives back to back.
-func (c *cea608) waiting() bool { return behindOnRoll(len(c.queue), ccMaxBacklogSec*c.pairRate()) }
+// ccCharsPerPair is what a queued pair is worth in reading time. writeRune
+// packs two characters into one wherever it can, and measurement across real
+// captions puts the average at 1.97, so two is the figure to reason with.
+const ccCharsPerPair = 2.0
 
-// behindOnRoll reports whether resting for the dwell would put the captions
-// behind, rather than merely whether anything is queued.
+// ccMaxLagSec is how much unread text may wait before the meter stands aside.
 //
-// The dwell keeps a finished line on screen for a beat. It is skipped when
-// there is text waiting, because a line resting while words pile up behind it
-// is a line making every later word late. That was written as "is anything
-// waiting", which is two byte pairs — two characters — and a phrase model
-// delivers a whole sentence at once. So with Cohere something was always
-// waiting, the dwell was never taken, and lines rolled off at channel speed one
-// after another. A streaming model trickles words and stays under the bar,
-// which is why the same display read perfectly well on one model and not on the
-// other.
+// The meter smooths a phrase onto the screen instead of dumping it, which costs
+// nothing in the long run: the words arrive at the speed they were spoken, so a
+// pace set to reading speed matches them over any window longer than a phrase.
+// What it cannot do is run slower than the speaker indefinitely. If it did, the
+// queue would grow without bound and the captions would fall further behind the
+// picture every minute.
 //
-// The question it should ask is whether the channel can carry what is queued
-// within the dwell. If it can, resting costs nothing and the line stays put. If
-// it cannot, the rest is already being paid for by somebody and the roll goes
-// now.
-// The bar is a real backlog, not one dwell's worth of text. A phrase model
-// delivers a sentence at a time, and a sentence is comfortably more than the
-// channel carries during a beat — so measuring against the dwell would skip it
-// on every phrase, which is the fault this is fixing. Each format already
-// defines what "behind" means for it, and those are the numbers used.
-func behindOnRoll(queued int, catchUp float64) bool {
-	return catchUp > 0 && float64(queued) > catchUp
+// So the meter yields once more than this much reading time is waiting. Six
+// seconds is a phrase and a half at the longest sentence length offered: enough
+// to smooth one phrase completely, and short enough that two piling up drains
+// at the channel's own speed rather than settling into a permanent lag.
+//
+// It was five seconds of *channel* time, which sounds similar and is not: the
+// channel carries sixty characters a second and nobody reads at a quarter of
+// that, so five seconds of channel time is twenty seconds of reading. A backlog
+// could sit just under that threshold for ever — captions a quarter of a minute
+// late, with nothing in the design to drain them.
+func (c *cea608) waiting() bool {
+	if c.pace <= 0 {
+		return len(c.queue) > 2
+	}
+	return float64(len(c.queue))*ccCharsPerPair/c.pace > ccMaxLagSec
 }
+
+const ccMaxLagSec = 6.0
 
 // cc608NominalRate is the pair rate assumed until the channel has been running
 // long enough to measure its own. Field 1 of CEA-608 carries one pair per
@@ -3044,9 +3050,18 @@ var captionSpeeds = []int{120, 130, 140, 150, 160}
 
 // ccCharsPerWord converts words a minute into characters a second.
 //
-// Five point eight is a word with its trailing space in English prose, which is
-// what the characters-a-second guidance is counted against: twenty at the most,
-// twelve to eighteen comfortable. 150 words a minute lands at 14.5, mid-band.
+// Derived rather than published, and the derivation matters because there are
+// two conventions and they differ by sixteen percent. The five character word
+// is the typing standard; captioning counts real words — the DCMP is explicit
+// that "each word is counted, as opposed to basing the calculation on the
+// number of characters". English prose averages 4.79 letters a word across
+// Norvig's corpus of 743 billion, which is 5.79 with the space.
+//
+// The check that settles it: seventeen characters a second divided by 5.79 is
+// 176 words a minute, and the BBC's own research put "175WPM about right". The
+// typing constant gives 204, outside every published band.
+//
+//	https://norvig.com/mayzner.html
 const ccCharsPerWord = 5.8
 
 func paceFor(wpm int) float64 {
@@ -7046,7 +7061,7 @@ const (
 	// A quarter of a second is above the closures and below a real pause.
 	vadWordGap   = 0.25
 	vadSilence   = 0.45 // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 3.5  // backstop, so captions never fall this far behind
+	vadMaxPhrase = 3.5  // fallback only; every model in the catalog sets its own
 	vadLead      = 0.35 // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
