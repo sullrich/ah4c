@@ -190,6 +190,7 @@
                     <option value="rollup3">Roll-up, 3 lines</option>
                     <option value="rollup4">Roll-up, 4 lines</option>
                     <option value="box2">Box, 2 lines</option>
+                    <option value="box3">Box, 3 lines</option>
                 </select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="styleHelp"></p>
@@ -561,12 +562,13 @@ function render() {
 // decides how long a caption needs to be up instead, which is the reading it
 // asks for rather than the writing.
 function styleFields() {
-    const box = document.getElementById('style').value === 'box2';
+    const box = document.getElementById('style').value.startsWith('box');
     document.getElementById('styleHelp').innerHTML = box
         ? `Each caption appears complete and stays until the next one replaces it. Nothing types and nothing
-           scrolls, which is how captions on recorded programs look. A model that transcribes as it listens
-           has to reach the end of the sentence before any of it can be shown, so captions arrive later than
-           they do on a roll-up.`
+           scrolls, which is how captions on recorded programs look. More lines is not more text on screen at
+           once so much as fewer sentences split in two &mdash; and a sentence split in two waits for the
+           first half to be read before the second appears, which is where a box falls behind. A model that
+           transcribes as it listens also has to reach the end of a sentence before any of it can be shown.`
         : `Words appear as they are recognized and a finished line scrolls up, staying on screen while the
            next one is written underneath. This is how live captioning looks.`;
     document.getElementById('speedHelp').innerHTML = box
