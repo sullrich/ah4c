@@ -553,6 +553,16 @@ type captionConfig struct {
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
 	Uppercase bool `json:"uppercase"`
+	// Spelling is which English the captions are written in: "us", "gb", or
+	// empty for whatever the model wrote.
+	//
+	// Only some of the models are told which English to write. Canary's command
+	// line offers "en" and no variants, so it writes whichever spelling its
+	// training data leaned toward and there is nothing to pass it — it wrote
+	// "tyre". This corrects that afterward, in either direction, and does
+	// nothing unless asked: somebody watching British television may well want
+	// what was said spelled the way they spell it.
+	Spelling string `json:"spelling"`
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
@@ -9072,6 +9082,7 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 
 // write puts a phrase into the caption encoder.
 func (e *captionEngine) write(text string, breakAfter bool) {
+	text = respell(text, e.cfg.Spelling)
 	e.enc.pushText(text, breakAfter)
 }
 
