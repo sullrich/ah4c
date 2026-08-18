@@ -3253,8 +3253,14 @@ func segment608(w []ccWord, cols, rows int) [][]ccWord {
 		// second to be spoken before either can be read, which is delay bought
 		// for nothing. The search covers the whole caption because a full stop
 		// is the strongest boundary there is.
+		//
+		// Except where it would leave almost nothing. "Yes." is a sentence and
+		// it is not a caption: a box put it up on its own, alone in the middle
+		// of the screen, and replaced it a moment later. So a sentence boundary
+		// is only taken when there is a row's worth in front of it, and short
+		// sentences ride together the way they do on a broadcast caption.
 		for i := n; i >= 1; i-- {
-			if w[i-1].endsSentence && i < len(w) {
+			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/2 {
 				cut = i
 				break
 			}
@@ -4178,7 +4184,7 @@ func (c *cea608) next() [2]byte {
 		// That is self-correcting in both directions — when it is keeping up
 		// the captions are small and current, and when it falls behind they
 		// fill, because more has arrived by the time the screen frees.
-		if c.popon && len(c.held) > 0 && time.Since(c.lastBlock) >= c.popGap() {
+		if c.popon && c.worthShowing() && time.Since(c.lastBlock) >= c.popGap() {
 			c.flushPopon(true)
 			if len(c.queue) > 0 {
 				p := c.queue[0]
@@ -4270,6 +4276,36 @@ func (c *cea608) next() [2]byte {
 	p := c.queue[0]
 	c.queue = c.queue[1:]
 	return p
+}
+
+// ccPopGather is how long a fragment waits for the rest of its sentence before
+// it goes up on its own. Short enough not to be a delay anybody could name,
+// long enough to catch the next few words of a phrase already being spoken.
+const ccPopGather = 700 * time.Millisecond
+
+// worthShowing reports whether what is held is a caption yet.
+//
+// The display shows what it has the moment the screen is free, which is what
+// keeps a box current. Taken literally that put single words on the screen,
+// alone, one after another — a phrase model hands over a fragment, the screen
+// happens to be free, and three words become a caption of their own.
+//
+// So a fragment shorter than a row waits a moment for the rest of its sentence.
+// A row's worth is a caption and goes at once; anything ending a sentence is a
+// caption whatever its length, because nothing more is coming for it; and
+// anything that has waited out the gather goes rather than being held for words
+// that may never arrive. Callers hold the lock.
+func (c *cea608) worthShowing() bool {
+	if len(c.held) == 0 {
+		return false
+	}
+	if ccWordsWidth(analyze608(c.held)) >= c.maxCol {
+		return true
+	}
+	if last := c.held[len(c.held)-1]; endsSentence(last) {
+		return true
+	}
+	return time.Since(c.lastText) >= ccPopGather
 }
 
 // popGap is how long the caption on screen must stay before the next replaces
