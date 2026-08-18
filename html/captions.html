@@ -158,18 +158,11 @@
             </p>
             <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                Accuracy is bought with delay. <b>Cohere</b> waits for a sentence to end and
-                transcribes it whole, which makes it the most accurate and means it can never be
-                quicker than the sentence is long. <b>Nemotron</b> and <b>Moonshine</b> type as
-                they hear, about a second behind, guessing at words a sentence model would have
-                had the context for. No setting closes that gap either way.
-            </p>
-            <p class="small muted" style="margin:0 0 0.6rem;">
-                Language usually decides it: Cohere reads eight, Nemotron thirty-two. Moonshine is
-                English only and small enough for a Raspberry Pi. Memory runs backwards from what
-                you would expect — Cohere loads one copy and shares it with every tuner, while
-                each streaming tuner loads its own, so the accurate choice gets cheaper the more
-                tuners you caption.
+                <b>Cohere</b> waits for each sentence to finish, so it is the most accurate and always a
+                couple of seconds behind. <b>Nemotron</b> and <b>Moonshine</b> write as they listen, about a
+                second behind and a little less accurate. Cohere reads eight languages, Nemotron thirty-two,
+                Moonshine English only. Cohere shares one copy of itself across every tuner; the other two
+                load a copy per tuner, so Cohere costs less the more tuners you caption.
             </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
@@ -207,23 +200,16 @@
                 <select id="speed"></select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                How fast words are let onto the screen, rather than how fast the channel could carry them.
-                The caption channel can push sixty characters a second and nobody speaks at a quarter of that, so without
-                a pace a sentence lands all at once and the screen sits idle until the next one. Captioning
-                guidance puts subtitle speed between 120 and 160 words a minute; the whole range is here.
-                Lower is easier to read and falls behind sooner on dense speech, which the freshness rules
-                then catch up by dropping a phrase.
+                How fast words appear on screen. Lower is easier to read; higher keeps up better with
+                fast speech.
             </p>
             <div class="field-row">
                 <label for="onscreen">Time on screen</label>
                 <select id="onscreen"></select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                The least time a line stays readable before it is allowed to leave. A roll-up does not put
-                lines up together &mdash; each row is added and the oldest scrolls away &mdash; so this is
-                shared out between the rows above it, and more rows means each roll waits less.
-                Captioning guidance is a second for one line, a second and a half for two and two for three;
-                nothing here goes below that, whatever is chosen.
+                How long a line stays before it scrolls away. Longer is easier to read and does not slow
+                the words down &mdash; they still arrive at the reading speed above.
             </p>
             <div class="field-row">
                 <label for="case">Letter case</label>
@@ -276,10 +262,9 @@ function applyBusy() {
              <span class="dot"></span>
              <div>
                <div class="h">${busy === 1 ? 'A tuner is streaming' : busy + ' tuners are streaming'}, so captions cannot be switched on yet</div>
-               <div class="d">Turning captions on is also what installs the graphics driver, and that goes in a
-               package at a time against whatever is playing. It is done at startup where nothing can be tuning.
-               Stop the ${busy === 1 ? 'stream' : 'streams'} and this unlocks by itself. Switching captions
-               <em>off</em> is always available.</div>
+               <div class="d">Switching captions on installs the graphics driver, which is done while nothing
+               is playing. Stop the ${busy === 1 ? 'stream' : 'streams'} and this unlocks by itself. Switching
+               captions <em>off</em> is always available.</div>
              </div>
            </div>`
         : '';
@@ -316,11 +301,8 @@ function render() {
              <span class="dot"></span>
              <div>
                <div class="h">Restart the container to finish setting up the graphics driver</div>
-               <div class="d">Startup is the only time nothing can be tuning, so a restart puts the driver in
-               at once and captions use it straight away. Leave it running instead and it still goes in — a
-               package at a time, waiting for gaps between tunes so it never interrupts one — but it will not
-               be used until the next start, because the speech engine looks for its backends once per
-               process. Nothing is lost either way; a restart is just the quick road.</div>
+               <div class="d">It will go in either way &mdash; slowly, in gaps between tunes &mdash; but it is
+               not used until the next start. A restart puts it in at once.</div>
              </div>
            </div>`
         : '';
@@ -373,7 +355,7 @@ function render() {
                     <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
-                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; fetched from Debian backports, with the same suite's snapshot archive as a fallback, and kept in the bind mount so a rebuild does not have to fetch them again. The image's own stable archive is deliberately not used: its driver predates this hardware and runs several times slower while every check passes.</span>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from Debian backports, kept so a rebuild does not refetch them.</span>
             </div>
             <div class="model-actions">
                 <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
@@ -400,10 +382,9 @@ function render() {
     const lag = rec.lagSec > 0 ? rec.lagSec : 0;
     document.getElementById('recogStat').innerHTML = rec.measured
         ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)},
-           ${rec.streams === 1 ? 'with one stream captioned' : `with ${rec.streams} streams captioned`}.
-           Phrases wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
-           <span class="muted">The wait is the one that matters: under a second is keeping up, and climbing is not.
-           Both are measured here, not estimated${rec.ageSec > 90 ? `, ${Math.round(rec.ageSec / 60)} min ago` : ''}.</span>`
+           ${rec.streams === 1 ? 'one stream captioned' : rec.streams + ' streams captioned'}.
+           Words wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
+           <span class="muted">Under a second is keeping up.</span>`
         : (cfg.enabled
             ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
             : '');
@@ -531,11 +512,8 @@ function render() {
         sel.innerHTML = wins.map(w =>
             `<option value="${w}" ${w === model.window ? 'selected' : ''}>${w.toFixed(1)} seconds${w === 4 ? ' (default)' : ''}</option>`).join('');
         document.getElementById('phraseHelp').innerHTML =
-            `How long ${esc(model.name.split(' ')[0])} listens before it transcribes. It is the trade this model exists for, in one dial.
-             <b>Longer</b> hands it more of the sentence, which is where its accuracy comes from, and no caption can appear until the
-             sentence has finished. <b>Shorter</b> puts words on screen sooner and makes it guess at anything that needed the end of the
-             sentence to resolve. Turning it down also helps continuous speech: a news anchor never pauses, so every phrase runs to the
-             full length and the display gets a burst per phrase with no gap to drain in.`;
+            `How long ${esc(model.name.split(' ')[0])} listens before it writes. Longer is more accurate and
+             further behind the picture; shorter is quicker and guesses more.`;
     } else {
         document.getElementById('phraseHelp').innerHTML = '';
     }
