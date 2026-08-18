@@ -267,7 +267,14 @@ function applyBusy() {
         : '';
 }
 
+// Asked only when somebody is looking.
+//
+// This poll exists to grey out the enable switch while a tuner is streaming, so
+// it is worth nothing to a tab in the background — and a page left open in a
+// background tab asks forever, which is most of what the request log fills up
+// with. A hidden tab catches up the moment it is looked at again.
 async function busyPoll() {
+    if (document.hidden) return;
     try {
         const r = await fetch('/api/captions');
         const s = await r.json();
@@ -698,6 +705,7 @@ async function poll() {
 
 load().then(() => { if (state.download && state.download.active) poll(); });
 setInterval(busyPoll, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) busyPoll(); });
 </script>
 </body>
 </html>
