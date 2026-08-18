@@ -15,7 +15,7 @@ var moonshineTiny = captionModel{
 	Key:         "moonshine-tiny",
 	Name:        "Moonshine Streaming Tiny",
 	Role:        "Best for small systems",
-	Desc:        "A forty-eight megabyte model that streams live and runs comfortably on a Celeron, a low-power NAS or a Raspberry Pi class board. English only. Less accurate than the big model, and the only one that fits hardware this small.",
+	Desc:        "Forty-eight megabytes, English only, and the least accurate of the three. For machines too small to run the others.",
 	Latency:     "Under a second",
 	Accuracy:    "Decent",
 	Benchmark:   "4.5% of words come out wrong",

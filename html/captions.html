@@ -528,7 +528,6 @@ function render() {
         `<option value="${v}" ${v === (cfg.onScreenSec || 3) ? 'selected' : ''}>${v} seconds${v === 3 ? ' (default)' : ''}</option>`).join('');
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
-    // How far ahead a streaming model looks before committing a word. It costs
 
     // Tuners
     const picked = cfg.tuners || [];
