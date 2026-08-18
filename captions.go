@@ -5214,7 +5214,13 @@ const telemetryWindow = 100
 // so the page shows this one or shows nothing.
 type recognizerReport struct {
 	Measured bool    `json:"measured"`
-	Speed    float64 `json:"speed"`
+	// Streaming says which path took the measurement, because the two paths
+	// can answer different questions. A batch recognizer has a queue, so it
+	// can say how long a phrase waited; a continuous one has no queue and
+	// nothing to say about waiting. Reporting a wait of zero for it would
+	// read as "keeping up perfectly" when it is really "not a thing here".
+	Streaming bool    `json:"streaming"`
+	Speed     float64 `json:"speed"`
 	Phrases  float64 `json:"phrases"`
 	Backend  string  `json:"backend"`
 	AgeSec   int     `json:"ageSec"`
@@ -6119,6 +6125,55 @@ type transcribeModel struct {
 	// heldGPU is set between arm and disarm while this stream holds a place on
 	// the accelerator. Only the goroutine inside a call touches it.
 	heldGPU bool
+	// backend is what this session opened on, kept so the continuous path can
+	// name it the way the batch path names svc.backend.
+	backend int32
+	// telAudio and telCompute are the continuous path's throughput: seconds of
+	// audio fed against seconds of compute spent on it. Guarded by mu, which
+	// every caller already holds. telSince is the audio since the last time
+	// the figure was published.
+	telAudio, telCompute, telSince time.Duration
+}
+
+// How much audio goes by between publications, and how much is kept in the
+// average. A feed is a fraction of a second and nobody reads the page that
+// fast, so the figure is published about once a second from a window of half a
+// minute.
+const (
+	streamTelPublish = time.Second
+	streamTelWindow  = 30 * time.Second
+)
+
+// noteStreamCompute accumulates what the continuous path spent and publishes it
+// on a cadence. The caller holds mu.
+//
+// This exists because the figure was only ever taken on the batch path, so the
+// one model that transcribes a phrase at a time had a speed on the page and the
+// models that transcribe continuously showed nothing at all. It is the same
+// quantity either way — seconds of audio per second of compute — and it is the
+// figure that says whether this machine can keep up, which is if anything more
+// pressing for a continuous model: a batch that falls behind grows a queue that
+// can be seen, and a stream that falls behind just drifts.
+func (t *transcribeModel) noteStreamCompute(audio, compute time.Duration) {
+	t.telAudio += audio
+	t.telCompute += compute
+	t.telSince += audio
+	if t.telSince < streamTelPublish || t.telCompute <= 0 {
+		return
+	}
+	t.telSince = 0
+	noteRecognizerSpeed(recognizerReport{
+		Streaming: true,
+		Speed:     float64(t.telAudio) / float64(t.telCompute),
+		Backend:   txBackendName(t.backend),
+	})
+	if t.telAudio > streamTelWindow {
+		// Halved rather than cleared, so the window keeps sliding without the
+		// figure jumping at the boundary: both sides are scaled by the same
+		// amount and the ratio is exactly what it was.
+		t.telAudio /= 2
+		t.telCompute /= 2
+	}
 }
 
 // loadTranscribe opens the weights the user downloaded.
@@ -6139,7 +6194,8 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		return nil, err
 	}
 
-	shared, key, err := acquireTxModel(weights, txBackend(variant), alive)
+	backend := txBackend(variant)
+	shared, key, err := acquireTxModel(weights, backend, alive)
 	if err != nil {
 		return nil, err
 	}
@@ -6184,7 +6240,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	pnc, itn := supportedToggles(shared.handle, quirksFor(m))
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: pnc, itn: itn}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: pnc, itn: itn, backend: backend}
 	if withWatchdog {
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
@@ -6366,9 +6422,20 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
 	t.arm()
+	began := time.Now()
 	st := txStreamFeed(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&u))
+	compute := time.Since(began)
 	t.disarm()
 	runtime.KeepAlive(pcm)
+	// Audio only when the feed took it. A failed feed still spent the compute,
+	// and counting it against audio that never went through would report a
+	// machine as faster than it is — the one direction the figure must not err
+	// in, since its whole job is to say when the machine cannot keep up.
+	audio := time.Duration(0)
+	if st == txOK {
+		audio = time.Duration(float64(len(pcm)) / asrSampleRate * float64(time.Second))
+	}
+	t.noteStreamCompute(audio, compute)
 	if st != txOK {
 		// A failed feed leaves the session unusable; mark it so the next one
 		// reopens rather than feeding a stream that will never answer.
@@ -6397,6 +6464,7 @@ func (t *transcribeModel) idleFlush() *streamResult {
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
 	t.arm()
+	began := time.Now()
 	st := txStreamFinalize(t.session, unsafe.Pointer(&u))
 	t.disarm()
 	var r *streamResult
@@ -6409,6 +6477,10 @@ func (t *transcribeModel) idleFlush() *streamResult {
 		// captions for the rest of the tune.
 		logger("[CC] could not reopen the continuous session after a pause: %v", err)
 	}
+	// Counted with no audio against it, because that is what it is: real work
+	// on the same session that consumes nothing new. Timing only the feeds
+	// would leave this out and read high.
+	t.noteStreamCompute(0, time.Since(began))
 	t.mu.Unlock()
 
 	if r != nil {
