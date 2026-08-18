@@ -198,15 +198,11 @@
                 <select id="phrase"></select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="phraseHelp"></p>
-            <div class="field-row" id="speedRow">
+            <div class="field-row">
                 <label for="speed">Reading speed</label>
                 <select id="speed"></select>
             </div>
-            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="speedHelp">
-                How fast words appear on screen. Research finds slower is not easier &mdash; viewers re-read
-                two subtitles in three when they are slow, against one in five when they are quick &mdash; so
-                the default sits at the top of the published range. Lower it only if the captions outrun you.
-            </p>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="speedHelp"></p>
             <div class="field-row">
                 <label for="onscreen">Time on screen</label>
                 <select id="onscreen"></select>
@@ -548,18 +544,17 @@ function render() {
         : Array.from({length: state.tuners}, (_, i) =>
             `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i + 1}</span></label>`).join('');
 }
-// Which settings are shown depends on the presentation, because not all of them
-// mean anything in both.
+// The two presentations use the same two settings for different jobs, so the
+// page says which job each one is doing rather than offering one explanation
+// that is only true of a roll-up.
 //
-// Reading speed paces words onto the screen as they are recognized, which is
-// the whole of what a roll-up does and no part of what a box does: a box writes
-// its caption where nobody can see it and then shows the finished thing, so
-// there is nothing to pace. Leaving the setting there would be a control that
-// silently does nothing, which is worse than not offering it.
+// Reading speed paces words onto the screen for a roll-up, because that is what
+// a roll-up does with them. A box has nothing to pace — it writes the caption
+// where nobody can see it and shows the finished thing — so the same number
+// decides how long a caption needs to be up instead, which is the reading it
+// asks for rather than the writing.
 function styleFields() {
     const box = document.getElementById('style').value === 'box2';
-    document.getElementById('speedRow').style.display = box ? 'none' : '';
-    document.getElementById('speedHelp').style.display = box ? 'none' : '';
     document.getElementById('styleHelp').innerHTML = box
         ? `Each caption appears complete and stays until the next one replaces it. Nothing types and nothing
            scrolls, which is how captions on recorded programs look. A model that transcribes as it listens
@@ -567,9 +562,17 @@ function styleFields() {
            they do on a roll-up.`
         : `Words appear as they are recognized and a finished line scrolls up, staying on screen while the
            next one is written underneath. This is how live captioning looks.`;
+    document.getElementById('speedHelp').innerHTML = box
+        ? `How fast you read, which is what decides how long each caption stays: a short one clears quickly
+           and a full one is given the time it needs. Lower it if captions are replaced before you finish
+           them.`
+        : `How fast words appear on screen. Research finds slower is not easier &mdash; viewers re-read two
+           subtitles in three when they are slow, against one in five when they are quick &mdash; so the
+           default sits at the top of the published range. Lower it only if the captions outrun you.`;
     document.getElementById('onscreenHelp').innerHTML = box
-        ? `How long a caption stays before the next one replaces it. A sentence too long for two lines
-           becomes two captions, and each of them gets this long.`
+        ? `The longest any one caption may stay. Most are shown for the time they take to read, so this is
+           the ceiling rather than the wait &mdash; and a sentence too long for two lines becomes two
+           captions, each with its own.`
         : `How long a line stays before it scrolls away. Longer is easier to read, but it is also a ceiling:
            one line leaves per roll, so past about five seconds the display cannot keep up with fast speech
            and starts catching up in jumps. Four suits news, five or six suit drama.`;
