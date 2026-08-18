@@ -26,15 +26,15 @@ package main
 var nemotronStreaming = captionModel{
 	Key:  "nemotron-streaming",
 	Name: "Nemotron 3.5 ASR Streaming 0.6B",
-	Role: "Best for anything but English, and as quick as the picture",
-	Desc: "Thirty-two languages, transcribed as the audio arrives rather than a phrase at a time, so the words appear about a second behind the speaker instead of four. Writes punctuation and sentence case. This is the one to pick for anything that is not English — and on a GPU it keeps up with the phrase model, so the second it saves is free.",
+	Role: "Best for other languages",
+	Desc: "Thirty-two languages, written as the audio arrives rather than a phrase at a time, so words appear about a second behind the speaker instead of four. The one to pick for anything that is not English.",
 	// Streaming is a different shape of model, not a faster one: it keeps a
 	// running encoder state and commits words as they settle, so latency is
 	// a property of the architecture rather than a setting. The phrase
 	// window does not apply to it.
 	Latency:   "About a second behind the picture",
-	Accuracy:  "Very good; the phrase model is better in English",
-	Benchmark: "Between the other two in English; the only real choice elsewhere",
+	Accuracy:  "Very good",
+	Benchmark: "Between the other two in English",
 	// The memory is the thing to know about this one, and it is not the
 	// download.
 	//

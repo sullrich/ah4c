@@ -8836,7 +8836,7 @@ func memoryWarning(cfg captionConfig) string {
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return "cohere-transcribe", "The place to start on any machine: the most accurate captioning available, one copy shared by every tuner. One to three streams on the processor is fine; anything more, use a GPU. The tiny model below is for hardware that cannot run this one."
+	return "cohere-transcribe", "The place to start: the most accurate captioning available, with one copy shared by every tuner. The smaller models below are for machines that cannot keep up with it."
 }
 
 // memoryNote describes what a model costs to run.
