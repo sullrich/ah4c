@@ -67,24 +67,37 @@ var canaryFlash = captionModel{
 	Languages: []string{"en", "de", "es", "fr"},
 }
 
-// The noise gate, and why a model that has not been caught doing it gets one.
+// No noise gate, and the reason is that it was put here on an inference.
 //
-// Cohere's card is the source and it does not describe only Cohere: "Like most
-// AED speech models, Cohere Transcribe is eager to transcribe, even non-speech
-// sounds. The model thus benefits from prepending a noise gate or VAD model in
-// order to prevent low-volume, floor noise from turning into hallucinations."
+// Cohere's card says "Like most AED speech models, Cohere Transcribe is eager
+// to transcribe, even non-speech sounds", and this is an AED speech model, so
+// the gate was switched on by reading that sentence as covering it. That is not
+// the same as this model having been caught doing it, and its own card says
+// nothing of the kind.
 //
-// This is an AED speech model — a FastConformer encoder with a transformer
-// decoder — so the sentence covers it. The gate costs a stretch of steady noise
-// that had no speech in it, which is nothing, and the failure it prevents is a
-// commercial's music bed transcribed as words.
+// What the gate costs when it is wrong is not small. It discards a whole phrase
+// — up to a second and a fifth of speech — on a shape measurement, and a phrase
+// discarded is a gap where somebody was talking. Reported as exactly that:
+// words missing, the display stopping for a second at a time.
 //
-// The phrase list behind it is shared rather than copied, because it was never
-// a Cohere list: it is the community hallucination dataset, collected against
-// Whisper, and what it catches is the stock phrase an AED reaches for when
-// handed silence. Whichever model is doing it, it is the same phrase.
+// So it is off until this model is seen hallucinating on silence, rather than
+// on until it is seen not to. The evidence for switching it on would be the
+// stock phrases turning up over quiet passages, and the line below catches
+// those anyway.
+//
+// The phrase list stays, and it is safe in a way the gate is not: it matches a
+// whole phrase against a fixed list of things models say when handed silence,
+// so the most it can discard is a caption that was entirely one of those. It
+// cannot eat a sentence. And it was never a Cohere list — it is the community
+// hallucination dataset, collected against Whisper, which is to say it is a
+// list of what AED models write when there is nothing to write.
+//
+// Windows because there is no reason to withhold the choice. The trade is the
+// same one it is for Cohere — longer is more of the sentence in hand before it
+// is transcribed, and a caption that cannot appear until the sentence has
+// finished — and this model leaves enough graphics chip spare to spend on it.
 var canaryQuirks = modelQuirks{
 	PhraseWindow: modelDefaults.PhraseWindow,
-	NoiseGate:    true,
+	Windows:      []float64{2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0},
 	Suppress:     cohereSuppresses,
 }
