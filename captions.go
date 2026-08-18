@@ -3260,7 +3260,7 @@ func segment608(w []ccWord, cols, rows int) [][]ccWord {
 		// is only taken when there is a row's worth in front of it, and short
 		// sentences ride together the way they do on a broadcast caption.
 		for i := n; i >= 1; i-- {
-			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/2 {
+			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/3 {
 				cut = i
 				break
 			}
@@ -4279,9 +4279,16 @@ func (c *cea608) next() [2]byte {
 }
 
 // ccPopGather is how long a fragment waits for the rest of its sentence before
-// it goes up on its own. Short enough not to be a delay anybody could name,
-// long enough to catch the next few words of a phrase already being spoken.
-const ccPopGather = 700 * time.Millisecond
+// it goes up on its own.
+//
+// It was seven hundred milliseconds against a whole row, and between them they
+// made the box slow: almost everything short of a full line waited out the
+// whole gather, on a display whose entire case is being current. What was being
+// fixed is single words going up alone, and a single word is four or five
+// characters — so the bar is a third of a row, which no single word reaches and
+// almost every real fragment does, and the wait behind it is short enough to be
+// a fraction of one phrase.
+const ccPopGather = 250 * time.Millisecond
 
 // worthShowing reports whether what is held is a caption yet.
 //
@@ -4290,16 +4297,16 @@ const ccPopGather = 700 * time.Millisecond
 // alone, one after another — a phrase model hands over a fragment, the screen
 // happens to be free, and three words become a caption of their own.
 //
-// So a fragment shorter than a row waits a moment for the rest of its sentence.
-// A row's worth is a caption and goes at once; anything ending a sentence is a
-// caption whatever its length, because nothing more is coming for it; and
-// anything that has waited out the gather goes rather than being held for words
-// that may never arrive. Callers hold the lock.
+// So a fragment too short to be a caption waits a moment for the rest of its
+// sentence. A third of a row is a caption and goes at once; anything ending a
+// sentence is a caption whatever its length, because nothing more is coming for
+// it; and anything that has waited out the gather goes rather than being held
+// for words that may never arrive. Callers hold the lock.
 func (c *cea608) worthShowing() bool {
 	if len(c.held) == 0 {
 		return false
 	}
-	if ccWordsWidth(analyze608(c.held)) >= c.maxCol {
+	if ccWordsWidth(analyze608(c.held)) >= c.maxCol/3 {
 		return true
 	}
 	if last := c.held[len(c.held)-1]; endsSentence(last) {
