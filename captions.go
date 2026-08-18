@@ -10477,7 +10477,7 @@ func memoryWarning(cfg captionConfig) string {
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return "cohere-transcribe", "The place to start: the most accurate captioning available, with one copy shared by every tuner. The smaller models below are for machines that cannot keep up with it."
+	return "canary-180m", "The place to start: within a point of the most accurate model here at a sixth of the cost, with one copy shared by every tuner. Cohere is more accurate again and asks a great deal more of the graphics chip."
 }
 
 // memoryNote describes what a model costs to run.
