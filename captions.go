@@ -469,6 +469,7 @@ type captionModel struct {
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
 	cohereTranscribe,
+	canaryFlash,
 	nemotronStreaming,
 	parakeetTDT,
 }
@@ -5216,7 +5217,7 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 //
 // captions.go is the common part: the audio splitter, the voice detector, the
 // recognizer, both caption encoders, the injector, the tune gate. None of it
-// knows which model it is serving. cohere.go, nemotron.go and parakeet.go each
+// knows which model it is serving. cohere.go, canary.go, nemotron.go and parakeet.go each
 // hold one model — its catalog entry, and what it asks of the code around it —
 // and they are reachable from here and nowhere else.
 //
@@ -5306,6 +5307,8 @@ func quirksFor(m captionModel) modelQuirks {
 	switch m.Key {
 	case cohereTranscribe.Key:
 		return cohereQuirks
+	case canaryFlash.Key:
+		return canaryQuirks
 	case nemotronStreaming.Key:
 		return nemotronQuirks
 	case parakeetTDT.Key:
