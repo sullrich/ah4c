@@ -2660,8 +2660,13 @@ type cea608 struct {
 	// keeps for its carriage return.
 	popon bool
 	held  []string
-	// popPending is how many finished captions are queued but not yet shown.
+	// popPending is how many finished captions are queued but not yet shown,
+	// and popDwells how long each of them will need once it is. curDwell is the
+	// one belonging to the caption on screen now, which is the time the next
+	// caption has to wait.
 	popPending  int
+	popDwells   []time.Duration
+	curDwell    time.Duration
 	lastBlock   time.Time
 	blockCopies int
 	rows        byte // ccRU2 / ccRU3 / ccRU4
@@ -2889,6 +2894,40 @@ func wrap608(words []string, maxCol int) []string {
 	return lines
 }
 
+// popDwell is how long one box caption has to stay up before the next may take
+// its place.
+//
+// A roll-up asks this question once and answers it with a constant, because
+// every roll moves the same one row. A box replaces everything on the screen at
+// a stroke, and how long that needs depends entirely on how much is on it: two
+// full rows are four seconds of reading and "Yes." is not.
+//
+// Setting one number for both is what made this style lag. Time on screen was
+// taken as the minimum for every caption, so a two word answer held the screen
+// as long as a full sentence, and everything said while it sat there queued up
+// behind it. At four seconds that is a throughput ceiling as well: fifteen
+// captions a minute, against speech that produces rather more.
+//
+// So it is measured, the way subtitle timing has always been measured — the
+// characters divided by the reading speed. The page's time on screen becomes
+// the ceiling rather than the value, which is what somebody choosing a longer
+// one is really asking for. The floor is the published guidance for that many
+// rows and it is applied last, because a caption gone before it could be read
+// is the one failure worth being slow to avoid.
+func popDwell(chars, rows int, pace float64, want time.Duration) time.Duration {
+	d := want
+	if pace > 0 {
+		d = time.Duration(float64(chars) / pace * float64(time.Second))
+	}
+	if d > want {
+		d = want
+	}
+	if min := ccMinOnScreen(rows); d < min {
+		d = min
+	}
+	return d
+}
+
 // popPages is how many rows of caption may wait for an utterance to end.
 //
 // A box cannot show anything until the caption is complete, and a streaming
@@ -2958,6 +2997,11 @@ func (c *cea608) showPopon(lines []string) {
 		row++
 	}
 	c.ctrl(ccEOC)
+	chars := 0
+	for _, line := range lines {
+		chars += len([]rune(line))
+	}
+	c.popDwells = append(c.popDwells, popDwell(chars, len(lines), c.pace, c.minRollGap))
 	c.popPending++
 	c.col = 0
 }
@@ -3001,7 +3045,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
-		c.popPending = 0
+		c.popPending, c.popDwells = 0, c.popDwells[:0]
 	}
 	if !c.started {
 		c.begin()
@@ -3386,11 +3430,16 @@ func (c *cea608) next() [2]byte {
 			switch {
 			case c.blockCopies > 0:
 				c.blockCopies--
-			case time.Since(c.lastBlock) < c.minRollGap && !c.waiting():
+			case time.Since(c.lastBlock) < c.curDwell && !c.waiting():
 				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 			default:
 				c.lastBlock = time.Now()
 				c.blockCopies = 1
+				// The caption going up now decides how long the one after it
+				// waits, because that is how long this one is on the screen.
+				if len(c.popDwells) > 0 {
+					c.curDwell, c.popDwells = c.popDwells[0], c.popDwells[1:]
+				}
 				if c.popPending > 0 {
 					c.popPending--
 				}
