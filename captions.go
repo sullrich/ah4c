@@ -4062,6 +4062,34 @@ func paceFor(wpm int) float64 {
 //	https://www.ofcom.org.uk/siteassets/resources/documents/tv-radio-and-on-demand/broadcast-codes/other-codes/ofcoms-guidelines-on-providing-tv-and-on-demand-access-services.pdf
 const ccMaxPace = 200 * ccCharsPerWord / 60
 
+// burst is how much unspent allowance the meter may hold, in characters.
+//
+// A second's worth, and that was the whole of why the ceiling made this feel
+// slower. The ceiling is right — it is what stops a display running at three
+// hundred words a minute through a program — but it was being applied to every
+// moment alike, including the one moment where speed costs nothing.
+//
+// A phrase model hands over a whole sentence at once and then says nothing for
+// several seconds. Nobody is reading during the silence. Letting the allowance
+// accrue through it, and spending it when the sentence lands, puts that
+// sentence on the screen at once and leaves the rate over any longer window
+// exactly where it was — which is the number the reading research is about.
+// Capped at a second, the allowance was thrown away during every pause and the
+// sentence was then metered out from nothing.
+//
+// The size is a phrase, because a phrase is what arrives at once. Continuous
+// speech spends the allowance as fast as it accrues and settles at the pace,
+// which is the case the ceiling exists for and is unchanged.
+func (c *cea608) burst() float64 {
+	if c.maxLag <= 0 {
+		return c.pace
+	}
+	if n := c.pace * c.maxLag; n > c.pace {
+		return n
+	}
+	return c.pace
+}
+
 // meterPace is the rate the meter runs at: the reading speed, or the catch-up
 // ceiling when there is a backlog to drain. Callers hold the lock.
 func (c *cea608) meterPace() float64 {
@@ -4086,8 +4114,8 @@ func (c *cea608) next() [2]byte {
 	pace := c.meterPace()
 	if rate := c.pairRate(); rate > 0 {
 		c.credit += pace / rate
-		if c.credit > pace {
-			c.credit = pace
+		if max := c.burst(); c.credit > max {
+			c.credit = max
 		}
 	}
 	// Charged per character, not per pair.
