@@ -2659,7 +2659,11 @@ type cea608 struct {
 	// repeats of that command are still owed, the same bookkeeping the roll
 	// keeps for its carriage return.
 	popon bool
-	held  []string
+	// boxRows is how many rows a box caption may fill. It decides how much of a
+	// sentence fits before the rest has to become a second caption, and a
+	// second caption cannot appear until the first has been read.
+	boxRows int
+	held    []string
 	// popPending is how many finished captions are queued but not yet shown,
 	// and popDwells how long each of them will need once it is. curDwell is the
 	// one belonging to the caption on screen now, which is the time the next
@@ -2770,14 +2774,16 @@ func captionLag(m captionModel, cfg captionConfig) float64 {
 
 func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float64) *cea608 {
 	rows := byte(ccRU3)
-	popon := false
+	popon, boxRows := false, 0
 	switch style {
 	case "rollup2":
 		rows = ccRU2
 	case "rollup4":
 		rows = ccRU4
 	case "box2":
-		popon = true
+		popon, boxRows = true, 2
+	case "box3":
+		popon, boxRows = true, 3
 	}
 	n := 3
 	switch rows {
@@ -2793,15 +2799,15 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 		// up whole and comes down whole, so the whole of it is what the setting
 		// asks for.
 		//
-		// Floored at the guidance for two lines rather than for one, because
-		// two lines is what a box puts up.
+		// Floored at the guidance for the number of rows it puts up rather than
+		// for one, because it puts them up together.
 		gap = rollGapFor(onScreen, 1)
-		if min := ccMinOnScreen(2); gap < min {
+		if min := ccMinOnScreen(boxRows); gap < min {
 			gap = min
 		}
 	}
-	return &cea608{rows: rows, popon: popon, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
-		minRollGap: gap}
+	return &cea608{rows: rows, popon: popon, boxRows: boxRows, maxCol: 32, upper: upper,
+		pace: paceFor(wpm), maxLag: maxLag, minRollGap: gap}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2950,34 +2956,44 @@ type popTiming struct {
 	last bool
 }
 
-// popPages is how many rows of caption may wait for an utterance to end.
+// popPages is how many captions' worth may wait for an utterance to end.
 //
 // A box cannot show anything until the caption is complete, and a streaming
 // model only says a phrase is complete when the speaker stops. Somebody talking
-// without a break would otherwise hold every word until they did. Two captions'
-// worth is the bound: past it the earlier rows go up on their own, which is
-// what a broadcast encoder does with a long sentence anyway.
-const popPages = 4
+// without a break would otherwise hold every word until they did. Two captions
+// is the bound: past it the earlier rows go up on their own, which is what a
+// broadcast encoder does with a long sentence anyway.
+const popPages = 2
+
+// ccRowPAC is the preamble address code for each row a caption can sit on,
+// white, no italics, no underline, indent zero.
+//
+// A row is named by both bytes and by neither alone. The first picks a pair of
+// rows and the second picks which of the pair: 0x40 to 0x5F is the lower of the
+// two and 0x60 to 0x7F the upper, with the low bits inside each range carrying
+// the color, the indent and the underline. 0x50 and 0x70 are the same choice in
+// both ranges, which is why every entry here is one or the other.
+//
+// Only the bottom of the screen is listed, because that is where captions go.
+// Row 15 is the last line and a box grows upward from it.
+var ccRowPAC = map[int][2]byte{
+	12: {0x13, 0x50},
+	13: {0x13, 0x70},
+	14: {ccCtrlCC1, 0x50},
+	15: {ccCtrlCC1, 0x70},
+}
 
 // pac addresses a row, so the next characters land on it.
-//
-// Row 15 is the bottom of the screen and row 14 the line above it. The two
-// share a first byte and are told apart by the second: 0x40 to 0x5F selects row
-// 14 and 0x60 to 0x7F row 15, and within either range the low bits carry the
-// color, the indent and the underline. 0x50 and 0x70 are the same choice in
-// each — white, no italics, no underline, indent zero — which is why they
-// differ by the one bit that picks the row.
 //
 // Sent twice, like every other control pair: a decoder that catches the repeat
 // acts once, and the repeat is what survives a dropped frame.
 func (c *cea608) pac(row int) {
-	b := byte(0x70)
-	if row == 14 {
-		b = 0x50
+	p, ok := ccRowPAC[row]
+	if !ok {
+		p = ccRowPAC[15]
 	}
-	c.queue = append(c.queue,
-		[2]byte{odd608(ccCtrlCC1), odd608(b)},
-		[2]byte{odd608(ccCtrlCC1), odd608(b)})
+	pair := [2]byte{odd608(p[0]), odd608(p[1])}
+	c.queue = append(c.queue, pair, pair)
 }
 
 // showPopon writes one caption where it cannot be seen and then shows it whole.
@@ -3001,15 +3017,14 @@ func (c *cea608) showPopon(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	if len(lines) > 2 {
-		lines = lines[:2]
+	if len(lines) > c.boxRows {
+		lines = lines[:c.boxRows]
 	}
 	c.ctrl(ccRCL)
 	c.ctrl(ccENM)
-	row := 15
-	if len(lines) == 2 {
-		row = 14
-	}
+	// A box sits on the bottom of the screen and grows upward from row 15, so
+	// however many rows it has, the last of them is the last line.
+	row := 16 - len(lines)
 	for _, line := range lines {
 		c.pac(row)
 		c.col = 0
@@ -3090,7 +3105,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.held = append(c.held, strings.Fields(text)...)
 		if breakAfter {
 			c.flushPopon()
-		} else if lines := wrap608(c.held, c.maxCol); len(lines) >= popPages {
+		} else if lines := wrap608(c.held, c.maxCol); len(lines) >= c.boxRows*popPages {
 			c.flushPopon()
 		}
 		return
@@ -3146,8 +3161,8 @@ func (c *cea608) flushPopon() {
 	if len(lines) == 0 {
 		return
 	}
-	for i := 0; i < len(lines); i += 2 {
-		end := i + 2
+	for i := 0; i < len(lines); i += c.boxRows {
+		end := i + c.boxRows
 		if end > len(lines) {
 			end = len(lines)
 		}
