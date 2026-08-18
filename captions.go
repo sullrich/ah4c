@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -2864,6 +2865,407 @@ func (c *cea608) newRow() {
 	c.col = 0
 }
 
+// ---------------------------------------------------------------------------
+// Where a caption breaks
+//
+// A caption of two rows has to decide two things: which words go in it, and
+// where the first row ends. Both were accidents of a greedy wrapper — fill row
+// one to thirty-two columns, put the rest on row two, and start a new caption
+// whenever that ran out of room. So captions ended mid-clause and rows split
+// articles from their nouns, which is the thing every published guide names
+// first.
+//
+// The guidance is unusually consistent about this and it is not house style:
+// the ITC guidance the BBC's rules are copied from is inherited regulator
+// guidance, and it was written for a thirty-two character line, which is the
+// line this code has. It keeps the linguistic rule for live subtitling
+// explicitly — "where possible, avoid non-linguistic line breaks (splitting
+// verbs etc)" — with "where possible" as the only concession.
+//
+// None of it needs a parser. The rules are about closed classes of words, which
+// is a list, and about punctuation and capitalization, which are already there.
+// ---------------------------------------------------------------------------
+
+// wordClass is the part a word plays, as far as a break is concerned. Only the
+// closed classes are named; everything else is content and can end a row.
+type wordClass int
+
+const (
+	clsContent wordClass = iota
+	clsTitle
+	clsAux
+	clsArt
+	clsPrep
+	clsConj
+	clsSubord
+	clsPron
+	clsNeg
+	clsQuant
+	clsNumWord
+	clsUnit
+)
+
+// ccWordClass is every word that is not free to end a row, and what it is.
+//
+// A word appears once. Several belong to two classes in the grammar — "that" is
+// a determiner and a relativizer, "for" is a preposition and a conjunction —
+// and the entry here is the one that decides breaks better: a break before
+// "that" is usually a clause boundary, a break before "for" usually is not.
+var ccWordClass = func() map[string]wordClass {
+	m := map[string]wordClass{}
+	add := func(c wordClass, words string) {
+		for _, w := range strings.Fields(words) {
+			if _, seen := m[w]; !seen {
+				m[w] = c
+			}
+		}
+	}
+	add(clsTitle, `mr mrs ms miss mx dr prof professor rev sen senator rep gov governor
+		pres president sir dame lady lord judge justice officer sgt sergeant capt captain
+		lt col gen general adm st saint mt mount fr father sister brother coach chief
+		mayor king queen prince princess pope agent detective sheriff ambassador
+		secretary chairman chairwoman uncle aunt`)
+	add(clsAux, `am is are was were be been being have has had having do does did doing
+		will would shall should can could may might must ought need dare gonna wanna
+		gotta ain't`)
+	add(clsNeg, `not never no`)
+	add(clsSubord, `that although because if once though unless when whenever whereas
+		where wherever whether while why how who whom which as since than until`)
+	add(clsArt, `a an the this these those my your his her its our their whose`)
+	add(clsConj, `and but or nor so yet plus`)
+	add(clsPrep, `of in on at to for with from by about into onto over under above below
+		across against along among amid around behind beneath beside besides between
+		beyond during except inside near outside past through throughout till toward
+		towards underneath unto up upon within without like off out down per via versus
+		atop despite regarding concerning after before`)
+	add(clsQuant, `some any every each all both either neither another other much many
+		few several more most less least half`)
+	add(clsNumWord, `one two three four five six seven eight nine ten eleven twelve
+		thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty
+		forty fifty sixty seventy eighty ninety hundred thousand million billion
+		trillion dozen`)
+	add(clsPron, `i you he she it we they there here`)
+	add(clsUnit, `percent cent dollars cents pounds euros pence degrees miles feet inches
+		yards meters metres kilometers kilometres kilograms kilos grams tons hours
+		minutes seconds days weeks months years o'clock am pm mph kph mg kg km lb lbs oz`)
+	return m
+}()
+
+// ccAbbrev is the words whose full stop ends an abbreviation and not a
+// sentence. Without it "Dr. Wilson" reads as two sentences and the break lands
+// between the title and the name, which is the one split every guide forbids.
+var ccAbbrev = func() map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(`mr mrs ms dr prof rev sen rep gov pres st mt inc
+		ltd corp co jr sr vs etc no vol fig approx dept univ ave blvd`) {
+		m[w] = true
+	}
+	return m
+}()
+
+// ccWord is one word of a caption with everything a break rule asks about it.
+type ccWord struct {
+	text         string
+	class        wordClass
+	endsSentence bool
+	endsClause   bool
+	isCap        bool
+	isDigit      bool
+}
+
+// ccTrimEdges strips the quotes and brackets around a word, which are not part
+// of it for any purpose here.
+func ccTrimEdges(w string) string {
+	return strings.Trim(w, `"'“”‘’()[]{}`)
+}
+
+// analyze608 reads the words a caption is made of.
+//
+// Given the text before it is put into capitals, and it has to be: two of the
+// rules below are about which words are capitalized, and after ToUpper every
+// word is. This was the easiest thing in the whole rule set to get quietly
+// wrong — the tests would pass, the rules would simply never fire.
+func analyze608(words []string) []ccWord {
+	out := make([]ccWord, 0, len(words))
+	startOfSentence := true
+	for _, raw := range words {
+		w := ccTrimEdges(raw)
+		bare := strings.TrimRight(w, `.!?…,;:—–`)
+		lower := strings.ToLower(strings.TrimRight(bare, "."))
+		a := ccWord{text: w, class: ccWordClass[lower]}
+		if last := strings.TrimRight(w, `"'“”’)`); last != "" {
+			switch last[len(last)-1] {
+			case '.', '!', '?':
+				a.endsSentence = !ccAbbrev[lower]
+			case ',', ';', ':':
+				a.endsClause = true
+			}
+			if strings.HasSuffix(last, "—") || strings.HasSuffix(last, "–") {
+				a.endsClause = true
+			}
+		}
+		for _, r := range bare {
+			if r >= '0' && r <= '9' {
+				a.isDigit = true
+				break
+			}
+		}
+		if r := []rune(bare); len(r) > 0 && unicode.IsUpper(r[0]) && !startOfSentence {
+			a.isCap = true
+		}
+		startOfSentence = a.endsSentence
+		out = append(out, a)
+	}
+	return out
+}
+
+// ccStranded is the classes that must not be left at the end of a row. It is
+// the union of the article, preposition, conjunction, auxiliary and title
+// rules, which is the one rule every guide states in some form — and the only
+// one that still works when the model is producing no punctuation at all.
+func ccStranded(c wordClass) bool {
+	switch c {
+	case clsArt, clsPrep, clsConj, clsSubord, clsAux, clsNeg, clsQuant, clsTitle:
+		return true
+	}
+	return false
+}
+
+// ccSplitsName reports that a break would cut something that is one thing: a
+// person's name, a title from its name, a number from its unit, or a
+// hyphenated compound.
+func ccSplitsName(l, r ccWord) bool {
+	switch {
+	case l.isCap && r.isCap && !l.endsSentence:
+		return true
+	case l.class == clsTitle && r.isCap:
+		return true
+	case l.isDigit && (r.isDigit || r.class == clsUnit || r.class == clsNumWord):
+		return true
+	case l.class == clsNumWord && (r.class == clsNumWord || r.class == clsUnit || r.isDigit):
+		return true
+	case strings.HasSuffix(l.text, "-"):
+		return true
+	}
+	return false
+}
+
+// breakTier scores a break between two words. Lower is better, and the order
+// the tests run in is the order the guidance ranks them.
+//
+// Its own function with its own test because it is the rule, and a rule buried
+// in a loop is one nobody can check. The tiers, in the words of the guides
+// they come from: break at punctuation; never after a conjunction; never inside
+// a prepositional phrase; never between an article and its noun; a break
+// between two content words is fine; a pronoun may end a row if nothing better
+// offers; and last, the break that strands a function word, which is what every
+// guide names first and this code used to do at random.
+func breakTier(l, r ccWord) int {
+	switch {
+	case l.endsSentence || l.endsClause:
+		return 1
+	case r.class == clsConj || r.class == clsSubord:
+		return 2
+	case r.class == clsPrep:
+		return 3
+	case r.class == clsArt || r.class == clsQuant:
+		return 4
+	case ccSplitsName(l, r):
+		// Ahead of the two tiers below on purpose: both halves of a name are
+		// content words, so a name split would otherwise score as a good break.
+		return 7
+	case l.class == clsContent && r.class == clsContent:
+		return 5
+	case l.class == clsPron:
+		return 6
+	case ccStranded(l.class):
+		return 8
+	}
+	return 5
+}
+
+// ccWordsWidth is how many columns a run of words occupies, spaces included.
+func ccWordsWidth(w []ccWord) int {
+	n := 0
+	for i, x := range w {
+		if i > 0 {
+			n++
+		}
+		n += len([]rune(x.text))
+	}
+	return n
+}
+
+// breakLine608 chooses where the first row of a caption ends, returning the
+// index the second row starts at. Zero means the words do not fit on two rows,
+// which is a question about how much goes in the caption and not about where it
+// breaks.
+func breakLine608(w []ccWord, cols int) int {
+	if len(w) < 2 {
+		return 0
+	}
+	type cand struct{ at, tier, skew int }
+	var all []cand
+	for i := 1; i < len(w); i++ {
+		top, bottom := ccWordsWidth(w[:i]), ccWordsWidth(w[i:])
+		if top > cols || bottom > cols {
+			continue
+		}
+		skew := top - bottom
+		if skew < 0 {
+			skew = -skew
+		}
+		all = append(all, cand{i, breakTier(w[i-1], w[i]), skew})
+	}
+	if len(all) == 0 {
+		return 0
+	}
+	// One or two words alone above a full row reads as a stray, so those are
+	// set aside — unless they are all there is, because failing to break is
+	// not one of the outcomes.
+	kept := all[:0:0]
+	for _, c := range all {
+		if c.at <= 2 && len(w)-c.at > 4 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == 0 {
+		kept = all
+	}
+	best := kept[0]
+	for _, c := range kept[1:] {
+		// Shape decides between equals and never overrules the rule: the
+		// evidence has viewers choosing on where the sentence divides rather
+		// than on how the caption looks. A tie goes to the fuller first row.
+		if c.tier < best.tier || (c.tier == best.tier && c.skew <= best.skew) {
+			best = c
+		}
+	}
+	return best.at
+}
+
+// fits608 is how many of these words will go on rows rows of cols columns.
+func fits608(w []ccWord, cols, rows int) int {
+	n, used, line := 0, 0, 1
+	for i, x := range w {
+		width := len([]rune(x.text))
+		next := used + width
+		if used > 0 {
+			next++
+		}
+		if next > cols {
+			if line == rows {
+				return n
+			}
+			line++
+			used = width
+			if width > cols {
+				return maxInt(n, i+1)
+			}
+		} else {
+			used = next
+		}
+		n = i + 1
+	}
+	return n
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// segment608 divides a phrase into captions before any of it is broken into
+// rows, which is the order the guidance puts them in and the opposite of what
+// this code did. A caption used to end wherever the wrapper ran out of room —
+// so a sentence boundary landing one word later was simply missed, and the
+// caption ended mid-clause instead.
+//
+// Nothing is dropped: a word too wide for a row still goes, on a row of its
+// own, because a caption with a word missing is worse than a caption that looks
+// wrong.
+func segment608(w []ccWord, cols, rows int) [][]ccWord {
+	var out [][]ccWord
+	for len(w) > 0 {
+		n := fits608(w, cols, rows)
+		if n <= 0 {
+			n = 1
+		}
+		cut := n
+		if n < len(w) {
+			// A caption that can end at the end of a sentence should, and one
+			// that can end at a clause should if it cannot end at a sentence.
+			// Only the back of the caption is searched: cutting early enough to
+			// leave a row nearly empty trades one fault for another.
+			// A full stop is searched for across the whole caption and a comma
+			// only across the back of it. They are not the same strength of
+			// cue: a caption that ends where the sentence ends is a complete
+			// thought whatever it leaves on the row, while cutting at an early
+			// comma trades a mid-clause ending for a half-empty caption and
+			// gains nothing.
+			for i := n; i >= 1; i-- {
+				if w[i-1].endsSentence {
+					cut = i
+					break
+				}
+			}
+			if cut == n {
+				floor := n * 2 / 3
+				if floor < 1 {
+					floor = 1
+				}
+				for i := n; i >= floor; i-- {
+					if w[i-1].endsClause {
+						cut = i
+						break
+					}
+				}
+			}
+		}
+		out = append(out, w[:cut])
+		w = w[cut:]
+	}
+	return out
+}
+
+// rows608 is the finished rows of one caption.
+func rows608(w []ccWord, cols int) []string {
+	text := func(part []ccWord) string {
+		parts := make([]string, len(part))
+		for i, x := range part {
+			parts[i] = x.text
+		}
+		return strings.Join(parts, " ")
+	}
+	if len(w) == 0 {
+		return nil
+	}
+	if ccWordsWidth(w) <= cols {
+		return []string{text(w)}
+	}
+	if at := breakLine608(w, cols); at > 0 {
+		return []string{text(w[:at]), text(w[at:])}
+	}
+	// Wider than two rows, which segment608 should have prevented. Fall back to
+	// filling rather than losing the words.
+	var out []string
+	cur := []ccWord{}
+	for _, x := range w {
+		if len(cur) > 0 && ccWordsWidth(append(append([]ccWord{}, cur...), x)) > cols {
+			out = append(out, text(cur))
+			cur = cur[:0]
+		}
+		cur = append(cur, x)
+	}
+	if len(cur) > 0 {
+		out = append(out, text(cur))
+	}
+	return out
+}
+
 // wrap608 lays words out into caption rows of at most maxCol characters.
 //
 // A separate function from the roll-up's wrapping because the two need
@@ -3162,6 +3564,15 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		return
 	}
 	text = cc608ExpandText(text)
+	// A box keeps the capitals it was given until the rows are written.
+	//
+	// Two of the line break rules ask which words are capitalized — a name is
+	// not split from the rest of it, a title is not split from its name — and
+	// after ToUpper every word is capitalized, so both rules answer yes to
+	// everything and neither does anything. This was the easiest thing in the
+	// whole rule set to get quietly wrong: it compiles, it passes, and the
+	// rules simply never fire.
+	cased := text
 	if c.upper {
 		text = strings.ToUpper(text)
 	}
@@ -3186,10 +3597,10 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		// for a streaming model, which finalizes a few words at a time, that is
 		// the end of the utterance rather than the end of every arrival.
 		c.lastText = time.Now()
-		c.held = append(c.held, strings.Fields(text)...)
+		c.held = append(c.held, strings.Fields(cased)...)
 		if breakAfter {
 			c.flushPopon()
-		} else if lines := wrap608(c.held, c.maxCol); len(lines) >= c.boxRows*popPages {
+		} else if len(segment608(analyze608(c.held), c.maxCol, c.boxRows)) >= popPages {
 			c.flushPopon()
 		}
 		return
@@ -3240,17 +3651,28 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 //
 // Called with the lock held.
 func (c *cea608) flushPopon() {
-	lines := wrap608(c.held, c.maxCol)
+	held := analyze608(c.held)
 	c.held = c.held[:0]
-	if len(lines) == 0 {
+	if len(held) == 0 {
 		return
 	}
-	for i := 0; i < len(lines); i += c.boxRows {
-		end := i + c.boxRows
-		if end > len(lines) {
-			end = len(lines)
+	// Divided into captions first and into rows second, which is the order the
+	// guidance puts them in. The other way round — rows filled greedily, then
+	// cut into captions every two rows — makes where a caption ends a side
+	// effect of where the wrapper ran out of room.
+	var captions int
+	for _, caption := range segment608(held, c.maxCol, c.boxRows) {
+		rows := rows608(caption, c.maxCol)
+		if c.upper {
+			for i := range rows {
+				rows[i] = strings.ToUpper(rows[i])
+			}
 		}
-		c.showPopon(lines[i:end])
+		c.showPopon(rows)
+		captions++
+	}
+	if captions == 0 {
+		return
 	}
 	// One phrase, one thing waiting — not one per page.
 	//
