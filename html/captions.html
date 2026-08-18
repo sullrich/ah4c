@@ -523,11 +523,11 @@ function render() {
     const speeds = state.speeds || [];
     const spd = document.getElementById('speed');
     spd.innerHTML = speeds.map(w =>
-        `<option value="${w}" ${w === (cfg.speedWPM || 150) ? 'selected' : ''}>${w} words a minute${w === 150 ? ' (default)' : ''}</option>`).join('');
+        `<option value="${w}" ${w === (cfg.speedWPM || 160) ? 'selected' : ''}>${w} words a minute${w === 160 ? ' (default)' : ''}</option>`).join('');
     const onscreens = state.onScreen || [];
     const osel = document.getElementById('onscreen');
     osel.innerHTML = onscreens.map(v =>
-        `<option value="${v}" ${v === (cfg.onScreenSec || 3) ? 'selected' : ''}>${v} seconds${v === 3 ? ' (default)' : ''}</option>`).join('');
+        `<option value="${v}" ${v === (cfg.onScreenSec || 4) ? 'selected' : ''}>${v} seconds${v === 4 ? ' (default)' : ''}</option>`).join('');
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
 
 
