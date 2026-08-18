@@ -4215,12 +4215,25 @@ func (c *cea608) next() [2]byte {
 		// them went up.
 		//
 		// So the writer no longer decides when a caption is sent. The display
-		// asks: the moment the caption on screen has had its time and nothing
-		// is queued behind it, whatever has been held goes up, however short.
-		// That is self-correcting in both directions — when it is keeping up
-		// the captions are small and current, and when it falls behind they
-		// fill, because more has arrived by the time the screen frees.
-		if c.popon && c.worthShowing() && c.streamNow().Sub(c.lastBlock) >= c.popGap() {
+		// asks: the moment there is nothing left on the wire, whatever has been
+		// held is written out. That is self-correcting in both directions —
+		// when it is keeping up the captions are small and current, and when it
+		// falls behind they fill, because more has arrived by the time the wire
+		// clears.
+		//
+		// Written out, and not shown: the two are a second and a half apart and
+		// that gap was being paid twice. A full two row caption is forty-six
+		// byte pairs, and forty-six pairs at the rate line 21 carries them is a
+		// second and a half of transmission before the swap at the end of them
+		// can flip it onto the screen. Waiting for the caption on screen to
+		// finish its time and only then starting to transmit put that second
+		// and a half after the dwell instead of inside it.
+		//
+		// A pop-on caption is meant to be loaded while the previous one is
+		// still up — that is what the second memory is for. So the bytes go now
+		// and the swap waits: the dwell is enforced on the swap in next, and
+		// everything ahead of it drains during the caption it is replacing.
+		if c.popon && c.worthShowing() {
 			c.flushPopon(true)
 			if len(c.queue) > 0 {
 				p := c.queue[0]
