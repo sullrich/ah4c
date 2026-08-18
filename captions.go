@@ -3517,6 +3517,16 @@ func (c *cea608) showPopon(lines []string) {
 		row++
 	}
 	c.ctrl(ccEOC)
+	// Sending a caption is what starting means here, and it has to be said on
+	// this path as well as in begin.
+	//
+	// The display pulls held text straight out of next, which never went
+	// through begin — so after a caption had been taken down, started stayed
+	// false while a new caption was on screen, and the next phrase to arrive
+	// called begin and erased it. A caption shown and then wiped by the arrival
+	// of the words meant to follow it: the screen going blank on a pause and
+	// staying blank until the phrase after next.
+	c.started = true
 	defer func() {
 		if len(rest) > 0 {
 			c.showPopon(rest)
@@ -3533,12 +3543,18 @@ func (c *cea608) showPopon(lines []string) {
 // ccPopLinger is how long a box caption may stay past its own reading time when
 // nothing has arrived to replace it.
 //
-// Nothing rules on this number, so it is small on purpose. Its whole job is to
-// keep the screen from blanking in the gap between two sentences of the same
-// paragraph, which is a fraction of a second of silence rather than a pause.
-// Longer and the caption is stale; shorter and the display flickers between
-// every sentence.
-const ccPopLinger = time.Second
+// Nothing rules on this number. It was one second, which is shorter than the
+// pauses people leave in ordinary speech: a speaker drawing breath between two
+// sentences blanked the screen, and it stayed blank until the next phrase had
+// been spoken, cut, and transcribed — several seconds of nothing for a gap of
+// one. The caption was not stale; the talking had not stopped.
+//
+// Three seconds clears the pauses inside speech and still takes the caption
+// down when the speech itself has ended. A caption left up through a genuine
+// silence is a sentence from a while ago presented as though it were current,
+// which is what this exists to prevent, and the twenty second staleness sweep
+// remains behind it for anything this misses.
+const ccPopLinger = 3 * time.Second
 
 // ccMaxBacklogSec is the most unshown caption data we will hold, measured as
 // the time it would take to air. Reaching it means recognition has outrun the
@@ -4079,7 +4095,7 @@ func (c *cea608) next() [2]byte {
 		// So it is taken down once it has been readable for as long as it asked
 		// for, with a moment's grace in case the next caption is a breath away.
 		// Broadcast pop-on has an out time for every caption; this is that.
-		if c.popon && c.started && !c.lastBlock.IsZero() &&
+		if c.popon && c.started && len(c.held) == 0 && !c.lastBlock.IsZero() &&
 			time.Since(c.lastBlock) > c.curDwell.want+ccPopLinger {
 			c.ctrl(ccEDM)
 			c.started = false
