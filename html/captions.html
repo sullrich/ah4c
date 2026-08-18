@@ -381,16 +381,26 @@ function render() {
     // of audio per second of compute — how fast the hardware is, not how many
     // streams it carries. This once claimed it was the second thing, and four
     // streams measuring the same factor as one is what settled that.
+    // A model that transcribes as it listens has no queue, so it has no queue
+    // wait and no phrases per dispatch. It gets the speed, which means the same
+    // thing on both paths, and nothing invented around it.
     const rec = state.recognizer || {};
     const lag = rec.lagSec > 0 ? rec.lagSec : 0;
-    document.getElementById('recogStat').innerHTML = rec.measured
-        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)},
-           ${rec.streams === 1 ? 'one stream captioned' : rec.streams + ' streams captioned'}.
-           Words wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
-           <span class="muted">Under a second is keeping up.</span>`
-        : (cfg.enabled
-            ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
-            : '');
+    const speed = rec.measured
+        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)}`
+        : '';
+    const recLine = !rec.measured ? ''
+        : rec.streaming
+            ? `${speed}.
+               <span class="muted">This model transcribes as it listens, so words are never queued.
+               Above 1&times; is keeping up.</span>`
+            : `${speed},
+               ${rec.streams === 1 ? 'one stream captioned' : rec.streams + ' streams captioned'}.
+               Words wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
+               <span class="muted">Under a second is keeping up.</span>`;
+    document.getElementById('recogStat').innerHTML = recLine || (cfg.enabled
+        ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
+        : '');
 
     const engineKey = model ? model.engine : 'transcribe';
     const engineName = model ? model.engineName : '';
