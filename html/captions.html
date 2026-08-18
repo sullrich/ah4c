@@ -160,10 +160,11 @@
             <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
                 <b>Cohere</b> waits for each sentence to finish, so it is the most accurate and always a
-                couple of seconds behind. <b>Nemotron</b> and <b>Moonshine</b> write as they listen, about a
-                second behind and a little less accurate. Cohere reads eight languages, Nemotron thirty-two,
-                Moonshine English only. Cohere shares one copy of itself across every tuner; the other two
-                load a copy per tuner, so Cohere costs less the more tuners you caption.
+                couple of seconds behind. <b>Nemotron</b> writes as it listens, about a second behind and a
+                little less accurate. <b>Parakeet</b> is a tenth the size of either and the one to pick if
+                the machine cannot manage them. Cohere reads eight languages, Nemotron thirty-two, Parakeet
+                English only. Cohere and Parakeet share one copy across every tuner; Nemotron loads a copy
+                per tuner, so it costs more the more tuners you caption.
             </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
