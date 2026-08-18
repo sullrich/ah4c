@@ -7149,6 +7149,22 @@ const (
 	// says, a floor under blips rather than a floor under short answers. Thirty
 	// five hundredths keeps a one-word reply and still refuses a door closing.
 	vadMinSpeech = 0.35
+	// The floor under the remainder of a phrase this code cut itself.
+	//
+	// The blip floor above assumes the stretch arrived on its own. The
+	// remainder of a gap cut did not: a phrase that runs long is closed at the
+	// widest gap between two words, so whatever follows is the rest of a
+	// sentence, and when the speaker stops shortly after it can be a single
+	// word. A word measures under the blip floor and was thrown away — "City
+	// Strata Elite Card" arriving as "City Strata Elite" with the beat before
+	// the last word being exactly where the cut landed.
+	//
+	// Rejecting a blip nobody asked for and discarding a fragment this code
+	// made are not the same decision, so they no longer share a number. This
+	// one is a floor under transients only: a stop consonant's closure runs to
+	// about a hundred and fifty milliseconds, so below that there is no
+	// syllable to transcribe.
+	vadMinTail   = 0.15
 	vadMinPhrase = 1.8 // past this, a word gap is enough to cut
 	// The gap between two spoken words — and it has to be a gap between words
 	// rather than a gap inside one.
@@ -7332,7 +7348,26 @@ func supportedToggles(model uintptr, q modelQuirks) (pnc, itn int32) {
 // reason. The audio has to be flat, which is what room tone is and speech is
 // not. And there has to be barely any speech in it, because a phrase with a
 // sentence's worth of talking in it is not room tone whatever its shape.
-func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64) bool {
+//
+// And one thing on its own overrules all three: where the stretch came from.
+//
+// Flat and brief describes room tone that tripped the level bar, and it also
+// describes the last word of a sentence. A single word has no variation in it
+// to measure, so it reads flat, and it is under a second, so it reads brief —
+// two weak signals that were meant to be independent, both firing on the same
+// harmless thing. This gate only ever runs on the one model in the catalog that
+// hallucinates on silence, which is why the missing word was only ever seen on
+// that model.
+//
+// A phrase closed at a word gap or at the ceiling was closed with the speaker
+// still going, so the next stretch is the rest of that sentence: the bar was
+// already tripped by speech, and this code is the reason the remainder is short
+// and alone. Judging it as though it had arrived out of a quiet room is judging
+// it on a fact this code invented.
+func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64, tailOfSplit bool) bool {
+	if tailOfSplit {
+		return false
+	}
 	return q.NoiseGate && !isSpeech && speechLen < vadGateBelow
 }
 
@@ -7340,6 +7375,23 @@ func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64) bool {
 // Long enough to contain a gap between words at any ordinary speaking rate,
 // short enough that the phrase does not lose a meaningful amount of its end.
 const vadCutSearch = 0.7
+
+// tooShortToSend says whether a stretch of speech is too brief to be worth
+// transcribing, and it needs to know where the stretch came from.
+//
+// A stretch that arrived on its own gets the blip floor: below that it is a
+// door, a click, a syllable of a jingle, and the model will write words for it.
+// The remainder of a cut this code made gets the transient floor instead,
+// because it is known to be speech — it is the back half of a sentence the
+// segmenter split, and the only reason it is short is that the speaker stopped.
+//
+// Both floors are still floors. A tail of nothing is still nothing.
+func tooShortToSend(speechLen float64, tailOfSplit bool) bool {
+	if tailOfSplit {
+		return speechLen < vadMinTail
+	}
+	return speechLen < vadMinSpeech
+}
 
 // quietestCut finds the best place to end a phrase that has run out of time,
 // and returns the sample index to cut at, or zero if there is nowhere better
@@ -7596,6 +7648,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var pending []float32
 	speaking := false
 	var silenceRun, speechLen float64
+	// wasSplit records that the last phrase was closed while the speaker was
+	// still going, so the next one is the rest of that sentence.
+	var wasSplit bool
 	// loudest and levelSum describe the shape of what is being heard, which is
 	// how steady noise is told from speech; see phraseIsSpeech.
 	var loudest, levelSum float64
@@ -7763,6 +7818,16 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			pending = nil
 			speaking = false
 		}
+		// Whether the phrase being closed here is the remainder of a cut this
+		// code made, and whether the next one will be.
+		//
+		// A phrase closed at a real pause is a finished utterance and what
+		// follows it is a new one. A phrase closed at a word gap or at the
+		// ceiling is not: speech was still running, so the rest of that
+		// sentence is the next phrase, and it is the piece that can be one word
+		// long.
+		tailOfSplit := wasSplit
+		wasSplit = !ended && (gapped || forced)
 		// The next phrase starts with whatever was carried into it.
 		//
 		// A forced cut splits the audio exclusively — audio[:at] goes now and
@@ -7777,7 +7842,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		// Intermittent by nature: it needs a forced cut, which is a minority of
 		// phrases, and the speaker to stop within a breath of it.
 		heldSec := float64(len(pending)) / asrSampleRate
-		if speechLen < vadMinSpeech {
+		if tooShortToSend(speechLen, tailOfSplit) {
 			// Counted, because it was not. Every other way audio is discarded
 			// says so, and a path that throws away sound in silence is a place
 			// words can go with nothing in the log to show for it.
@@ -7789,7 +7854,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 			continue
 		}
-		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
+		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen, tailOfSplit) {
 			n := atomic.AddInt64(&e.gated, 1)
 			if n == 1 || n%25 == 0 {
 				logger("[CC] %s held back %s of steady noise that was not speech (%.1fs of it, peak %.1f times the average, floor is %.1f)",
