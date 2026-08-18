@@ -8628,8 +8628,29 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		case jobs <- job:
 		default:
 			n := atomic.AddInt64(&e.recogLost, 1)
-			if n == 1 || n%50 == 0 {
-				logger("[CC] %s recognition is behind the audio; %d chunks passed over so far", e.label, n)
+			switch {
+			case n == 1:
+				// Said once and said fully, because the count on its own does
+				// not name a cause and this one has a specific one.
+				//
+				// A streaming model cannot be shared: every captioned tuner
+				// runs its own copy, and each of those needs the accelerator
+				// more or less continuously, because it recognizes as the audio
+				// arrives rather than in bursts between phrases. Several at once
+				// therefore want several times the device, and one graphics chip
+				// does not have it however the work is scheduled — the card runs
+				// them one at a time whatever is asked of it.
+				//
+				// A phrase model is the opposite: one copy serves every tuner
+				// and the work arrives in batches with gaps between them, which
+				// is why the same machine carries many more streams on Cohere
+				// or Parakeet than on either Nemotron.
+				logger("[CC] %s recognition is behind the audio. A model that transcribes as it listens runs a "+
+					"separate copy for each captioned tuner and each one wants the accelerator continuously, so "+
+					"several at once ask more of it than it has. Caption fewer tuners, or choose a model that "+
+					"transcribes a phrase at a time — those share one copy between all of them.", e.label)
+			case n%200 == 0:
+				logger("[CC] %s recognition is still behind the audio; %d chunks passed over so far", e.label, n)
 			}
 			holed = true
 		}
