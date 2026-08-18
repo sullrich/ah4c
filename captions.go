@@ -1722,7 +1722,24 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if len(debs) == 0 {
 		return "", fmt.Errorf("no saved packages to install")
 	}
-	logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
+	// Before the port is bound there is nothing to be polite to.
+	//
+	// serving is false until main has finished this and opened the door, and
+	// until the door is open the DVR gets connection refused rather than a
+	// request nobody answers — so there is no tune to interrupt, no gate to
+	// satisfy, and no reason to take the whole set a package at a time. That is
+	// what restoreGPURuntime's own comment says the startup path does, and it
+	// was the one place the code did not do it: thirty-seven dpkg invocations,
+	// each reading and writing the package database, where one would do.
+	//
+	// The polite path below is still the right shape once the door is open, and
+	// still what a driver installed from the page gets.
+	atStartup := !serving.Load()
+	if atStartup {
+		logger("[CC] Installing %d saved packages for %s in one go; nothing can be tuning yet", len(debs), g.Name)
+	} else {
+		logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
+	}
 	// Whatever was true about these libraries stops being true here.
 	forgetEngineUsable()
 	forgetBrokenDrivers()
@@ -1770,7 +1787,38 @@ func applyDriver(g gpuRuntime) (string, error) {
 	err = nil
 	warned := false
 	noteDriverStep("Installing packages", 0, len(debs))
-	for i, deb := range debs {
+
+	// One dpkg for the whole set, and it does a better job than the loop as
+	// well as a faster one: handed every package at once, dpkg orders them
+	// itself and satisfies dependencies between them that --force-depends is
+	// otherwise papering over one at a time.
+	//
+	// If it fails, the loop below still runs. A set that will not go in
+	// together may still go in singly, and a driver missing one library is
+	// worth more than a driver missing all of them.
+	asSet := false
+	if atStartup {
+		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
+		cmd := politeCommand("dpkg", args...)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, e := cmd.CombinedOutput()
+		out = append(out, b...)
+		if e == nil {
+			asSet = true
+			in = len(debs)
+			noteDriverStep("Installing packages", in, len(debs))
+			logger("[CC] %s: %d of %d packages in", g.Name, in, len(debs))
+		} else {
+			logger("[CC] %s would not install as a set (%v); going through them one at a time instead", g.Name, e)
+		}
+	}
+
+	// Nothing left to do one at a time when the set went in as a set.
+	rest := debs
+	if asSet {
+		rest = nil
+	}
+	for i, deb := range rest {
 		if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
