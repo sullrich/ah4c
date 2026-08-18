@@ -536,7 +536,7 @@ function render() {
     document.getElementById('tuners').innerHTML = state.tuners === 0
         ? '<span class="small muted">No tuners are configured.</span>'
         : Array.from({length: state.tuners}, (_, i) =>
-            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i}</span></label>`).join('');
+            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i + 1}</span></label>`).join('');
 }
 
 function pickModel(key) {
