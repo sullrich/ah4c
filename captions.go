@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -4626,6 +4627,7 @@ type captionInjector struct {
 	// pictures happen to arrive. See sendsCC.
 	ccOwed  float64
 	ccPerAU float64
+	ptsGaps []int64
 
 	frames   int64
 	injected int64
@@ -5127,30 +5129,89 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 		return
 	}
 	if ci.lastPTS > 0 && !ci.haveRate {
-		if d := pts - ci.lastPTS; d > 0 && d < 90000 {
-			fps := 90000.0 / float64(d)
-			n := int(600.0/fps + 0.5)
-			if n >= 2 && n <= 31 {
-				ci.ccCount = n
-				ci.haveRate = true
-				// How much of a pair each picture is due. Line 21 runs at its
-				// own rate and not the video's, so on a sixty picture stream
-				// every second picture carries one and the rest carry none.
-				ci.ccPerAU = cc608NominalRate / fps
-				if ci.ccPerAU > 1 {
-					ci.ccPerAU = 1
-				}
-				// What the encoder pays attention to is the rate pairs actually
-				// leave at, which is now the format's rate rather than the
-				// picture rate. Measured independently as well; this is so the
-				// first second is right too.
-				ci.enc.setPictureRate(fps * ci.ccPerAU)
-				logger("[CC] %s picture rate is %.2f fps, cc_count %d, line 21 at %.2f pairs a second",
-					ci.log, fps, n, fps*ci.ccPerAU)
+		// Gathered rather than taken from the first pair of timestamps.
+		//
+		// A presentation timestamp is not the picture's position in decode
+		// order: with B-frames the values arrive out of order, so consecutive
+		// deltas are irregular and some are negative. One sample was being
+		// taken and latched for the life of the stream, which is a coin toss on
+		// anything with B-frames in it.
+		//
+		// The middle value of a handful is the picture interval whatever the
+		// coding order does around it, because the irregularity is symmetric —
+		// the frames that come early are the frames that later come late.
+		if d := pts - ci.lastPTS; d > 0 {
+			ci.ptsGaps = append(ci.ptsGaps, d)
+			if len(ci.ptsGaps) >= ccRateSamples {
+				ci.setRate(90000.0 / float64(medianInt64(ci.ptsGaps)))
 			}
 		}
 	}
 	ci.lastPTS = pts
+}
+
+// ccRateSamples is how many picture intervals are gathered before the rate is
+// taken. Enough that a run of B-frames cannot own the middle of them, few
+// enough that the figure arrives inside the first second at any rate worth
+// having.
+const ccRateSamples = 15
+
+// setRate works the caption cadence out from the picture rate, for any picture
+// rate rather than for the ones anybody thought of.
+//
+// Two numbers come out of it and both are arithmetic, not a table.
+//
+// The construct count is what the format asks for at this picture rate: the
+// caption channel is a fixed number of constructs a second, so each picture
+// carries that many divided by the picture rate. It is clamped rather than
+// rejected, because a rate outside the clamp is a rate this still has to do
+// something sensible at — rejecting it was leaving the cadence at one pair per
+// picture, which is the very fault this exists to prevent, and it did it at
+// exactly the rates nobody tests.
+//
+// The line 21 cadence is the format's rate over the picture rate, capped at one
+// pair per picture because there is nowhere to put a second one. Below the
+// format's rate that cap binds and the channel simply runs slower — a
+// twenty-five picture stream carries twenty-five pairs a second and there is no
+// arrangement of bytes that carries more.
+func (ci *captionInjector) setRate(fps float64) {
+	if fps <= 0 || math.IsInf(fps, 0) || math.IsNaN(fps) {
+		return
+	}
+	n := int(math.Round(ccConstructsPerSec / fps))
+	if n < 2 {
+		n = 2
+	}
+	if n > 31 {
+		n = 31
+	}
+	ci.ccCount = n
+	ci.ccPerAU = cc608NominalRate / fps
+	if ci.ccPerAU > 1 {
+		ci.ccPerAU = 1
+	}
+	ci.haveRate = true
+	// What the encoder pays attention to is the rate pairs actually leave at,
+	// which is the format's rate rather than the picture rate.
+	ci.enc.setPictureRate(fps * ci.ccPerAU)
+	logger("[CC] %s picture rate is %.2f fps, cc_count %d, line 21 at %.2f pairs a second",
+		ci.log, fps, n, fps*ci.ccPerAU)
+}
+
+// ccConstructsPerSec is the caption channel's size in cc_data constructs a
+// second, which is what fixes the per-picture count at any picture rate. Six
+// hundred: twenty constructs at 29.97 pictures, ten at 59.94, twenty-four at
+// twenty-five, twelve at fifty — the published counts are this number divided
+// by the picture rate, so the number is what is written down rather than the
+// counts.
+const ccConstructsPerSec = 600.0
+
+// medianInt64 returns the middle value, and does not disturb the caller's
+// slice order beyond what sorting a copy costs.
+func medianInt64(v []int64) int64 {
+	c := append([]int64(nil), v...)
+	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
+	return c[len(c)/2]
 }
 
 // sendsCC reports whether this picture carries a line 21 pair.
