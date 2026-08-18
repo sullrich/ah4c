@@ -6797,10 +6797,10 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		// speech, and it says the same thing whatever the stream count is. Under
 		// a second is keeping up. Climbing is not.
 		logger("[CC] recognizer: %.1fx real time, %.1f phrases per dispatch, %.2fs compute for %.1fs of audio, "+
-			"phrases waited %.2fs, %d in the queue, %d %s captioned — over the last %d dispatches",
+			"phrases waited %.2fs, %d in the queue, %s captioned — over the last %d dispatches",
 			speed, float64(svc.tPhrases)/telemetryWindow,
 			svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
-			svc.tLag.Seconds()/telemetryWindow, waiting, streams, plural(int64(streams), "stream", "streams"),
+			svc.tLag.Seconds()/telemetryWindow, waiting, plural(int64(streams), "stream", "streams"),
 			telemetryWindow)
 		svc.tPhrases, svc.tCompute, svc.tAudio, svc.tWinN, svc.tLag = 0, 0, 0, 0, 0
 	}
@@ -7687,6 +7687,8 @@ type captionEngine struct {
 	// Both used to happen in silence.
 	tooShort  int64
 	audioLost int64
+	// recogLost counts chunks the recognizer was too far behind to be given.
+	recogLost int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -8485,6 +8487,11 @@ func vadPeak(peak, rms float64) float64 {
 // There is no phrase segmenter here and no waiting: the model returns words as
 // the audio arrives and marks where an utterance ends, which is what keeps this
 // about a second behind instead of a phrase behind.
+// streamJobDepth is how much audio may wait for the recognizer, in 100 ms
+// chunks. Three seconds is enough to ride out a model waiting its turn on a
+// shared graphics chip, and short enough that what comes out is still current.
+const streamJobDepth = 30
+
 func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	defer e.finish()
 	defer pcm.Close()
@@ -8527,6 +8534,65 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 	}
 
+	// Reading the audio and recognizing it are separate goroutines, and have to
+	// be, for the reason written at length over the phrase path — which had
+	// exactly this fault and was fixed there and not here.
+	//
+	// Every call into the model happened inline in this loop, so a model that
+	// took a moment stopped draining ffmpeg's output for as long as it was
+	// thinking. ffmpeg filled its pipe and blocked, a blocked ffmpeg stopped
+	// reading its own input, and the transport stream bytes behind that were
+	// dropped — which is not late captions, it is a corrupt stream, and it
+	// reported itself as "dropped audio the decoder could not keep up with"
+	// hundreds of times a minute. It needs no slow model to happen: three
+	// streams sharing one graphics chip is enough, because the model waits its
+	// turn for the chip inside the call.
+	//
+	// One channel rather than one per kind, because the order matters: a flush
+	// that overtook the audio it was meant to close off would commit a sentence
+	// that had not finished arriving.
+	jobs := make(chan func() *streamResult, streamJobDepth)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for job := range jobs {
+			take(job())
+		}
+	}()
+	defer func() {
+		close(jobs)
+		<-drained
+	}()
+
+	// holed records that a chunk was dropped, so the utterance it belonged to
+	// is closed off rather than spliced.
+	//
+	// This family re-attends over its whole accumulated audio, so audio with a
+	// hole in it corrupts everything after the hole, and committed text cannot
+	// be taken back off the screen. The same reasoning as the tune gate below,
+	// for the same reason.
+	holed := false
+	post := func(job func() *streamResult) {
+		select {
+		case jobs <- job:
+		default:
+			n := atomic.AddInt64(&e.recogLost, 1)
+			if n == 1 || n%50 == 0 {
+				logger("[CC] %s recognition is behind the audio; %d chunks passed over so far", e.label, n)
+			}
+			holed = true
+		}
+	}
+	feed := func(pcm []float32) {
+		if holed {
+			holed = false
+			post(func() *streamResult { return e.model.idleFlush() })
+		}
+		chunk := append([]float32(nil), pcm...)
+		post(func() *streamResult { return e.model.feedStream(chunk) })
+	}
+	flush := func() { post(func() *streamResult { return e.model.idleFlush() }) }
+
 	for {
 		select {
 		case <-e.closed:
@@ -8534,7 +8600,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		default:
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
-			take(e.model.finishStream())
+			post(func() *streamResult { return e.model.finishStream() })
 			next, ok := e.restartDecoder(decoderTries + 1)
 			if !ok {
 				return
@@ -8571,7 +8637,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// never the other viewer's recording.
 		if tunesPending() {
 			if !settled {
-				take(e.model.idleFlush())
+				flush()
 				quiet, settled, uttered = 0, true, 0
 			}
 			continue
@@ -8599,13 +8665,13 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		if settled {
 			for _, l := range lead {
-				take(e.model.feedStream(l))
+				feed(l)
 				uttered += float64(len(l)) / asrSampleRate
 			}
 			lead = nil
 			settled = false
 		}
-		take(e.model.feedStream(buf))
+		feed(buf)
 		uttered += chunkSec
 
 		// An utterance cannot run forever: the model decodes each one against
@@ -8614,7 +8680,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// eight seconds long, or at twelve seconds wherever the speech is —
 		// a seam at a word beats a sentence that ends in nothing.
 		if !settled && (uttered >= 12 || (uttered >= 8 && quiet >= 0.2)) {
-			take(e.model.idleFlush())
+			flush()
 			quiet, settled, uttered = 0, true, 0
 			continue
 		}
@@ -8624,7 +8690,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			continue
 		}
 		if quiet += chunkSec; quiet >= flushSilence {
-			take(e.model.idleFlush())
+			flush()
 			settled, uttered = true, 0
 		}
 	}
