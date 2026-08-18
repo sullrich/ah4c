@@ -50,11 +50,20 @@ var nemotronEnglish = captionModel{
 	SizeMB:      696,
 	Streaming:   true,
 	Punctuation: true,
-	// English only, so there is nothing to choose and no code to pass. The
-	// family refuses a bare "en" and wants a locale, and modelLanguage widens a
-	// saved bare code onto the first locale that starts with it — so a setting
-	// carried over from another model lands on en-US rather than failing.
-	Languages: []string{"en-US"},
+	// No language is passed at all, and that is not the same answer its
+	// multilingual sibling gives.
+	//
+	// That model documents the parameter and its own example passes en-US, so
+	// this entry was written to match it — reasoning about the family rather
+	// than reading the model. This one's card never mentions a language: it
+	// does English and there is nothing to select, so the parameter it was
+	// being handed came back "unsupported language" on the continuous path,
+	// again on the phrase path it fell back to, and then on every phrase after
+	// that. Captions did not work at all.
+	//
+	// The list below is for the page and reaches the engine nowhere.
+	NoLanguage: true,
+	Languages:  []string{"en"},
 }
 
 // Nothing beyond the defaults. It streams, so the phrase window does not apply,
