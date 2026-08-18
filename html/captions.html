@@ -165,7 +165,9 @@
                 wants a machine with memory to spare. <b>Parakeet</b> is a tenth the size of any of them and
                 the one to pick if the machine cannot manage the others.<br>
                 Cohere and Parakeet share one copy across every tuner. Both Nemotrons load a copy per tuner,
-                so they cost more the more tuners you caption.
+                and each copy wants the graphics chip more or less continuously &mdash; so past two or three
+                captioned tuners they ask more of it than it has, and words start going missing. For many
+                tuners at once, use Cohere or Parakeet.
             </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
