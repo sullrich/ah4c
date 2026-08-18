@@ -6148,15 +6148,19 @@ var (
 	txLive      = map[string]int{}
 )
 
-// gpuGate limits how many streams decode on the accelerator at once.
+// gpuGate limits how many phrase decodes are issued at the accelerator at once.
 //
-// A machine has one graphics card and may have seven tuners. Seven decodes
-// issued at it together do not run seven times faster than two — the card runs
-// them one at a time regardless, and the interleaving costs command buffer
-// churn and working memory on top. Letting a couple through at a time keeps the
-// card busy without the pile-up; the rest wait briefly, and if they wait too
-// long the phrase queue drops one, which is the same back-pressure the rest of
-// this file already uses.
+// A phrase decode is long and bursty: several seconds of audio arriving in a
+// clump when a phrase closes. Issuing every tuner's at the card together does
+// not run them faster — the card runs them one at a time regardless, and the
+// interleaving costs command buffer churn and working memory on top. Letting a
+// couple through keeps it busy without the pile-up.
+//
+// It does not apply to continuous recognition. A streaming session holds its
+// own copy of the model, which is the arrangement the engine's threading
+// contract names for parallel work, and its calls are short and steady rather
+// than long and bursty; see enterGPU. Back-pressure there is the per-stream job
+// queue instead.
 //
 // The processor path is not gated: threads are shared out there instead, which
 // is the right tool for a device that really does run things in parallel.
@@ -6182,6 +6186,32 @@ const maxBatchAudioSec = 20.0
 
 func (t *transcribeModel) enterGPU() bool {
 	if !t.onGPU {
+		return false
+	}
+	// A per-stream copy does not queue behind the others, because the engine
+	// says so in as many words.
+	//
+	// Its threading contract is that at most one compute may be in flight
+	// across all sessions of a given model — sessions share the model's backend
+	// instances, so overlapping runs race, and it names what that looks like:
+	// corrupted decodes on the processor, command buffer failures on Metal.
+	// Then it says what to do instead: "Callers that want parallel
+	// transcription today should load one model per worker."
+	//
+	// Which is exactly the shape here. acquireTxModel loads a fresh handle for
+	// every streaming session, so each has its own model, and the compute lock
+	// taken in armSetup is per model rather than shared. The engine's rule is
+	// already satisfied — and the gate below was a second, self-imposed limit
+	// on top of it, holding seven streams that the engine permits to run
+	// together down to two at a time.
+	//
+	// The back-pressure that gate was providing is provided properly now, per
+	// stream, by the job queue in listenStreaming: audio that cannot be kept up
+	// with is coalesced and then passed over, with a count and a reason, rather
+	// than piling up behind a semaphore.
+	//
+	//	https://github.com/handy-computer/transcribe.cpp/blob/main/include/transcribe.h
+	if t.streaming {
 		return false
 	}
 	// Bounded: a decode that wedged while holding a slot must not turn the
@@ -8547,22 +8577,34 @@ func vadPeak(peak, rms float64) float64 {
 // There is no phrase segmenter here and no waiting: the model returns words as
 // the audio arrives and marks where an utterance ends, which is what keeps this
 // about a second behind instead of a phrase behind.
-// streamJobDepth is how many feeds may wait for the recognizer. At the real
-// chunk size that is half a minute of audio, which sounds generous and is not:
-// what waits here is coalesced into one call rather than replayed one at a
-// time, so a deep queue costs a little memory and buys back the throughput the
-// small feeds were losing.
-const streamJobDepth = 30
+// streamLagSec is how much audio may wait for the recognizer, in seconds.
+//
+// Seconds and not a number of feeds. It was thirty feeds, which was three
+// seconds when a feed was a tenth of one and became half a minute the moment
+// the feed became the size the model actually wants — so a recognizer that
+// could not keep up stopped skipping and started sinking instead, half a minute
+// deep, with nothing in the log because nothing was being dropped.
+//
+// A queue is only ever lag. What it can do is absorb the moment a model waits
+// its turn; what it must not do is let a shortfall accumulate, because past a
+// few seconds a caption is not late, it is about something else. Three seconds
+// is roughly the shortfall a busy machine produces in bursts, and past it the
+// audio is passed over and said so.
+const streamLagSec = 3.0
+
+// streamFeedMax bounds a coalesced feed, in samples.
+//
+// It has to be larger than one chunk or it coalesces nothing, which is what it
+// did the moment the chunk grew: a bound of one second against a chunk of one
+// and a bit meant every batch was already over it before a second was
+// considered. Four seconds is the whole queue in one call, which is the point
+// of coalescing, and short enough not to threaten the call's own deadline.
+const streamFeedMax = 4 * asrSampleRate
 
 // streamChunkDefault is the feed size for a streaming model that has not named
 // one. A second, which is the order of every cache-aware encoder's context, and
 // far enough from the old tenth to be obvious in a log.
 const streamChunkDefault = 1.0
-
-// popFeedMax bounds a coalesced feed, in samples. One second of audio: enough
-// that ten queued chunks become one call, and short enough that the call cannot
-// outgrow the deadline it is given.
-const popFeedMax = asrSampleRate
 
 // streamJob is one thing for the recognizer to do, in the order it was asked.
 // Feeds carry audio; the other two carry none and are told apart by finish,
@@ -8653,7 +8695,13 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// One channel rather than one per kind, because the order matters: a flush
 	// that overtook the audio it was meant to close off would commit a sentence
 	// that had not finished arriving.
-	jobs := make(chan streamJob, streamJobDepth)
+	// The queue is a number of seconds, converted into feeds at this model's
+	// chunk size rather than counted in feeds.
+	depth := int(streamLagSec/chunkSec + 0.5)
+	if depth < 2 {
+		depth = 2
+	}
+	jobs := make(chan streamJob, depth)
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -8680,7 +8728,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		for job := range jobs {
 			if job.pcm != nil {
 				batch := job.pcm
-				for len(batch) < popFeedMax {
+				for len(batch) < streamFeedMax {
 					select {
 					case next := <-jobs:
 						if next.pcm == nil {
