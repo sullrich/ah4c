@@ -24,7 +24,7 @@ import "strings"
 var cohereTranscribe = captionModel{
 	Key:  "cohere-transcribe",
 	Name: "Cohere Transcribe 03-2026",
-	Role: "Best accuracy",
+	Role: "Best accuracy, if the machine can carry it",
 	Desc: "The most accurate open speech model there is. It waits for a phrase to finish and then writes it whole, which reads like the captions on a broadcast channel. One copy is shared by every tuner.",
 	// It reads a whole phrase and then writes it, so the delay setting
 	// governs how far behind it runs; the batch service amortizes its

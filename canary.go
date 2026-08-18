@@ -2,7 +2,8 @@ package main
 
 // Canary 180M Flash: the model, and everything it asks of the code around it.
 //
-// The one to reach for when a machine has to caption several tuners at once.
+// The default, and the one to reach for unless something specific says
+// otherwise.
 //
 // Cohere is the most accurate thing here and its encoder is the size of that
 // claim: a billion parameters and more, and the engine runs the encoder once
@@ -28,8 +29,8 @@ package main
 var canaryFlash = captionModel{
 	Key:  "canary-180m",
 	Name: "Canary 180M Flash",
-	Role: "Best for many tuners",
-	Desc: "Nearly the accuracy of the best one at a sixth of the size, so a machine that runs out of graphics chip on four or five captioned tuners will carry many more. English, German, Spanish and French.",
+	Role: "Recommended",
+	Desc: "Nearly the accuracy of the best one at a sixth of the cost, so an ordinary machine captions several tuners at once rather than four or five. English, German, Spanish and French. Start here.",
 	// A phrase model: nothing is transcribed until the sentence is complete.
 	Latency:   "A couple of seconds behind",
 	Accuracy:  "Excellent",

@@ -468,8 +468,8 @@ type captionModel struct {
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
-	cohereTranscribe,
 	canaryFlash,
+	cohereTranscribe,
 	nemotronStreaming,
 	parakeetTDT,
 }
@@ -576,7 +576,7 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:     false,
-		Model:       "cohere-transcribe",
+		Model:       "canary-180m",
 		Language:    "en",
 		Style:       "rollup3",
 		OnScreenSec: 4,
@@ -3604,6 +3604,27 @@ func (c *cea608) showPopon(lines []string) {
 // which is what this exists to prevent, and the twenty second staleness sweep
 // remains behind it for anything this misses.
 const ccPopLinger = 3 * time.Second
+
+// maxInFlight is how many phrases one stream may have at the shared recognizer
+// at once.
+//
+// It was one, which throttled a stream to a phrase per service cycle while the
+// recognizer had capacity to spare. Then it was two, which was the same fault
+// with a bigger number: a stream still stopped listening for its own audio
+// while two phrases were out, however idle the thing it was waiting on.
+//
+// A phrase in flight is being worked on. A phrase held back is not — it is
+// waiting for permission, and the recognizer that would have taken it is what
+// it is waiting for. So this is the number that decides whether the batch call
+// has anything to batch, and with a stream held to two the log showed 1.2
+// phrases per dispatch: a batch entry point built to amortize the decode across
+// many utterances, handed one at a time.
+//
+// Four, which lets a stream keep its buffered phrases moving rather than
+// queued, and gives seven captioned tuners enough outstanding work to fill a
+// dispatch. It costs nothing when the recognizer is busy, because then the
+// window stays full either way and the bound that matters is the recognizer's.
+const maxInFlight = 4
 
 // ccMaxBacklogSec is the most unshown caption data we will hold, measured as
 // the time it would take to air. Reaching it means recognition has outrun the
@@ -8884,7 +8905,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 					"several at once ask more of it than it has. Caption fewer tuners, or choose a model that "+
 					"transcribes a phrase at a time — those share one copy between all of them.", e.label)
 			case n%200 == 0:
-				logger("[CC] %s recognition is still behind the audio; %d chunks passed over so far", e.label, n)
+				logger("[CC] %s recognition is still behind the audio; %s passed over so far", e.label, plural(n, "chunk", "chunks"))
 			}
 			holed = true
 		}
@@ -9304,7 +9325,7 @@ func (e *captionEngine) queue(audio []float32, carried, atPause, hardCut bool) {
 		// which is the trade that made captions stop altogether.
 		n := atomic.AddInt64(&e.dropped, 1)
 		if n == 1 || n%10 == 0 {
-			logger("[CC] %s behind: %d phrases dropped", e.label, n)
+			logger("[CC] %s behind: %s dropped", e.label, plural(n, "phrase", "phrases"))
 		}
 	}
 }
@@ -9379,10 +9400,10 @@ func (e *captionEngine) recognize() {
 	// happens, and nothing is held for the sake of something unrelated.
 	for {
 		var in <-chan phraseItem
-		if len(window) < 2 {
-			// Two in flight is the ceiling, so the channel is only listened to
-			// with room to accept. Not listening is the backpressure: it was a
-			// blocking settle before, which is the same bound reached by
+		if len(window) < maxInFlight {
+			// The ceiling on phrases in flight, so the channel is only listened
+			// to with room to accept. Not listening is the backpressure: it was
+			// a blocking settle before, which is the same bound reached by
 			// standing still instead of by waiting for the right thing.
 			in = e.phrases
 		}
@@ -9503,7 +9524,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		e.slow++
 		if e.slow == 1 || e.slow%20 == 0 {
 			if drops := atomic.LoadInt64(&e.dropped); drops > 0 {
-				logger("[CC] %s captions are running %.0fs behind (%d phrases dropped)", e.label, lag.Seconds(), drops)
+				logger("[CC] %s captions are running %.0fs behind (%s dropped)", e.label, lag.Seconds(), plural(drops, "phrase", "phrases"))
 			} else {
 				logger("[CC] %s captions are running %.0fs behind (nothing dropped)", e.label, lag.Seconds())
 			}
