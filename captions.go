@@ -3264,13 +3264,15 @@ func segment608(w []ccWord, cols, rows int) [][]ccWord {
 		// for nothing. The search covers the whole caption because a full stop
 		// is the strongest boundary there is.
 		//
-		// Except where it would leave almost nothing. "Yes." is a sentence and
-		// it is not a caption: a box put it up on its own, alone in the middle
-		// of the screen, and replaced it a moment later. So a sentence boundary
-		// is only taken when there is a row's worth in front of it, and short
-		// sentences ride together the way they do on a broadcast caption.
+		// Except where it would leave a caption too small to keep up. "Yes." is
+		// a sentence and it is not a caption: a box put it up on its own, alone
+		// in the middle of the screen, and held the screen a whole second to do
+		// it — which is a second the words behind it did not have. Half a row is
+		// the same break-even minCaptionChars works out from the reading speed,
+		// at the speed the page defaults to. Short sentences ride together the
+		// way they do on a broadcast caption.
 		for i := n; i >= 1; i-- {
-			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/3 {
+			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/2 {
 				cut = i
 				break
 			}
@@ -4289,15 +4291,8 @@ func (c *cea608) next() [2]byte {
 }
 
 // ccPopGather is how long a fragment waits for the rest of its sentence before
-// it goes up on its own.
-//
-// It was seven hundred milliseconds against a whole row, and between them they
-// made the box slow: almost everything short of a full line waited out the
-// whole gather, on a display whose entire case is being current. What was being
-// fixed is single words going up alone, and a single word is four or five
-// characters — so the bar is a third of a row, which no single word reaches and
-// almost every real fragment does, and the wait behind it is short enough to be
-// a fraction of one phrase.
+// it goes up on its own. Short, because the size bar below is what does the
+// work now; this only catches the fragment nothing more is coming for.
 const ccPopGather = 250 * time.Millisecond
 
 // worthShowing reports whether what is held is a caption yet.
@@ -4308,15 +4303,44 @@ const ccPopGather = 250 * time.Millisecond
 // happens to be free, and three words become a caption of their own.
 //
 // So a fragment too short to be a caption waits a moment for the rest of its
-// sentence. A third of a row is a caption and goes at once; anything ending a
-// sentence is a caption whatever its length, because nothing more is coming for
-// it; and anything that has waited out the gather goes rather than being held
-// for words that may never arrive. Callers hold the lock.
+// sentence. A caption's worth goes at once; anything ending a sentence is a
+// caption whatever its length, because nothing more is coming for it; and
+// anything that has waited out the gather goes rather than being held for words
+// that may never arrive. Callers hold the lock.
+// minCaptionChars is the fewest characters a caption may carry, derived rather
+// than chosen.
+//
+// A caption is on screen for at least the guidance minimum, a second for one
+// row, whatever else is true — so a caption of ten characters occupies a second
+// to show ten characters, which is ten a second, against speech that produces
+// fifteen and a half. The display is then losing ground on every caption and
+// nothing downstream can win it back: that is a box falling further behind the
+// longer it runs, and it is arithmetic rather than tuning.
+//
+// The break-even point is the minimum time on screen multiplied by the reading
+// speed, and that is this. Above it the display gains on speech, below it the
+// display cannot keep up however good the recognizer is. It moves with the
+// reading speed on the page, because both sides of the sum do.
+//
+// The first two attempts at this bar were a whole row and then a third of one,
+// picked for how they looked rather than worked out. A third of a row is ten
+// characters, which is the losing side of this sum.
+func (c *cea608) minCaptionChars() int {
+	if c.pace <= 0 {
+		return c.maxCol / 2
+	}
+	n := int(ccMinOnScreen(1).Seconds()*c.pace + 0.5)
+	if n > c.maxCol {
+		n = c.maxCol
+	}
+	return n
+}
+
 func (c *cea608) worthShowing() bool {
 	if len(c.held) == 0 {
 		return false
 	}
-	if ccWordsWidth(analyze608(c.held)) >= c.maxCol/3 {
+	if ccWordsWidth(analyze608(c.held)) >= c.minCaptionChars() {
 		return true
 	}
 	if last := c.held[len(c.held)-1]; endsSentence(last) {
