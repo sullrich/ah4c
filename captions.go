@@ -3831,7 +3831,13 @@ func (c *cea608) waiting() bool {
 	// A box's queue is a whole caption that then appears at once, so one
 	// ordinary two row caption measures as five seconds of reading.
 	if c.popon {
-		return c.popPending > 0
+		// Words held are words waiting, exactly as much as a caption already
+		// queued is. Only the queued ones counted, and the display makes a
+		// caption out of held words only once the screen is free — so the
+		// common case had nothing queued, the caption on screen was never
+		// declared late, and it kept its full comfortable reading time while
+		// the next sentence sat behind it. The drain existed and never ran.
+		return c.popPending > 0 || len(c.held) > 0
 	}
 	if c.maxLag <= 0 {
 		return len(c.queue) > 2
