@@ -185,7 +185,7 @@
             <div class="card-title">Caption settings</div>
             <div class="field-row">
                 <label for="language">Language</label>
-                <select id="language"></select>
+                <select id="language" onchange="spellingField()"></select>
             </div>
             <div class="field-row">
                 <label for="style">Presentation</label>
@@ -220,6 +220,15 @@
                 <select id="onscreen"></select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="onscreenHelp"></p>
+            <div class="field-row" id="spellingRow" style="display:none;">
+                <label for="spelling">Spelling</label>
+                <select id="spelling">
+                    <option value="">As recognized</option>
+                    <option value="us">American</option>
+                    <option value="gb">British</option>
+                </select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="spellingHelp"></p>
             <div class="field-row">
                 <label for="case">Letter case</label>
                 <select id="case">
@@ -558,6 +567,8 @@ function render() {
     osel.innerHTML = onscreens.map(v =>
         `<option value="${v}" ${v === (cfg.onScreenSec || 4) ? 'selected' : ''}>${v} seconds${v === 4 ? ' (default)' : ''}</option>`).join('');
     document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
+
+    spellingField(cfg.spelling || '');
     styleFields();
 
 
@@ -577,6 +588,33 @@ function render() {
 // where nobody can see it and shows the finished thing — so the same number
 // decides how long a caption needs to be up instead, which is the reading it
 // asks for rather than the writing.
+// Which English the captions are spelled in, offered only where it can matter:
+// the language has to be English, and the model has to be one that cannot be
+// told which English. A model listing en-US and en-GB is already being told, so
+// correcting it afterward would be two answers to the same question.
+//
+// Its own function rather than a re-render, because the language select calls
+// it — and render() puts every field back to what was last saved, so a change
+// that triggered one would undo itself.
+function spellingField(value) {
+    const model = (state.models || []).find(m => m.key === state.config.model);
+    const tellable = ((model && model.languages) || []).some(l => l.toLowerCase().startsWith('en-'));
+    const lang = document.getElementById('language').value || '';
+    const show = !tellable && (lang.toLowerCase().startsWith('en') || lang === 'auto');
+    const sel = document.getElementById('spelling');
+    document.getElementById('spellingRow').style.display = show ? '' : 'none';
+    if (value !== undefined) sel.value = value;
+    if (!show) {
+        sel.value = '';
+        document.getElementById('spellingHelp').innerHTML = '';
+        return;
+    }
+    document.getElementById('spellingHelp').innerHTML =
+        `${esc((model && model.name.split(' ')[0]) || 'This model')} is not told which English to write, so it
+         writes whichever its training leaned toward &mdash; tyre or tire, colour or color. Pick one and the
+         words on the list are corrected; anything not on it is left exactly as recognized.`;
+}
+
 function styleFields() {
     const box = document.getElementById('style').value.startsWith('box');
     document.getElementById('styleHelp').innerHTML = box
@@ -616,6 +654,7 @@ function collect() {
         style: document.getElementById('style').value,
         onScreenSec: parseFloat(document.getElementById('onscreen').value) || 0,
         uppercase: document.getElementById('case').value === 'upper',
+        spelling: document.getElementById('spelling').value,
         engine: state.config.engine || 'cpu',
         gpuRuntime: state.config.gpuRuntime || '',
         tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
