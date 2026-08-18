@@ -5238,6 +5238,15 @@ type modelQuirks struct {
 	// NoiseGate says this model will confidently transcribe things that are
 	// not speech, and wants stretches of steady noise held back from it.
 	NoiseGate bool
+	// StreamChunkSec is how much audio a streaming model wants per feed.
+	//
+	// Not a buffer size and not a tuning knob: a cache-aware streaming encoder
+	// runs one forward pass per feed over its whole attention context, so the
+	// work is per call and not per second of audio. Feeding it a tenth of what
+	// it is built for does not make it answer sooner — it cannot commit ahead
+	// of its own lookahead whatever it is handed — it simply does the same pass
+	// ten times as often. Zero means the shared default.
+	StreamChunkSec float64
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
@@ -8538,19 +8547,61 @@ func vadPeak(peak, rms float64) float64 {
 // There is no phrase segmenter here and no waiting: the model returns words as
 // the audio arrives and marks where an utterance ends, which is what keeps this
 // about a second behind instead of a phrase behind.
-// streamJobDepth is how much audio may wait for the recognizer, in 100 ms
-// chunks. Three seconds is enough to ride out a model waiting its turn on a
-// shared graphics chip, and short enough that what comes out is still current.
+// streamJobDepth is how many feeds may wait for the recognizer. At the real
+// chunk size that is half a minute of audio, which sounds generous and is not:
+// what waits here is coalesced into one call rather than replayed one at a
+// time, so a deep queue costs a little memory and buys back the throughput the
+// small feeds were losing.
 const streamJobDepth = 30
+
+// streamChunkDefault is the feed size for a streaming model that has not named
+// one. A second, which is the order of every cache-aware encoder's context, and
+// far enough from the old tenth to be obvious in a log.
+const streamChunkDefault = 1.0
+
+// popFeedMax bounds a coalesced feed, in samples. One second of audio: enough
+// that ten queued chunks become one call, and short enough that the call cannot
+// outgrow the deadline it is given.
+const popFeedMax = asrSampleRate
+
+// streamJob is one thing for the recognizer to do, in the order it was asked.
+// Feeds carry audio; the other two carry none and are told apart by finish,
+// which ends the session rather than the utterance.
+type streamJob struct {
+	pcm    []float32
+	finish bool
+}
+
+func (j streamJob) run(e *captionEngine) *streamResult {
+	if j.finish {
+		return e.model.finishStream()
+	}
+	return e.model.idleFlush()
+}
 
 func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	defer e.finish()
 	defer pcm.Close()
 
-	// 100 ms per feed: short enough that nothing waits on a buffer, long enough
-	// that the call overhead is irrelevant next to the work inside.
-	const chunk = asrSampleRate / 10
-	const chunkSec = 0.1
+	// How much audio goes in per feed, which the model decides and not this.
+	//
+	// This was a tenth of a second, chosen on the reasoning that it is short
+	// enough that nothing waits on a buffer and long enough that the call
+	// overhead is irrelevant next to the work inside. The second half of that
+	// was wrong for the models it was feeding.
+	//
+	// A cache-aware streaming encoder runs a forward pass over its attention
+	// context on every feed, so the cost is per call rather than per second of
+	// audio, and a tenth of a second was buying a tenth of the throughput. Nor
+	// did it buy any latency back: the family's default lookahead is 1040 ms,
+	// so it cannot commit a word ahead of that however small the pieces are.
+	// Ten times the work for nothing, and with several tuners captioned at once
+	// it was fifty trips a second at the accelerator between them.
+	chunkSec := e.quirks.StreamChunkSec
+	if chunkSec <= 0 {
+		chunkSec = streamChunkDefault
+	}
+	chunk := int(chunkSec * asrSampleRate)
 	// How long the talking has to stop before the sentence is closed off. Short
 	// enough that a natural pause ends the line while the pause is still
 	// happening, long enough that the gap between two words never does.
@@ -8602,12 +8653,60 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// One channel rather than one per kind, because the order matters: a flush
 	// that overtook the audio it was meant to close off would commit a sentence
 	// that had not finished arriving.
-	jobs := make(chan func() *streamResult, streamJobDepth)
+	jobs := make(chan streamJob, streamJobDepth)
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
+		// Audio that has piled up is fed in one call rather than ten.
+		//
+		// A hundred milliseconds a feed is the right size for one stream and
+		// the wrong size for five. Every call is a trip out to the accelerator
+		// — a slot to take, a command buffer to build, a submission, a wait —
+		// and that cost is paid per call rather than per second of audio. Five
+		// streams at ten calls a second is fifty trips a second for five
+		// seconds of audio, and the overhead of the trip stops being irrelevant
+		// next to the work inside it, which is the assumption the chunk size
+		// was chosen under.
+		//
+		// So when this falls behind, the queue itself says by how much, and
+		// everything waiting is concatenated into a single feed. Ten chunks
+		// behind becomes one call instead of ten. It costs nothing when it is
+		// keeping up, because then there is never more than one thing waiting —
+		// the coalescing only happens when there is something to coalesce,
+		// which is exactly when it is needed.
+		//
+		// Bounded, because a call's own deadline is fixed and an unbounded
+		// batch is the one way to outgrow it.
 		for job := range jobs {
-			take(job())
+			if job.pcm != nil {
+				batch := job.pcm
+				for len(batch) < popFeedMax {
+					select {
+					case next := <-jobs:
+						if next.pcm == nil {
+							// A flush closes the utterance, so it must not
+							// overtake the audio it is closing.
+							take(e.model.feedStream(batch))
+							batch = nil
+							take(next.run(e))
+						} else {
+							batch = append(batch, next.pcm...)
+						}
+					default:
+					}
+					if batch == nil {
+						break
+					}
+					if len(jobs) == 0 {
+						break
+					}
+				}
+				if batch != nil {
+					take(e.model.feedStream(batch))
+				}
+				continue
+			}
+			take(job.run(e))
 		}
 	}()
 	defer func() {
@@ -8623,7 +8722,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	// be taken back off the screen. The same reasoning as the tune gate below,
 	// for the same reason.
 	holed := false
-	post := func(job func() *streamResult) {
+	post := func(job streamJob) {
 		select {
 		case jobs <- job:
 		default:
@@ -8658,12 +8757,11 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	feed := func(pcm []float32) {
 		if holed {
 			holed = false
-			post(func() *streamResult { return e.model.idleFlush() })
+			post(streamJob{})
 		}
-		chunk := append([]float32(nil), pcm...)
-		post(func() *streamResult { return e.model.feedStream(chunk) })
+		post(streamJob{pcm: append([]float32(nil), pcm...)})
 	}
-	flush := func() { post(func() *streamResult { return e.model.idleFlush() }) }
+	flush := func() { post(streamJob{}) }
 
 	for {
 		select {
@@ -8672,7 +8770,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		default:
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
-			post(func() *streamResult { return e.model.finishStream() })
+			post(streamJob{finish: true})
 			next, ok := e.restartDecoder(decoderTries + 1)
 			if !ok {
 				return
