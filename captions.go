@@ -2740,7 +2740,7 @@ type cea608 struct {
 	lastBlock  time.Time
 	// pairs counts the byte pairs handed out, which is the presentation
 	// timeline in the only unit this encoder has. See streamNow.
-	pairs       int64
+	streamTime  time.Duration
 	blockCopies int
 	rows        byte // ccRU2 / ccRU3 / ccRU4
 	started     bool
@@ -2786,7 +2786,29 @@ type cea608 struct {
 // defines. While a sixty picture stream was carrying twice as many pairs, a
 // pair was half a picture and this clock would have run at double speed.
 func (c *cea608) streamNow() time.Time {
-	return time.Unix(0, int64(float64(c.pairs)/c.pairRate()*float64(time.Second)))
+	return time.Unix(0, int64(c.streamTime))
+}
+
+// advanceStream moves the presentation clock to where the stream says it is.
+//
+// Counting pairs and dividing by a rate was right only while the rate was
+// fixed, and it is not: a player that transcodes or remuxes does not hand over
+// a locked sixty pictures a second, it hands over whatever it produced, and the
+// interval wanders. A clock derived from an assumed rate then drifts against
+// the video for as long as the stream runs, which is a caption timed correctly
+// at the start of a program and wrong by the end of it.
+//
+// The stream carries the answer. A presentation timestamp is the picture's
+// place on the timeline the viewer sees, so the clock is set from that and
+// nothing is assumed — variable rate, transcoded, remuxed or locked, the dwells
+// are measured against the same timeline the player renders on.
+func (c *cea608) advanceStream(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.streamTime += d
+	c.mu.Unlock()
 }
 
 // pairRate is how many byte pairs a second this channel carries.
@@ -4144,7 +4166,6 @@ func (c *cea608) next() [2]byte {
 	// One pair leaves per call, and that is the tick this encoder's clock runs
 	// on. Counted before anything else, so every dwell below is measured on the
 	// presentation timeline and not on ours.
-	c.pairs++
 	// Metered at speaking speed, and at the catch-up ceiling when there is a
 	// backlog — never at whatever the channel happens to be worth.
 	//
@@ -5066,7 +5087,7 @@ func (ci *captionInjector) flush() error {
 	}
 	ci.trackFrameRate(ptsVal)
 
-	send := ci.sendsCC()
+	send := ci.onPicture(ptsVal)
 	pair := [2]byte{}
 	if send {
 		pair = ci.enc.next()
@@ -5131,6 +5152,11 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 	if ci.lastPTS > 0 && !ci.haveRate {
 		// Gathered rather than taken from the first pair of timestamps.
 		//
+		// This still runs, and only for the construct count: that is a field in
+		// every picture and it is fixed by the picture rate, so the rate has to
+		// be estimated whatever the cadence is driven from. The cadence and the
+		// clock are driven from the timestamps themselves; see onPicture.
+		//
 		// A presentation timestamp is not the picture's position in decode
 		// order: with B-frames the values arrive out of order, so consecutive
 		// deltas are irregular and some are negative. One sample was being
@@ -5147,7 +5173,6 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 			}
 		}
 	}
-	ci.lastPTS = pts
 }
 
 // ccRateSamples is how many picture intervals are gathered before the rate is
@@ -5235,6 +5260,66 @@ func (ci *captionInjector) sendsCC() bool {
 		return false
 	}
 	ci.ccOwed -= 1
+	return true
+}
+
+// ccMaxJump is the largest step in the stream's timestamps that is taken as
+// time passing rather than as the stream having been cut. Ten seconds: longer
+// than any picture interval and shorter than anything anybody would splice.
+const ccMaxJump = 10 * time.Second
+
+// onPicture takes the presentation timestamp of an access unit, moves the
+// encoder's clock to it, and says whether this picture carries a line 21 pair.
+//
+// Both answers come from the timestamps and not from a picture rate, which is
+// the whole point. A rate is an average and it only holds while it is constant:
+// a player that transcodes or remuxes hands over whatever it produced, not a
+// locked sixty a second, and the interval wanders. Everything derived from an
+// assumed rate then wanders with it — the caption cadence over-sends on the
+// fast stretches and starves on the slow ones, and the clock the dwells are
+// measured against drifts against the video for as long as the stream runs.
+//
+// Elapsed presentation time answers both exactly. The pair is owed when a
+// 29.97th of a second of video has gone by, whatever number of pictures that
+// took, and the fraction is carried so it does not drift. A stream with no
+// timestamps at all falls back to the picture rate, which is the best that can
+// be done without them.
+func (ci *captionInjector) onPicture(pts int64) bool {
+	if pts < 0 {
+		// No timestamp on this access unit, so the picture rate is all there
+		// is. The clock still has to move: a stream that carried no timestamps
+		// at all would otherwise freeze it, and a frozen clock is a caption
+		// that never rolls and never swaps — the display stopping dead rather
+		// than running late.
+		if r := ci.enc.pairRate(); r > 0 {
+			ci.enc.advanceStream(time.Duration(float64(time.Second) / r * ci.ccPerAU))
+		}
+		return ci.sendsCC()
+	}
+	if ci.lastPTS <= 0 {
+		ci.lastPTS = pts
+		return true
+	}
+	d := time.Duration(pts-ci.lastPTS) * time.Second / 90000
+	ci.lastPTS = pts
+	if d <= 0 || d > ccMaxJump {
+		// Backwards, or a jump this big, is the stream being cut rather than
+		// time passing — a timestamp wrap, a splice, a decoder restart. Resync
+		// on the new value and carry nothing across the seam.
+		return true
+	}
+	ci.enc.advanceStream(d)
+	ci.ccOwed += d.Seconds() * cc608NominalRate
+	if ci.ccOwed < 1 {
+		return false
+	}
+	ci.ccOwed -= 1
+	// Never more than one pair behind. A stretch of stream that arrived with a
+	// long gap in its timestamps cannot be repaid by sending pairs faster than
+	// the format carries them, so the debt is dropped rather than carried.
+	if ci.ccOwed > 1 {
+		ci.ccOwed = 1
+	}
 	return true
 }
 
