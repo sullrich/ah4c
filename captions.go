@@ -470,7 +470,7 @@ type captionModel struct {
 var captionModelCatalog = []captionModel{
 	cohereTranscribe,
 	nemotronStreaming,
-	moonshineTiny,
+	parakeetTDT,
 }
 
 // captionLanguageNames turns the catalog's ISO codes into something readable in
@@ -612,6 +612,17 @@ func loadCaptionConfig() {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		logger("[CC] Ignoring malformed %s: %v", captionCfgFile, err)
 		return
+	}
+	// A model that has left the catalog leaves a saved config pointing at
+	// nothing, and captions then stop with "unknown model" until somebody
+	// happens to open the page. Moved to the default and said out loud instead:
+	// the wrong model transcribing is recoverable, and no captions at all with
+	// the reason only on a page nobody is looking at is the failure this file
+	// keeps a rule about.
+	if _, ok := findCaptionModel(cfg.Model); !ok {
+		was := cfg.Model
+		cfg.Model = defaultCaptionConfig().Model
+		logger("[CC] %q is no longer offered; using %s instead. Pick another on the Closed Captions page if you would rather.", was, cfg.Model)
 	}
 	captionCfgLock.Lock()
 	captionCfg = cfg
@@ -5140,7 +5151,7 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 //
 // captions.go is the common part: the audio splitter, the voice detector, the
 // recognizer, both caption encoders, the injector, the tune gate. None of it
-// knows which model it is serving. cohere.go, nemotron.go and moonshine.go each
+// knows which model it is serving. cohere.go, nemotron.go and parakeet.go each
 // hold one model — its catalog entry, and what it asks of the code around it —
 // and they are reachable from here and nowhere else.
 //
@@ -5223,8 +5234,8 @@ func quirksFor(m captionModel) modelQuirks {
 		return cohereQuirks
 	case nemotronStreaming.Key:
 		return nemotronQuirks
-	case moonshineTiny.Key:
-		return moonshineQuirks
+	case parakeetTDT.Key:
+		return parakeetQuirks
 	}
 	return modelDefaults
 }
