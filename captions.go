@@ -5817,6 +5817,26 @@ func txCheckABI() error {
 	return nil
 }
 
+// runningOn says where the work is happening, in English.
+//
+// The build variants are lowercase identifiers — cpu, vulkan, cuda — and the
+// line said "on the" in front of whichever one it was. A processor takes the
+// article and an API does not, so this read "on the vulkan", which is a
+// different franchise.
+func runningOn(variant string) string {
+	switch {
+	case variant == "cpu" || variant == "":
+		return "on the processor"
+	case strings.HasPrefix(variant, "vulkan"):
+		return "on Vulkan"
+	case strings.HasPrefix(variant, "cuda"):
+		return "on CUDA"
+	case strings.HasPrefix(variant, "metal"):
+		return "on Metal"
+	}
+	return "on " + variant
+}
+
 func txBackendName(k int32) string {
 	switch k {
 	case txBackendCPU:
@@ -5886,7 +5906,7 @@ func captionVariantFor(m captionModel) (string, error) {
 		return variant, nil
 	}
 	if g := gpuVariant(rt); g != "" {
-		logger("[CC] %s needs a GPU, so it runs on the %s build rather than the processor", m.Name, g)
+		logger("[CC] %s needs a GPU, so it runs %s rather than on the processor", m.Name, runningOn(g))
 		return g, nil
 	}
 	return "", fmt.Errorf("%s needs a GPU build of %s and none is downloaded; fetch one from the Closed Captions page",
@@ -7787,12 +7807,9 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if e.streaming {
 		mode = "continuous"
 	}
-	where := currentEngineVariant()
-	if where == "cpu" {
-		where = "processor"
-	}
-	logger("[CC] %s captions on: %s, %s, %s, on the %s, ready in %s",
-		e.label, m.Key, cfg.Language, mode, where, time.Since(began).Round(time.Millisecond))
+	logger("[CC] %s captions on: %s, %s, %s, %s, ready in %s",
+		e.label, m.Key, cfg.Language, mode, runningOn(currentEngineVariant()),
+		time.Since(began).Round(time.Millisecond))
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
