@@ -8298,9 +8298,20 @@ const (
 	//
 	// The shape test does the first job properly now: room tone is flat and
 	// speech is not, whatever its length. So this is free to be what its name
-	// says, a floor under blips rather than a floor under short answers. Thirty
-	// five hundredths keeps a one-word reply and still refuses a door closing.
-	vadMinSpeech = 0.35
+	// says, a floor under blips rather than a floor under short answers.
+	//
+	// A quarter of a second, because the paragraph above names the range it is
+	// protecting and thirty five hundredths cut into the bottom of it. Three to
+	// five tenths is what a one-word reply measures, so a floor at thirty five
+	// hundredths keeps the long half of that range and throws away the short
+	// half — the shortest "Yes" is exactly the one it was meant to save, and it
+	// went into the count this line prints.
+	//
+	// Nothing is riskier for it. What refuses a door closing is the shape test,
+	// not the length: a door is one transient and flat across it, and it fails
+	// the crest bar at any duration. This is left only to refuse the clicks and
+	// edge effects that are too brief to have a shape worth measuring.
+	vadMinSpeech = 0.25
 	// The floor under the remainder of a phrase this code cut itself.
 	//
 	// The blip floor above assumes the stretch arrived on its own. The
