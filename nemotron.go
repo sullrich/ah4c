@@ -26,8 +26,8 @@ package main
 var nemotronStreaming = captionModel{
 	Key:  "nemotron-streaming",
 	Name: "Nemotron 3.5 ASR Streaming 0.6B",
-	Role: "Best for other languages",
-	Desc: "Thirty-two languages, written as the audio arrives rather than a phrase at a time, so words appear about a second behind the speaker instead of four. The one to pick for anything that is not English.",
+	Role: "Best for low latency",
+	Desc: "Written as the audio arrives rather than a phrase at a time, so words appear about a second behind the speaker instead of four. Reads thirty-two languages, which is more than anything else here.",
 	// Streaming is a different shape of model, not a faster one: it keeps a
 	// running encoder state and commits words as they settle, so latency is
 	// a property of the architecture rather than a setting. The phrase
