@@ -2968,35 +2968,96 @@ type popTiming struct {
 // broadcast encoder does with a long sentence anyway.
 const popPages = 2
 
-// ccRowPAC is the preamble address code for each row a caption can sit on,
-// white, no italics, no underline, indent zero.
+// The preamble address code table, from 47 CFR 15.119.
 //
-// A row is named by both bytes and by neither alone. The first picks a pair of
-// rows and the second picks which of the pair: 0x40 to 0x5F is the lower of the
-// two and 0x60 to 0x7F the upper, with the low bits inside each range carrying
-// the color, the indent and the underline. 0x50 and 0x70 are the same choice in
-// both ranges, which is why every entry here is one or the other.
+// A row is named by both bytes and by neither alone. The first byte picks a
+// pair of rows — and the pairing is not in row order, which is why this is a
+// table and not arithmetic. The second byte picks which of the pair, 0x50 for
+// the lower and 0x70 for the upper, and carries the indent above that: each
+// step of four columns adds two.
 //
-// Only the bottom of the screen is listed, because that is where captions go.
-// Row 15 is the last line and a box grows upward from it.
-var ccRowPAC = map[int][2]byte{
-	12: {0x13, 0x50},
-	13: {0x13, 0x70},
-	14: {ccCtrlCC1, 0x50},
-	15: {ccCtrlCC1, 0x70},
-}
+// Row 11 is the odd one out and it is not a mistake in the transcription. It
+// exists only as 0x10 with a 0x5x second byte; there is no 0x10 0x7x preamble
+// at all. A decoder handed one drops it and the text that follows lands
+// wherever the cursor happened to be.
+//
+// Every indent code is white by the standard's own note — a preamble gives
+// color or indent and never both — so this table needs no color dimension.
+var (
+	ccPACRow  = [15]byte{0x11, 0x11, 0x12, 0x12, 0x15, 0x15, 0x16, 0x16, 0x17, 0x17, 0x10, 0x13, 0x13, ccCtrlCC1, ccCtrlCC1}
+	ccPACBase = [15]byte{0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x50, 0x70, 0x50, 0x70}
+)
 
-// pac addresses a row, so the next characters land on it.
+// ccTabCC1 is the first byte of a tab offset, and it is not the byte every
+// other control code here starts with.
+//
+// 0x14 0x21 is backspace. A tab offset emitted through the usual control path
+// would delete the character to the left of the cursor instead of moving it,
+// which is why this has its own emitter rather than another call to ctrl.
+const ccTabCC1 = 0x17
+
+// pac addresses a row and an indent, so the next characters land there.
 //
 // Sent twice, like every other control pair: a decoder that catches the repeat
 // acts once, and the repeat is what survives a dropped frame.
-func (c *cea608) pac(row int) {
-	p, ok := ccRowPAC[row]
-	if !ok {
-		p = ccRowPAC[15]
+func (c *cea608) pac(row, indent int) {
+	if row < 1 || row > 15 {
+		row = 15
 	}
-	pair := [2]byte{odd608(p[0]), odd608(p[1])}
+	if indent < 0 {
+		indent = 0
+	}
+	if indent > 28 {
+		indent = 28
+	}
+	pair := [2]byte{odd608(ccPACRow[row-1]), odd608(ccPACBase[row-1] + byte(indent/4*2))}
 	c.queue = append(c.queue, pair, pair)
+}
+
+// tab moves the cursor one, two or three columns right of where the preamble
+// left it, which is how a caption reaches a column that is not a multiple of
+// four. A preamble alone cannot: its indents are 0, 4, 8 and so on.
+//
+// The three offsets are three distinct codes rather than one code sent n times,
+// and that is what makes them safe to double. A decoder is required to ignore a
+// control pair that repeats the one before it, so a column padded by sending
+// the same code twice arrives moved once. Sending TO2 twice moves two columns,
+// as intended, because the repeat is a repeat and not a second instruction.
+func (c *cea608) tab(n int) {
+	if n < 1 || n > 3 {
+		return
+	}
+	pair := [2]byte{odd608(ccTabCC1), odd608(byte(0x20 + n))}
+	c.queue = append(c.queue, pair, pair)
+}
+
+// centerStart is where a caption starts on the 32 column grid, as a preamble
+// indent and a tab offset after it.
+//
+// 608 has no notion of alignment. There is no center attribute and nothing in
+// the standard says where a caption belongs across the screen: a row and a
+// column is all a caption has, and centering is arithmetic the encoder does
+// before it sends anything. Flush at column zero is what comes out of not
+// doing it, which is what this code was doing.
+//
+// Measured rather than assumed: across 747 pop-on captions in two published
+// caption files, every one of them starts at (32 - longest line) / 2, and every
+// row of a caption starts at the same column as every other row. Both without
+// exception. So the block is centered on its longest line and the shorter rows
+// hang off it — the lines are not centered one by one, which fits only about
+// half of the real rows.
+func centerStart(lines []string, cols int) (indent, tab int) {
+	longest := 0
+	for _, l := range lines {
+		if n := len([]rune(l)); n > longest {
+			longest = n
+		}
+	}
+	start := (cols - longest) / 2
+	if start < 0 {
+		start = 0
+	}
+	return start / 4 * 4, start % 4
 }
 
 // showPopon writes one caption where it cannot be seen and then shows it whole.
@@ -3020,16 +3081,31 @@ func (c *cea608) showPopon(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
+	// Deferred, never dropped.
+	//
+	// This said lines = lines[:c.boxRows], which is a silent truncation of
+	// speech that was recognized — the caller pages and so it never fired, and
+	// a guard that discards words the moment the caller stops being careful is
+	// the shape of fault this file has a rule about. The remainder goes up as
+	// the caption after this one instead.
+	var rest []string
 	if len(lines) > c.boxRows {
-		lines = lines[:c.boxRows]
+		rest, lines = lines[c.boxRows:], lines[:c.boxRows]
 	}
 	c.ctrl(ccRCL)
 	c.ctrl(ccENM)
+	// Centered as a block, on the longest of its rows, and every row starts at
+	// the same column. See centerStart.
+	indent, tab := centerStart(lines, c.maxCol)
 	// A box sits on the bottom of the screen and grows upward from row 15, so
 	// however many rows it has, the last of them is the last line.
 	row := 16 - len(lines)
 	for _, line := range lines {
-		c.pac(row)
+		c.pac(row, indent)
+		// After the preamble and before any text: a preamble sets the column
+		// back to its own indent, so a tab sent before one is discarded, and a
+		// character sent between them eats the column the tab was skipping.
+		c.tab(tab)
 		c.col = 0
 		for _, r := range line {
 			c.writeRune(r)
@@ -3037,6 +3113,11 @@ func (c *cea608) showPopon(lines []string) {
 		row++
 	}
 	c.ctrl(ccEOC)
+	defer func() {
+		if len(rest) > 0 {
+			c.showPopon(rest)
+		}
+	}()
 	chars := 0
 	for _, line := range lines {
 		chars += len([]rune(line))
