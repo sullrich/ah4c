@@ -3071,15 +3071,32 @@ func (c *cea608) next() [2]byte {
 	// withholding between them turns one carriage return into two, which rolls
 	// twice and leaves a blank row between every pair of lines. The meter is
 	// about how fast words appear; it has no business inside a control pair.
-	if rate := c.pairRate(); rate > 0 && !c.waiting() && !c.headIsControl() {
+	if rate := c.pairRate(); rate > 0 {
 		c.credit += c.pace / rate
 		if c.credit > c.pace {
 			c.credit = c.pace
 		}
-		if c.credit < 1 {
+	}
+	// Charged per character, not per pair.
+	//
+	// writeRune packs two characters into one pair wherever it can, and this
+	// spent one credit per pair — so a rate set to fifteen characters a second
+	// put thirty on the screen, and the words-a-minute figure on the page meant
+	// half what it said. Reported as captions still being too fast, which they
+	// were, by a factor of two.
+	//
+	// A pair whose second byte is padding carries one character; any other
+	// carries two. Control codes are not charged at all: they are not words,
+	// and withholding inside a doubled pair splits it and rolls twice.
+	if len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
+		cost := 1.0
+		if c.queue[0][1] != odd608(cc608Null) {
+			cost = 2
+		}
+		if c.credit < cost {
 			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 		}
-		c.credit--
+		c.credit -= cost
 	}
 	if len(c.queue) == 0 {
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
@@ -7621,6 +7638,20 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			pending = nil
 			speaking = false
 		}
+		// The next phrase starts with whatever was carried into it.
+		//
+		// A forced cut splits the audio exclusively — audio[:at] goes now and
+		// audio[at:] waits — so the remainder is up to seven tenths of a second
+		// of speech that has already been read and already been counted. Zeroing
+		// the counters below then told the next phrase it was holding nothing.
+		// If the speaker stopped shortly after the cut, that phrase measured
+		// only the silence after it, fell under vadMinSpeech and was thrown away
+		// as too short — taking a word that existed in no other phrase, because
+		// the split gave it to this one and nowhere else.
+		//
+		// Intermittent by nature: it needs a forced cut, which is a minority of
+		// phrases, and the speaker to stop within a breath of it.
+		heldSec := float64(len(pending)) / asrSampleRate
 		if speechLen < vadMinSpeech {
 			// Counted, because it was not. Every other way audio is discarded
 			// says so, and a path that throws away sound in silence is a place
@@ -7630,6 +7661,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				logger("[CC] %s passed over %s too short to be worth transcribing (%d so far)",
 					e.label, plural(n, "stretch", "stretches"), n)
 			}
+			speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 			continue
 		}
 		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
@@ -7638,10 +7670,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				logger("[CC] %s held back %s of steady noise that was not speech (%.1fs of it, peak %.1f times the average, floor is %.1f)",
 					e.label, plural(n, "stretch", "stretches"), speechLen, crest, vadCrestMin)
 			}
-			speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
+			speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 			continue
 		}
-		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
+		speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 		cutThisMinute++
 		e.queue(audio, carried, ended, forced && !ended && !gapped)
 	}
