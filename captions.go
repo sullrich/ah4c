@@ -3500,23 +3500,58 @@ func paceFor(wpm int) float64 {
 	return cc608Pace
 }
 
+// ccMaxPace is the fastest text may ever be put on the screen, in characters a
+// second, whatever the backlog.
+//
+// This was the one number in the display that had no ceiling at all. The meter
+// stood aside when it fell behind and the words went out at whatever the
+// channel could carry — about sixty characters a second, four times reading
+// speed — on the reasoning that being current matters more than reading evenly.
+//
+// That trade has been measured in the field and it came back badly. Ofcom
+// sampled live subtitling across four exercises and found peaks of 290, 350 and
+// 460 words a minute in around a quarter of news and entertainment programs,
+// which it describes as unreadable for most viewers. Re-scoring the same
+// subtitles with rapid text counted as a fault moved the share falling below
+// acceptable from 23% to 68%, and the share rated very good to excellent from
+// 24% to under 3%. Same words, same accuracy, one added criterion.
+//
+// Its recommendation is a hard cap of no more than 180 to 200 words a minute,
+// and to recover latency by shortening the gap between captions rather than by
+// speeding up the text. Two hundred is taken here because this is only the
+// ceiling while draining — the reading speed on the page is what runs the rest
+// of the time, and the box style already recovers the way Ofcom describes, by
+// cutting the gap and never the readability.
+//
+//	https://www.ofcom.org.uk/siteassets/resources/documents/tv-radio-and-on-demand/broadcast-codes/other-codes/ofcoms-guidelines-on-providing-tv-and-on-demand-access-services.pdf
+const ccMaxPace = 200 * ccCharsPerWord / 60
+
+// meterPace is the rate the meter runs at: the reading speed, or the catch-up
+// ceiling when there is a backlog to drain. Callers hold the lock.
+func (c *cea608) meterPace() float64 {
+	if c.waiting() && c.pace < ccMaxPace {
+		return ccMaxPace
+	}
+	return c.pace
+}
+
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.countDrain()
-	// Metered at speaking speed unless there is a real backlog, in which case
-	// being current matters more than reading evenly and the channel is used
-	// for what it is worth.
+	// Metered at speaking speed, and at the catch-up ceiling when there is a
+	// backlog — never at whatever the channel happens to be worth.
 	//
 	// Characters only. A control code is sent twice and a decoder is only
 	// guaranteed to drop the repeat when the two arrive back to back — so
 	// withholding between them turns one carriage return into two, which rolls
 	// twice and leaves a blank row between every pair of lines. The meter is
 	// about how fast words appear; it has no business inside a control pair.
+	pace := c.meterPace()
 	if rate := c.pairRate(); rate > 0 {
-		c.credit += c.pace / rate
-		if c.credit > c.pace {
-			c.credit = c.pace
+		c.credit += pace / rate
+		if c.credit > pace {
+			c.credit = pace
 		}
 	}
 	// Charged per character, not per pair.
@@ -3530,7 +3565,7 @@ func (c *cea608) next() [2]byte {
 	// A pair whose second byte is padding carries one character; any other
 	// carries two. Control codes are not charged at all: they are not words,
 	// and withholding inside a doubled pair splits it and rolls twice.
-	if c.maxLag > 0 && !c.popon && len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
+	if c.maxLag > 0 && !c.popon && len(c.queue) > 0 && !c.headIsControl() {
 		cost := 1.0
 		if c.queue[0][1] != odd608(cc608Null) {
 			cost = 2
