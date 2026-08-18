@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -467,9 +468,10 @@ type captionModel struct {
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
+	canaryFlash,
 	cohereTranscribe,
 	nemotronStreaming,
-	moonshineTiny,
+	parakeetTDT,
 }
 
 // captionLanguageNames turns the catalog's ISO codes into something readable in
@@ -551,6 +553,16 @@ type captionConfig struct {
 	// convention for broadcast captioning and is easier to read at a distance.
 	// It also squares up the streaming models, which write in lower case.
 	Uppercase bool `json:"uppercase"`
+	// Spelling is which English the captions are written in: "us", "gb", or
+	// empty for whatever the model wrote.
+	//
+	// Only some of the models are told which English to write. Canary's command
+	// line offers "en" and no variants, so it writes whichever spelling its
+	// training data leaned toward and there is nothing to pass it — it wrote
+	// "tyre". This corrects that afterward, in either direction, and does
+	// nothing unless asked: somebody watching British television may well want
+	// what was said spelled the way they spell it.
+	Spelling string `json:"spelling"`
 	// GPURuntime names driver packages to keep installed in the container, so a
 	// GPU build of the engine has something to talk to.
 	GPURuntime string `json:"gpuRuntime"`
@@ -574,10 +586,11 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:     false,
-		Model:       "cohere-transcribe",
+		Model:       "canary-180m",
 		Language:    "en",
-		Style:       "rollup3",
-		OnScreenSec: 3,
+		Style:       "box2",
+		OnScreenSec: 4,
+		SpeedWPM:    160,
 		Uppercase:   true,
 		Engine:      "auto",
 	}
@@ -1719,7 +1732,24 @@ func applyDriver(g gpuRuntime) (string, error) {
 	if len(debs) == 0 {
 		return "", fmt.Errorf("no saved packages to install")
 	}
-	logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
+	// Before the port is bound there is nothing to be polite to.
+	//
+	// serving is false until main has finished this and opened the door, and
+	// until the door is open the DVR gets connection refused rather than a
+	// request nobody answers — so there is no tune to interrupt, no gate to
+	// satisfy, and no reason to take the whole set a package at a time. That is
+	// what restoreGPURuntime's own comment says the startup path does, and it
+	// was the one place the code did not do it: thirty-seven dpkg invocations,
+	// each reading and writing the package database, where one would do.
+	//
+	// The polite path below is still the right shape once the door is open, and
+	// still what a driver installed from the page gets.
+	atStartup := !serving.Load()
+	if atStartup {
+		logger("[CC] Installing %d saved packages for %s in one go; nothing can be tuning yet", len(debs), g.Name)
+	} else {
+		logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
+	}
 	// Whatever was true about these libraries stops being true here.
 	forgetEngineUsable()
 	forgetBrokenDrivers()
@@ -1767,7 +1797,38 @@ func applyDriver(g gpuRuntime) (string, error) {
 	err = nil
 	warned := false
 	noteDriverStep("Installing packages", 0, len(debs))
-	for i, deb := range debs {
+
+	// One dpkg for the whole set, and it does a better job than the loop as
+	// well as a faster one: handed every package at once, dpkg orders them
+	// itself and satisfies dependencies between them that --force-depends is
+	// otherwise papering over one at a time.
+	//
+	// If it fails, the loop below still runs. A set that will not go in
+	// together may still go in singly, and a driver missing one library is
+	// worth more than a driver missing all of them.
+	asSet := false
+	if atStartup {
+		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
+		cmd := politeCommand("dpkg", args...)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, e := cmd.CombinedOutput()
+		out = append(out, b...)
+		if e == nil {
+			asSet = true
+			in = len(debs)
+			noteDriverStep("Installing packages", in, len(debs))
+			logger("[CC] %s: %d of %d packages in", g.Name, in, len(debs))
+		} else {
+			logger("[CC] %s would not install as a set (%v); going through them one at a time instead", g.Name, e)
+		}
+	}
+
+	// Nothing left to do one at a time when the set went in as a set.
+	rest := debs
+	if asSet {
+		rest = nil
+	}
+	for i, deb := range rest {
 		if !driverUrgent.Load() && !waitTuneQuietHeld(5*time.Second, 15*time.Second) && !warned {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
@@ -2651,11 +2712,37 @@ type cea608 struct {
 	// that carriage return are still owed; see next() for what they pace.
 	lastCR   time.Time
 	crCopies int
-	rows     byte // ccRU2 / ccRU3 / ccRU4
-	started  bool
-	col      int
-	maxCol   int
-	upper    bool
+	// popon writes the caption where it cannot be seen and then shows it whole,
+	// instead of typing it onto the screen as it arrives. held is the words of
+	// the caption being assembled, which have not been sent anywhere yet.
+	// lastBlock is when a caption was last shown and blockCopies how many
+	// repeats of that command are still owed, the same bookkeeping the roll
+	// keeps for its carriage return.
+	popon bool
+	// boxRows is how many rows a box caption may fill.
+	//
+	// Two, and it is not a setting. A caption of more than two lines is not a
+	// box — every published style guide caps it there, and the reason is that
+	// three lines cover enough of the picture to be worth avoiding. It decides
+	// how much of a sentence fits before the rest has to become a second
+	// caption, so it is tempting to raise when a box runs behind, and raising
+	// it buys the time back by breaking the style.
+	boxRows int
+	held    []string
+	// popPending is how many finished captions are queued but not yet shown,
+	// and popDwells how long each of them will need once it is. curDwell is the
+	// one belonging to the caption on screen now, which is the time the next
+	// caption has to wait.
+	popPending  int
+	popDwells   []popTiming
+	curDwell    popTiming
+	lastBlock   time.Time
+	blockCopies int
+	rows        byte // ccRU2 / ccRU3 / ccRU4
+	started     bool
+	col         int
+	maxCol      int
+	upper       bool
 	// drains counts calls to next since drainFrom, which is how fast this
 	// channel actually clears its queue: one entry leaves per call, whatever
 	// the picture rate or the caption packet layout upstream turns out to be.
@@ -2672,9 +2759,11 @@ type cea608 struct {
 	// speed setting.
 	minRollGap time.Duration
 	// credit is the pacing allowance, in characters, accrued per picture, and
-	// pace the rate it accrues at.
+	// pace the rate it accrues at. maxLag is how much unread text may wait
+	// before the meter stands aside.
 	credit float64
 	pace   float64
+	maxLag float64
 	// pendingBreak is a carriage return the last phrase finished with and this
 	// one has yet to spend. See pushText.
 	pendingBreak bool
@@ -2737,13 +2826,27 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
+// captionLag is how much unread text the meter may hold for this model.
+func captionLag(m captionModel, cfg captionConfig) float64 {
+	if m.Streaming {
+		return ccLagStreaming
+	}
+	if w := phraseWindowFor(quirksFor(m), cfg); w > 0 {
+		return w
+	}
+	return ccLagFallback
+}
+
+func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float64) *cea608 {
 	rows := byte(ccRU3)
+	popon, boxRows := false, 0
 	switch style {
 	case "rollup2":
 		rows = ccRU2
 	case "rollup4":
 		rows = ccRU4
+	case "box2":
+		popon, boxRows = true, 2
 	}
 	n := 3
 	switch rows {
@@ -2752,8 +2855,22 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
 	case ccRU4:
 		n = 4
 	}
-	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm),
-		minRollGap: rollGapFor(onScreen, n)}
+	gap := rollGapFor(onScreen, n)
+	if popon {
+		// A roll divides the wanted time on screen by the rows, because a line
+		// survives that many rolls. A box does not divide it: the caption goes
+		// up whole and comes down whole, so the whole of it is what the setting
+		// asks for.
+		//
+		// Floored at the guidance for the number of rows it puts up rather than
+		// for one, because it puts them up together.
+		gap = rollGapFor(onScreen, 1)
+		if min := ccMinOnScreen(boxRows); gap < min {
+			gap = min
+		}
+	}
+	return &cea608{rows: rows, popon: popon, boxRows: boxRows, maxCol: 32, upper: upper,
+		pace: paceFor(wpm), maxLag: maxLag, minRollGap: gap}
 }
 
 func (c *cea608) ctrl(code byte) {
@@ -2763,7 +2880,21 @@ func (c *cea608) ctrl(code byte) {
 }
 
 // begin puts the decoder into roll-up mode on the bottom row.
+//
+// Box style has no mode to set here: every caption states its own, and the
+// display is cleared instead. Starting is not always starting from nothing —
+// the backlog cull above throws away the queue and starts again, and whatever
+// the decoder was showing when that happened is still on the screen. A roll
+// scrolls it away in its own time; a box has to erase it. Erasing a blank
+// display costs a control code and does nothing, which is what it does at a
+// genuine stream start.
 func (c *cea608) begin() {
+	if c.popon {
+		c.ctrl(ccEDM)
+		c.started = true
+		c.col = 0
+		return
+	}
 	c.mode()
 	c.ctrl(ccCR)
 	c.started = true
@@ -2793,6 +2924,726 @@ func (c *cea608) newRow() {
 	c.col = 0
 }
 
+// ---------------------------------------------------------------------------
+// Where a caption breaks
+//
+// A caption of two rows has to decide two things: which words go in it, and
+// where the first row ends. Both were accidents of a greedy wrapper — fill row
+// one to thirty-two columns, put the rest on row two, and start a new caption
+// whenever that ran out of room. So captions ended mid-clause and rows split
+// articles from their nouns, which is the thing every published guide names
+// first.
+//
+// The guidance is unusually consistent about this and it is not house style:
+// the ITC guidance the BBC's rules are copied from is inherited regulator
+// guidance, and it was written for a thirty-two character line, which is the
+// line this code has. It keeps the linguistic rule for live subtitling
+// explicitly — "where possible, avoid non-linguistic line breaks (splitting
+// verbs etc)" — with "where possible" as the only concession.
+//
+// None of it needs a parser. The rules are about closed classes of words, which
+// is a list, and about punctuation and capitalization, which are already there.
+// ---------------------------------------------------------------------------
+
+// wordClass is the part a word plays, as far as a break is concerned. Only the
+// closed classes are named; everything else is content and can end a row.
+type wordClass int
+
+const (
+	clsContent wordClass = iota
+	clsTitle
+	clsAux
+	clsArt
+	clsPrep
+	clsConj
+	clsSubord
+	clsPron
+	clsNeg
+	clsQuant
+	clsNumWord
+	clsUnit
+)
+
+// ccWordClass is every word that is not free to end a row, and what it is.
+//
+// A word appears once. Several belong to two classes in the grammar — "that" is
+// a determiner and a relativizer, "for" is a preposition and a conjunction —
+// and the entry here is the one that decides breaks better: a break before
+// "that" is usually a clause boundary, a break before "for" usually is not.
+var ccWordClass = func() map[string]wordClass {
+	m := map[string]wordClass{}
+	add := func(c wordClass, words string) {
+		for _, w := range strings.Fields(words) {
+			if _, seen := m[w]; !seen {
+				m[w] = c
+			}
+		}
+	}
+	add(clsTitle, `mr mrs ms miss mx dr prof professor rev sen senator rep gov governor
+		pres president sir dame lady lord judge justice officer sgt sergeant capt captain
+		lt col gen general adm st saint mt mount fr father sister brother coach chief
+		mayor king queen prince princess pope agent detective sheriff ambassador
+		secretary chairman chairwoman uncle aunt`)
+	add(clsAux, `am is are was were be been being have has had having do does did doing
+		will would shall should can could may might must ought need dare gonna wanna
+		gotta ain't`)
+	add(clsNeg, `not never no`)
+	add(clsSubord, `that although because if once though unless when whenever whereas
+		where wherever whether while why how who whom which as since than until`)
+	add(clsArt, `a an the this these those my your his her its our their whose`)
+	add(clsConj, `and but or nor so yet plus`)
+	add(clsPrep, `of in on at to for with from by about into onto over under above below
+		across against along among amid around behind beneath beside besides between
+		beyond during except inside near outside past through throughout till toward
+		towards underneath unto up upon within without like off out down per via versus
+		atop despite regarding concerning after before`)
+	add(clsQuant, `some any every each all both either neither another other much many
+		few several more most less least half`)
+	add(clsNumWord, `one two three four five six seven eight nine ten eleven twelve
+		thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty
+		forty fifty sixty seventy eighty ninety hundred thousand million billion
+		trillion dozen`)
+	add(clsPron, `i you he she it we they there here`)
+	add(clsUnit, `percent cent dollars cents pounds euros pence degrees miles feet inches
+		yards meters metres kilometers kilometres kilograms kilos grams tons hours
+		minutes seconds days weeks months years o'clock am pm mph kph mg kg km lb lbs oz`)
+	return m
+}()
+
+// ccAbbrev is the words whose full stop ends an abbreviation and not a
+// sentence. Without it "Dr. Wilson" reads as two sentences and the break lands
+// between the title and the name, which is the one split every guide forbids.
+var ccAbbrev = func() map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(`mr mrs ms dr prof rev sen rep gov pres st mt inc
+		ltd corp co jr sr vs etc no vol fig approx dept univ ave blvd`) {
+		m[w] = true
+	}
+	return m
+}()
+
+// ccWord is one word of a caption with everything a break rule asks about it.
+type ccWord struct {
+	text         string
+	class        wordClass
+	endsSentence bool
+	endsClause   bool
+	isCap        bool
+	isDigit      bool
+}
+
+// ccTrimEdges strips the quotes and brackets around a word, which are not part
+// of it for any purpose here.
+func ccTrimEdges(w string) string {
+	return strings.Trim(w, `"'“”‘’()[]{}`)
+}
+
+// analyze608 reads the words a caption is made of.
+//
+// Given the text before it is put into capitals, and it has to be: two of the
+// rules below are about which words are capitalized, and after ToUpper every
+// word is. This was the easiest thing in the whole rule set to get quietly
+// wrong — the tests would pass, the rules would simply never fire.
+func analyze608(words []string) []ccWord {
+	out := make([]ccWord, 0, len(words))
+	startOfSentence := true
+	for _, raw := range words {
+		// Trimmed for the rules and never for the text: a word is shown as it
+		// was recognized, quotation marks and all. Classifying the trimmed form
+		// and then displaying it would take the quotes off the caption.
+		w := ccTrimEdges(raw)
+		bare := strings.TrimRight(w, `.!?…,;:—–`)
+		lower := strings.ToLower(strings.TrimRight(bare, "."))
+		a := ccWord{text: raw, class: ccWordClass[lower]}
+		if last := strings.TrimRight(w, `"'“”’)`); last != "" {
+			switch last[len(last)-1] {
+			case '.', '!', '?':
+				a.endsSentence = !ccAbbrev[lower]
+			case ',', ';', ':':
+				a.endsClause = true
+			}
+			if strings.HasSuffix(last, "—") || strings.HasSuffix(last, "–") {
+				a.endsClause = true
+			}
+		}
+		for _, r := range bare {
+			if r >= '0' && r <= '9' {
+				a.isDigit = true
+				break
+			}
+		}
+		if r := []rune(bare); len(r) > 0 && unicode.IsUpper(r[0]) && !startOfSentence {
+			a.isCap = true
+		}
+		startOfSentence = a.endsSentence
+		out = append(out, a)
+	}
+	return out
+}
+
+// ccStranded is the classes that must not be left at the end of a row. It is
+// the union of the article, preposition, conjunction, auxiliary and title
+// rules, which is the one rule every guide states in some form — and the only
+// one that still works when the model is producing no punctuation at all.
+func ccStranded(c wordClass) bool {
+	switch c {
+	case clsArt, clsPrep, clsConj, clsSubord, clsAux, clsNeg, clsQuant, clsTitle:
+		return true
+	}
+	return false
+}
+
+// ccSplitsName reports that a break would cut something that is one thing: a
+// person's name, a title from its name, a number from its unit, or a
+// hyphenated compound.
+func ccSplitsName(l, r ccWord) bool {
+	switch {
+	case l.isCap && r.isCap && !l.endsSentence:
+		return true
+	case l.class == clsTitle && r.isCap:
+		return true
+	case l.isDigit && (r.isDigit || r.class == clsUnit || r.class == clsNumWord):
+		return true
+	case l.class == clsNumWord && (r.class == clsNumWord || r.class == clsUnit || r.isDigit):
+		return true
+	case strings.HasSuffix(l.text, "-"):
+		return true
+	}
+	return false
+}
+
+// breakTier scores a break between two words. Lower is better, and the order
+// the tests run in is the order the guidance ranks them.
+//
+// Its own function with its own test because it is the rule, and a rule buried
+// in a loop is one nobody can check. The tiers, in the words of the guides
+// they come from: break at punctuation; never after a conjunction; never inside
+// a prepositional phrase; never between an article and its noun; a break
+// between two content words is fine; a pronoun may end a row if nothing better
+// offers; and last, the break that strands a function word, which is what every
+// guide names first and this code used to do at random.
+func breakTier(l, r ccWord) int {
+	switch {
+	case l.endsSentence || l.endsClause:
+		return 1
+	case r.class == clsConj || r.class == clsSubord:
+		return 2
+	case r.class == clsPrep:
+		return 3
+	case r.class == clsArt || r.class == clsQuant:
+		return 4
+	case ccSplitsName(l, r):
+		// Ahead of the two tiers below on purpose: both halves of a name are
+		// content words, so a name split would otherwise score as a good break.
+		return 7
+	case l.class == clsContent && r.class == clsContent:
+		return 5
+	case l.class == clsPron:
+		return 6
+	case ccStranded(l.class):
+		return 8
+	}
+	return 5
+}
+
+// ccWordsWidth is how many columns a run of words occupies, spaces included.
+func ccWordsWidth(w []ccWord) int {
+	n := 0
+	for i, x := range w {
+		if i > 0 {
+			n++
+		}
+		n += len([]rune(x.text))
+	}
+	return n
+}
+
+// breakLine608 chooses where the first row of a caption ends, returning the
+// index the second row starts at. Zero means the words do not fit on two rows,
+// which is a question about how much goes in the caption and not about where it
+// breaks.
+func breakLine608(w []ccWord, cols int) int {
+	if len(w) < 2 {
+		return 0
+	}
+	type cand struct{ at, tier, skew int }
+	var all []cand
+	for i := 1; i < len(w); i++ {
+		top, bottom := ccWordsWidth(w[:i]), ccWordsWidth(w[i:])
+		if top > cols || bottom > cols {
+			continue
+		}
+		skew := top - bottom
+		if skew < 0 {
+			skew = -skew
+		}
+		all = append(all, cand{i, breakTier(w[i-1], w[i]), skew})
+	}
+	if len(all) == 0 {
+		return 0
+	}
+	// One or two words alone above a full row reads as a stray, so those are
+	// set aside — unless they are all there is, because failing to break is
+	// not one of the outcomes.
+	kept := all[:0:0]
+	for _, c := range all {
+		if c.at <= 2 && len(w)-c.at > 4 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == 0 {
+		kept = all
+	}
+	best := kept[0]
+	for _, c := range kept[1:] {
+		// Shape decides between equals and never overrules the rule: the
+		// evidence has viewers choosing on where the sentence divides rather
+		// than on how the caption looks. A tie goes to the fuller first row.
+		if c.tier < best.tier || (c.tier == best.tier && c.skew <= best.skew) {
+			best = c
+		}
+	}
+	return best.at
+}
+
+// fits608 is how many of these words will go on rows rows of cols columns.
+func fits608(w []ccWord, cols, rows int) int {
+	n, used, line := 0, 0, 1
+	for i, x := range w {
+		width := len([]rune(x.text))
+		next := used + width
+		if used > 0 {
+			next++
+		}
+		if next > cols {
+			if line == rows {
+				return n
+			}
+			line++
+			used = width
+			if width > cols {
+				return maxInt(n, i+1)
+			}
+		} else {
+			used = next
+		}
+		n = i + 1
+	}
+	return n
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// segment608 divides a phrase into captions before any of it is broken into
+// rows, which is the order the guidance puts them in and the opposite of what
+// this code did. A caption used to end wherever the wrapper ran out of room —
+// so a sentence boundary landing one word later was simply missed, and the
+// caption ended mid-clause instead.
+//
+// Nothing is dropped: a word too wide for a row still goes, on a row of its
+// own, because a caption with a word missing is worse than a caption that looks
+// wrong.
+func segment608(w []ccWord, cols, rows int) [][]ccWord {
+	var out [][]ccWord
+	for len(w) > 0 {
+		n := fits608(w, cols, rows)
+		if n <= 0 {
+			n = 1
+		}
+		cut := n
+		// A caption ends where a sentence ends, whether or not the next one
+		// would have fitted beside it. Two sentences sharing a caption is not
+		// a caption of two sentences — it is the first one waiting for the
+		// second to be spoken before either can be read, which is delay bought
+		// for nothing. The search covers the whole caption because a full stop
+		// is the strongest boundary there is.
+		//
+		// Except where it would leave a caption too small to keep up. "Yes." is
+		// a sentence and it is not a caption: a box put it up on its own, alone
+		// in the middle of the screen, and held the screen a whole second to do
+		// it — which is a second the words behind it did not have. Half a row is
+		// the same break-even minCaptionChars works out from the reading speed,
+		// at the speed the page defaults to. Short sentences ride together the
+		// way they do on a broadcast caption.
+		for i := n; i >= 1; i-- {
+			if w[i-1].endsSentence && i < len(w) && ccWordsWidth(w[:i]) >= cols/2 {
+				cut = i
+				break
+			}
+		}
+		// A comma is a weaker cue and only worth taking near the back, where it
+		// saves a mid-clause ending. Taken early it trades that for a caption
+		// with a row nearly empty and gains nothing.
+		if cut == n && n < len(w) {
+			floor := n * 2 / 3
+			if floor < 1 {
+				floor = 1
+			}
+			for i := n; i >= floor; i-- {
+				if w[i-1].endsClause {
+					cut = i
+					break
+				}
+			}
+		}
+		out = append(out, w[:cut])
+		w = w[cut:]
+	}
+	return out
+}
+
+// rows608 is the finished rows of one caption.
+func rows608(w []ccWord, cols int) []string {
+	text := func(part []ccWord) string {
+		parts := make([]string, len(part))
+		for i, x := range part {
+			parts[i] = x.text
+		}
+		return strings.Join(parts, " ")
+	}
+	if len(w) == 0 {
+		return nil
+	}
+	if ccWordsWidth(w) <= cols {
+		return []string{text(w)}
+	}
+	if at := breakLine608(w, cols); at > 0 {
+		return []string{text(w[:at]), text(w[at:])}
+	}
+	// Wider than two rows, which segment608 should have prevented. Fall back to
+	// filling rather than losing the words.
+	var out []string
+	cur := []ccWord{}
+	for _, x := range w {
+		if len(cur) > 0 && ccWordsWidth(append(append([]ccWord{}, cur...), x)) > cols {
+			out = append(out, text(cur))
+			cur = cur[:0]
+		}
+		cur = append(cur, x)
+	}
+	if len(cur) > 0 {
+		out = append(out, text(cur))
+	}
+	return out
+}
+
+// wrap608 lays words out into caption rows of at most maxCol characters.
+//
+// A separate function from the roll-up's wrapping because the two need
+// different things at different times. A roll-up wraps as it writes, because it
+// is writing to the screen and the screen is what it is. A box has to know the
+// shape of the whole caption before it sends any of it: the rows are addressed
+// by number, so which row a word lands on has to be decided first.
+//
+// A word longer than a row is broken rather than dropped. Nothing in English
+// runs to thirty-two characters, but a caption is not always English and a
+// silently missing word is worse than an ugly one.
+func wrap608(words []string, maxCol int) []string {
+	var lines []string
+	cur := ""
+	for _, w := range words {
+		for len(w) > maxCol {
+			if cur != "" {
+				lines = append(lines, cur)
+				cur = ""
+			}
+			lines = append(lines, w[:maxCol])
+			w = w[maxCol:]
+		}
+		switch {
+		case cur == "":
+			cur = w
+		case len(cur)+1+len(w) <= maxCol:
+			cur += " " + w
+		default:
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
+// popDwell is how long one box caption has to stay up before the next may take
+// its place.
+//
+// A roll-up asks this question once and answers it with a constant, because
+// every roll moves the same one row. A box replaces everything on the screen at
+// a stroke, and how long that needs depends entirely on how much is on it: two
+// full rows are four seconds of reading and "Yes." is not.
+//
+// Setting one number for both is what made this style lag. Time on screen was
+// taken as the minimum for every caption, so a two word answer held the screen
+// as long as a full sentence, and everything said while it sat there queued up
+// behind it. At four seconds that is a throughput ceiling as well: fifteen
+// captions a minute, against speech that produces rather more.
+//
+// So it is measured, the way subtitle timing has always been measured — the
+// characters divided by the reading speed. The page's time on screen becomes
+// the ceiling rather than the value, which is what somebody choosing a longer
+// one is really asking for. The floor is the published guidance for that many
+// rows and it is applied last, because a caption gone before it could be read
+// is the one failure worth being slow to avoid.
+func popDwell(chars, rows int, pace float64, want time.Duration) popTiming {
+	d := want
+	if pace > 0 {
+		d = time.Duration(float64(chars) / pace * float64(time.Second))
+	}
+	if d > want {
+		d = want
+	}
+	// The floor is how long the caption needs at the fastest anyone should ever
+	// be asked to read, not merely the shortest a caption may legally be. Those
+	// are different numbers and only the second was here: two full rows have a
+	// guidance minimum of a second and a half, which is four hundred words a
+	// minute, and draining a backlog down to that puts captions on the screen
+	// nobody can read. Whichever is longer wins.
+	floor := ccMinOnScreen(rows)
+	if pace > 0 {
+		if fastest := time.Duration(float64(chars) / ccMaxPace * float64(time.Second)); fastest > floor {
+			floor = fastest
+		}
+	}
+	if d < floor {
+		d = floor
+	}
+	return popTiming{want: d, floor: floor}
+}
+
+// popTiming is how long one caption asks for and how long it must have.
+//
+// The two are different numbers because falling behind is answered by giving
+// captions less time, and there is a point past which less time is no time.
+// A roll-up can be hurried down to nothing safely: the line it rolls away is
+// still on the screen, one row up, for another whole cycle. A box has no such
+// slack — hurrying a caption means replacing it, and a caption replaced before
+// anybody could read it was never shown at all.
+//
+// So the backlog is drained down to the floor and no further. Being late is
+// recoverable and being unreadable is not.
+type popTiming struct {
+	want  time.Duration
+	floor time.Duration
+	// last marks the final page of a phrase. A sentence too long for two rows
+	// becomes several captions, and those are not a backlog — they are one
+	// thing being said. Counting them as one is what stops a sentence from
+	// hurrying itself.
+	last bool
+}
+
+// The preamble address code table, from 47 CFR 15.119.
+//
+// A row is named by both bytes and by neither alone. The first byte picks a
+// pair of rows — and the pairing is not in row order, which is why this is a
+// table and not arithmetic. The second byte picks which of the pair, 0x50 for
+// the lower and 0x70 for the upper, and carries the indent above that: each
+// step of four columns adds two.
+//
+// Row 11 is the odd one out and it is not a mistake in the transcription. It
+// exists only as 0x10 with a 0x5x second byte; there is no 0x10 0x7x preamble
+// at all. A decoder handed one drops it and the text that follows lands
+// wherever the cursor happened to be.
+//
+// Every indent code is white by the standard's own note — a preamble gives
+// color or indent and never both — so this table needs no color dimension.
+var (
+	ccPACRow  = [15]byte{0x11, 0x11, 0x12, 0x12, 0x15, 0x15, 0x16, 0x16, 0x17, 0x17, 0x10, 0x13, 0x13, ccCtrlCC1, ccCtrlCC1}
+	ccPACBase = [15]byte{0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x70, 0x50, 0x50, 0x70, 0x50, 0x70}
+)
+
+// ccTabCC1 is the first byte of a tab offset, and it is not the byte every
+// other control code here starts with.
+//
+// 0x14 0x21 is backspace. A tab offset emitted through the usual control path
+// would delete the character to the left of the cursor instead of moving it,
+// which is why this has its own emitter rather than another call to ctrl.
+const ccTabCC1 = 0x17
+
+// pac addresses a row and an indent, so the next characters land there.
+//
+// Sent twice, like every other control pair: a decoder that catches the repeat
+// acts once, and the repeat is what survives a dropped frame.
+func (c *cea608) pac(row, indent int) {
+	if row < 1 || row > 15 {
+		row = 15
+	}
+	if indent < 0 {
+		indent = 0
+	}
+	if indent > 28 {
+		indent = 28
+	}
+	pair := [2]byte{odd608(ccPACRow[row-1]), odd608(ccPACBase[row-1] + byte(indent/4*2))}
+	c.queue = append(c.queue, pair, pair)
+}
+
+// tab moves the cursor one, two or three columns right of where the preamble
+// left it, which is how a caption reaches a column that is not a multiple of
+// four. A preamble alone cannot: its indents are 0, 4, 8 and so on.
+//
+// The three offsets are three distinct codes rather than one code sent n times,
+// and that is what makes them safe to double. A decoder is required to ignore a
+// control pair that repeats the one before it, so a column padded by sending
+// the same code twice arrives moved once. Sending TO2 twice moves two columns,
+// as intended, because the repeat is a repeat and not a second instruction.
+func (c *cea608) tab(n int) {
+	if n < 1 || n > 3 {
+		return
+	}
+	pair := [2]byte{odd608(ccTabCC1), odd608(byte(0x20 + n))}
+	c.queue = append(c.queue, pair, pair)
+}
+
+// centerStart is where a caption starts on the 32 column grid, as a preamble
+// indent and a tab offset after it.
+//
+// 608 has no notion of alignment. There is no center attribute and nothing in
+// the standard says where a caption belongs across the screen: a row and a
+// column is all a caption has, and centering is arithmetic the encoder does
+// before it sends anything. Flush at column zero is what comes out of not
+// doing it, which is what this code was doing.
+//
+// Measured rather than assumed: across 747 pop-on captions in two published
+// caption files, every one of them starts at (32 - longest line) / 2, and every
+// row of a caption starts at the same column as every other row. Both without
+// exception. So the block is centered on its longest line and the shorter rows
+// hang off it — the lines are not centered one by one, which fits only about
+// half of the real rows.
+func centerStart(lines []string, cols int) (indent, tab int) {
+	longest := 0
+	for _, l := range lines {
+		if n := len([]rune(l)); n > longest {
+			longest = n
+		}
+	}
+	start := (cols - longest) / 2
+	if start < 0 {
+		start = 0
+	}
+	return start / 4 * 4, start % 4
+}
+
+// showPopon writes one caption where it cannot be seen and then shows it whole.
+//
+// This is the difference between the two styles and it is the whole of it. A
+// roll-up writes to the screen, so the viewer watches the words arrive one at a
+// time and watches the line above scroll away. A box writes to the decoder's
+// other memory, which is not on screen, and then swaps the two: the caption
+// appears finished, all of it at once, and stays until the next swap replaces
+// it. It is what broadcast captioning does on anything not being typed live.
+//
+// Four commands say it. RCL puts the decoder in this mode and points writing at
+// the memory nobody can see; ENM clears that memory first, so a caption cannot
+// inherit the end of an older one; the rows are addressed and written; EOC
+// swaps. Nothing is visible between the first three and the fourth, which is
+// the point — and it is why the pacing meter has no business here, because
+// there is nothing to pace when there is nothing to watch. What the meter does
+// for a roll-up, the dwell on EOC does for this: it decides how long a finished
+// caption stays up, which is the only timing a viewer of this style can see.
+func (c *cea608) showPopon(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	// Deferred, never dropped.
+	//
+	// This said lines = lines[:c.boxRows], which is a silent truncation of
+	// speech that was recognized — the caller pages and so it never fired, and
+	// a guard that discards words the moment the caller stops being careful is
+	// the shape of fault this file has a rule about. The remainder goes up as
+	// the caption after this one instead.
+	var rest []string
+	if len(lines) > c.boxRows {
+		rest, lines = lines[c.boxRows:], lines[:c.boxRows]
+	}
+	c.ctrl(ccRCL)
+	c.ctrl(ccENM)
+	// Centered as a block, on the longest of its rows, and every row starts at
+	// the same column. See centerStart.
+	indent, tab := centerStart(lines, c.maxCol)
+	// A box sits on the bottom of the screen and grows upward from row 15, so
+	// however many rows it has, the last of them is the last line.
+	row := 16 - len(lines)
+	for _, line := range lines {
+		c.pac(row, indent)
+		// After the preamble and before any text: a preamble sets the column
+		// back to its own indent, so a tab sent before one is discarded, and a
+		// character sent between them eats the column the tab was skipping.
+		c.tab(tab)
+		c.col = 0
+		for _, r := range line {
+			c.writeRune(r)
+		}
+		row++
+	}
+	c.ctrl(ccEOC)
+	// Sending a caption is what starting means here, and it has to be said on
+	// this path as well as in begin.
+	//
+	// The display pulls held text straight out of next, which never went
+	// through begin — so after a caption had been taken down, started stayed
+	// false while a new caption was on screen, and the next phrase to arrive
+	// called begin and erased it. A caption shown and then wiped by the arrival
+	// of the words meant to follow it: the screen going blank on a pause and
+	// staying blank until the phrase after next.
+	c.started = true
+	defer func() {
+		if len(rest) > 0 {
+			c.showPopon(rest)
+		}
+	}()
+	chars := 0
+	for _, line := range lines {
+		chars += len([]rune(line))
+	}
+	c.popDwells = append(c.popDwells, popDwell(chars, len(lines), c.pace, c.minRollGap))
+	c.col = 0
+}
+
+// ccPopLinger is how long a box caption may stay past its own reading time when
+// nothing has arrived to replace it.
+//
+// Nothing rules on this number. It was one second, which is shorter than the
+// pauses people leave in ordinary speech: a speaker drawing breath between two
+// sentences blanked the screen, and it stayed blank until the next phrase had
+// been spoken, cut, and transcribed — several seconds of nothing for a gap of
+// one. The caption was not stale; the talking had not stopped.
+//
+// Three seconds clears the pauses inside speech and still takes the caption
+// down when the speech itself has ended. A caption left up through a genuine
+// silence is a sentence from a while ago presented as though it were current,
+// which is what this exists to prevent, and the twenty second staleness sweep
+// remains behind it for anything this misses.
+const ccPopLinger = 3 * time.Second
+
+// maxInFlight is how many phrases one stream may have at the shared recognizer
+// at once.
+//
+// It was one, which throttled a stream to a phrase per service cycle while the
+// recognizer had capacity to spare. Then it was two, which was the same fault
+// with a bigger number: a stream still stopped listening for its own audio
+// while two phrases were out, however idle the thing it was waiting on.
+//
+// A phrase in flight is being worked on. A phrase held back is not — it is
+// waiting for permission, and the recognizer that would have taken it is what
+// it is waiting for. So this is the number that decides whether the batch call
+// has anything to batch, and with a stream held to two the log showed 1.2
+// phrases per dispatch: a batch entry point built to amortize the decode across
+// many utterances, handed one at a time.
+//
+// Four, which lets a stream keep its buffered phrases moving rather than
+// queued, and gives seven captioned tuners enough outstanding work to fill a
+// dispatch. It costs nothing when the recognizer is busy, because then the
+// window stays full either way and the bound that matters is the recognizer's.
+const maxInFlight = 4
+
 // ccMaxBacklogSec is the most unshown caption data we will hold, measured as
 // the time it would take to air. Reaching it means recognition has outrun the
 // display, and what is held past this point can only ever be shown late.
@@ -2819,6 +3670,15 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		return
 	}
 	text = cc608ExpandText(text)
+	// A box keeps the capitals it was given until the rows are written.
+	//
+	// Two of the line break rules ask which words are capitalized — a name is
+	// not split from the rest of it, a title is not split from its name — and
+	// after ToUpper every word is capitalized, so both rules answer yes to
+	// everything and neither does anything. This was the easiest thing in the
+	// whole rule set to get quietly wrong: it compiles, it passes, and the
+	// rules simply never fire.
+	cased := text
 	if c.upper {
 		text = strings.ToUpper(text)
 	}
@@ -2832,9 +3692,33 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
+		c.popPending, c.popDwells = 0, c.popDwells[:0]
 	}
 	if !c.started {
 		c.begin()
+	}
+	if c.popon {
+		// Held only until there is a caption to show, and not a word longer.
+		//
+		// This waited for breakAfter, and breakAfter does not mean what it
+		// needs to mean here. It is the roll-up's flag for "end the line", and
+		// the phrase path sets it only where the speaker actually paused or the
+		// model closed a sentence off — a fragment cut at a word gap flows on
+		// instead, which is right for a roll-up and is what fills its rows.
+		//
+		// A box read that as "the caption is not finished" and held everything.
+		// On continuous speech, which is most of television, the pause never
+		// comes: the words sat until a second caption's worth had piled up
+		// behind them, so every caption reached the screen around eight seconds
+		// of speech after it started. That is the whole of the delay this style
+		// had over the roll-up, and none of it was the style.
+		//
+		// A caption is complete when it is full, or when a sentence ends inside
+		// it, and neither of those needs the speaker to stop.
+		c.lastText = time.Now()
+		c.held = append(c.held, strings.Fields(cased)...)
+		c.flushPopon(breakAfter)
+		return
 	}
 	// The break owed by the previous phrase is taken now, with this phrase's
 	// words behind it, and not when that phrase ended.
@@ -2870,6 +3754,72 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		// Owed, not taken: the next phrase collects it on the way in.
 		c.pendingBreak = true
 	}
+}
+
+// flushPopon sends everything held as one caption, or as several when it does
+// not fit on two rows.
+//
+// A sentence longer than sixty-four characters becomes two captions shown one
+// after the other, which is how a broadcast encoder handles the same thing.
+// Each of them is a caption in its own right and waits out its own time on
+// screen, because a page nobody could read is not a page that was shown.
+//
+// Called with the lock held.
+func (c *cea608) flushPopon(final bool) {
+	held := analyze608(c.held)
+	if len(held) == 0 {
+		return
+	}
+	// Divided into captions first and into rows second, which is the order the
+	// guidance puts them in. The other way round — rows filled greedily, then
+	// cut into captions every two rows — makes where a caption ends a side
+	// effect of where the wrapper ran out of room.
+	caps := segment608(held, c.maxCol, c.boxRows)
+	// The last of them may still be growing, so it is only shown when it is
+	// finished: when the speaker has stopped, when it fills the caption, or
+	// when a sentence ends in it. Otherwise it waits for the next few words.
+	// Everything before it is finished by definition — something came after.
+	shown := len(caps)
+	if !final && shown > 0 {
+		last := caps[shown-1]
+		full := len(rows608(last, c.maxCol)) >= c.boxRows
+		if !full && !last[len(last)-1].endsSentence {
+			shown--
+		}
+	}
+	if shown <= 0 {
+		return
+	}
+	var kept []string
+	for _, w := range caps[shown:] {
+		for _, x := range w {
+			kept = append(kept, x.text)
+		}
+	}
+	c.held = append(c.held[:0], kept...)
+	var captions int
+	for _, caption := range caps[:shown] {
+		rows := rows608(caption, c.maxCol)
+		if c.upper {
+			for i := range rows {
+				rows[i] = strings.ToUpper(rows[i])
+			}
+		}
+		c.showPopon(rows)
+		captions++
+	}
+	if captions == 0 {
+		return
+	}
+	// One phrase, one thing waiting — not one per page.
+	//
+	// The pages of a long sentence are queued together, so counting pages made
+	// every long sentence look like a backlog to itself: the moment the second
+	// page was queued the first was declared late and cut to its floor. Half a
+	// sentence flashing past while the rest of it waited is not a display
+	// catching up, it is a display rushing something nothing was behind.
+	c.popDwells[len(c.popDwells)-1].last = true
+	c.popPending++
 }
 
 // writeRune appends a character, pairing it with the previous one where it can.
@@ -2924,33 +3874,91 @@ const ()
 //
 // Two, because a control code occupies the queue twice: the pair and the copy
 // a decoder is only guaranteed to recognize when it arrives back to back.
-func (c *cea608) waiting() bool { return behindOnRoll(len(c.queue), ccMaxBacklogSec*c.pairRate()) }
+// ccCharsPerPair is what a queued pair is worth in reading time. writeRune
+// packs two characters into one wherever it can, and measurement across real
+// captions puts the average at 1.97, so two is the figure to reason with.
+const ccCharsPerPair = 2.0
 
-// behindOnRoll reports whether resting for the dwell would put the captions
-// behind, rather than merely whether anything is queued.
+// ccMaxLagSec is how much unread text may wait before the meter stands aside.
 //
-// The dwell keeps a finished line on screen for a beat. It is skipped when
-// there is text waiting, because a line resting while words pile up behind it
-// is a line making every later word late. That was written as "is anything
-// waiting", which is two byte pairs — two characters — and a phrase model
-// delivers a whole sentence at once. So with Cohere something was always
-// waiting, the dwell was never taken, and lines rolled off at channel speed one
-// after another. A streaming model trickles words and stays under the bar,
-// which is why the same display read perfectly well on one model and not on the
-// other.
+// The meter smooths a phrase onto the screen instead of dumping it, which costs
+// nothing in the long run: the words arrive at the speed they were spoken, so a
+// pace set to reading speed matches them over any window longer than a phrase.
+// What it cannot do is run slower than the speaker indefinitely. If it did, the
+// queue would grow without bound and the captions would fall further behind the
+// picture every minute.
 //
-// The question it should ask is whether the channel can carry what is queued
-// within the dwell. If it can, resting costs nothing and the line stays put. If
-// it cannot, the rest is already being paid for by somebody and the roll goes
-// now.
-// The bar is a real backlog, not one dwell's worth of text. A phrase model
-// delivers a sentence at a time, and a sentence is comfortably more than the
-// channel carries during a beat — so measuring against the dwell would skip it
-// on every phrase, which is the fault this is fixing. Each format already
-// defines what "behind" means for it, and those are the numbers used.
-func behindOnRoll(queued int, catchUp float64) bool {
-	return catchUp > 0 && float64(queued) > catchUp
+// So the meter yields once more than this much reading time is waiting. Six
+// seconds is a phrase and a half at the longest sentence length offered: enough
+// to smooth one phrase completely, and short enough that two piling up drains
+// at the channel's own speed rather than settling into a permanent lag.
+//
+// It was five seconds of *channel* time, which sounds similar and is not: the
+// channel carries sixty characters a second and nobody reads at a quarter of
+// that, so five seconds of channel time is twenty seconds of reading. A backlog
+// could sit just under that threshold for ever — captions a quarter of a minute
+// late, with nothing in the design to drain them.
+func (c *cea608) waiting() bool {
+	// A box is behind when there is a caption waiting to be shown, and that is
+	// the only reading of it that means anything here.
+	//
+	// It asked for more than one, which meant it was never behind. Captions and
+	// speech arrive at about the same rate, so the queue holds one and the test
+	// never fired — and a box that is never behind never catches up. Whatever
+	// lag it started the program with, it kept: the cadence looked right and
+	// the whole stream sat a few seconds late for ever, which is the difference
+	// between running slow and running offset.
+	//
+	// It is the caption's floor that keeps this safe rather than the count.
+	// Being behind shortens what is on screen to the time it takes to read at
+	// the fastest speed anyone should be asked to read at, and never below, so
+	// draining costs comfort and never legibility.
+	//
+	// The character count below is no use here either: it asks how much reading
+	// time is queued, which assumes the queue is text on its way to the screen.
+	// A box's queue is a whole caption that then appears at once, so one
+	// ordinary two row caption measures as five seconds of reading.
+	if c.popon {
+		// Words held are words waiting, exactly as much as a caption already
+		// queued is. Only the queued ones counted, and the display makes a
+		// caption out of held words only once the screen is free — so the
+		// common case had nothing queued, the caption on screen was never
+		// declared late, and it kept its full comfortable reading time while
+		// the next sentence sat behind it. The drain existed and never ran.
+		return c.popPending > 0 || len(c.held) > 0
+	}
+	if c.maxLag <= 0 {
+		return len(c.queue) > 2
+	}
+	if c.pace <= 0 {
+		return len(c.queue) > 2
+	}
+	return float64(len(c.queue))*ccCharsPerPair/c.pace > c.maxLag
 }
+
+// The tolerance is the shape of the model, not a constant.
+//
+// A phrase model hands over a whole sentence at once, so the meter must be
+// allowed to hold roughly one phrase in order to spread it — that is the entire
+// job. A streaming model hands over words as they are spoken, so nothing needs
+// spreading and every queued character is pure lag on a model chosen precisely
+// for not having any. Giving both the same six seconds put Nemotron six seconds
+// behind the picture to smooth a burst it never produces.
+// Zero turns the meter off, which is what a streaming model wants.
+//
+// The meter exists to spread a burst. A phrase model hands over a whole
+// sentence at once and the words have to be let onto the screen at reading
+// speed or they land in a heap; that is the entire job. A streaming model hands
+// over words as it hears them, already at the speed they were spoken, so there
+// is nothing to spread and every character the meter holds is delay added to a
+// model chosen for not having any.
+//
+// The dwell still applies either way: a finished line rests before it rolls
+// whichever model wrote it.
+const (
+	ccLagStreaming = 0
+	ccLagFallback  = 4.0
+)
 
 // cc608NominalRate is the pair rate assumed until the channel has been running
 // long enough to measure its own. Field 1 of CEA-608 carries one pair per
@@ -3044,9 +4052,18 @@ var captionSpeeds = []int{120, 130, 140, 150, 160}
 
 // ccCharsPerWord converts words a minute into characters a second.
 //
-// Five point eight is a word with its trailing space in English prose, which is
-// what the characters-a-second guidance is counted against: twenty at the most,
-// twelve to eighteen comfortable. 150 words a minute lands at 14.5, mid-band.
+// Derived rather than published, and the derivation matters because there are
+// two conventions and they differ by sixteen percent. The five character word
+// is the typing standard; captioning counts real words — the DCMP is explicit
+// that "each word is counted, as opposed to basing the calculation on the
+// number of characters". English prose averages 4.79 letters a word across
+// Norvig's corpus of 743 billion, which is 5.79 with the space.
+//
+// The check that settles it: seventeen characters a second divided by 5.79 is
+// 176 words a minute, and the BBC's own research put "175WPM about right". The
+// typing constant gives 204, outside every published band.
+//
+//	https://norvig.com/mayzner.html
 const ccCharsPerWord = 5.8
 
 func paceFor(wpm int) float64 {
@@ -3058,30 +4075,159 @@ func paceFor(wpm int) float64 {
 	return cc608Pace
 }
 
+// ccMaxPace is the fastest text may ever be put on the screen, in characters a
+// second, whatever the backlog.
+//
+// This was the one number in the display that had no ceiling at all. The meter
+// stood aside when it fell behind and the words went out at whatever the
+// channel could carry — about sixty characters a second, four times reading
+// speed — on the reasoning that being current matters more than reading evenly.
+//
+// That trade has been measured in the field and it came back badly. Ofcom
+// sampled live subtitling across four exercises and found peaks of 290, 350 and
+// 460 words a minute in around a quarter of news and entertainment programs,
+// which it describes as unreadable for most viewers. Re-scoring the same
+// subtitles with rapid text counted as a fault moved the share falling below
+// acceptable from 23% to 68%, and the share rated very good to excellent from
+// 24% to under 3%. Same words, same accuracy, one added criterion.
+//
+// Its recommendation is a hard cap of no more than 180 to 200 words a minute,
+// and to recover latency by shortening the gap between captions rather than by
+// speeding up the text. Two hundred is taken here because this is only the
+// ceiling while draining — the reading speed on the page is what runs the rest
+// of the time, and the box style already recovers the way Ofcom describes, by
+// cutting the gap and never the readability.
+//
+//	https://www.ofcom.org.uk/siteassets/resources/documents/tv-radio-and-on-demand/broadcast-codes/other-codes/ofcoms-guidelines-on-providing-tv-and-on-demand-access-services.pdf
+const ccMaxPace = 200 * ccCharsPerWord / 60
+
+// burst is how much unspent allowance the meter may hold, in characters.
+//
+// A second's worth, and that was the whole of why the ceiling made this feel
+// slower. The ceiling is right — it is what stops a display running at three
+// hundred words a minute through a program — but it was being applied to every
+// moment alike, including the one moment where speed costs nothing.
+//
+// A phrase model hands over a whole sentence at once and then says nothing for
+// several seconds. Nobody is reading during the silence. Letting the allowance
+// accrue through it, and spending it when the sentence lands, puts that
+// sentence on the screen at once and leaves the rate over any longer window
+// exactly where it was — which is the number the reading research is about.
+// Capped at a second, the allowance was thrown away during every pause and the
+// sentence was then metered out from nothing.
+//
+// The size is a phrase, because a phrase is what arrives at once. Continuous
+// speech spends the allowance as fast as it accrues and settles at the pace,
+// which is the case the ceiling exists for and is unchanged.
+func (c *cea608) burst() float64 {
+	if c.maxLag <= 0 {
+		return c.pace
+	}
+	if n := c.pace * c.maxLag; n > c.pace {
+		return n
+	}
+	return c.pace
+}
+
+// meterPace is the rate the meter runs at: the reading speed, or the catch-up
+// ceiling when there is a backlog to drain. Callers hold the lock.
+func (c *cea608) meterPace() float64 {
+	if c.waiting() && c.pace < ccMaxPace {
+		return ccMaxPace
+	}
+	return c.pace
+}
+
 func (c *cea608) next() [2]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.countDrain()
-	// Metered at speaking speed unless there is a real backlog, in which case
-	// being current matters more than reading evenly and the channel is used
-	// for what it is worth.
+	// Metered at speaking speed, and at the catch-up ceiling when there is a
+	// backlog — never at whatever the channel happens to be worth.
 	//
 	// Characters only. A control code is sent twice and a decoder is only
 	// guaranteed to drop the repeat when the two arrive back to back — so
 	// withholding between them turns one carriage return into two, which rolls
 	// twice and leaves a blank row between every pair of lines. The meter is
 	// about how fast words appear; it has no business inside a control pair.
-	if rate := c.pairRate(); rate > 0 && !c.waiting() && !c.headIsControl() {
-		c.credit += c.pace / rate
-		if c.credit > c.pace {
-			c.credit = c.pace
+	pace := c.meterPace()
+	if rate := c.pairRate(); rate > 0 {
+		c.credit += pace / rate
+		if max := c.burst(); c.credit > max {
+			c.credit = max
 		}
-		if c.credit < 1 {
+	}
+	// Charged per character, not per pair.
+	//
+	// writeRune packs two characters into one pair wherever it can, and this
+	// spent one credit per pair — so a rate set to fifteen characters a second
+	// put thirty on the screen, and the words-a-minute figure on the page meant
+	// half what it said. Reported as captions still being too fast, which they
+	// were, by a factor of two.
+	//
+	// A pair whose second byte is padding carries one character; any other
+	// carries two. Control codes are not charged at all: they are not words,
+	// and withholding inside a doubled pair splits it and rolls twice.
+	if c.maxLag > 0 && !c.popon && len(c.queue) > 0 && !c.headIsControl() {
+		cost := 1.0
+		if c.queue[0][1] != odd608(cc608Null) {
+			cost = 2
+		}
+		if c.credit < cost {
 			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 		}
-		c.credit--
+		c.credit -= cost
 	}
 	if len(c.queue) == 0 {
+		// A box shows what it has the moment the screen is free.
+		//
+		// This is the difference between running slow and running offset, and
+		// it is where the offset was. A caption was only sent once it was full
+		// or a sentence had ended in it, so the box always held about a
+		// caption's worth of speech — two rows is four seconds of it — and
+		// everything reached the screen four seconds after it was said. The
+		// same four seconds whatever the model: a streaming model that commits
+		// a word a second still waited for sixty more characters before any of
+		// them went up.
+		//
+		// So the writer no longer decides when a caption is sent. The display
+		// asks: the moment the caption on screen has had its time and nothing
+		// is queued behind it, whatever has been held goes up, however short.
+		// That is self-correcting in both directions — when it is keeping up
+		// the captions are small and current, and when it falls behind they
+		// fill, because more has arrived by the time the screen frees.
+		if c.popon && c.worthShowing() && time.Since(c.lastBlock) >= c.popGap() {
+			c.flushPopon(true)
+			if len(c.queue) > 0 {
+				p := c.queue[0]
+				c.queue = c.queue[1:]
+				return p
+			}
+		}
+		// A box caption comes down when its time is up.
+		//
+		// A roll-up leaves its lines where they are because the next roll will
+		// take them, and until then they are the most recent thing said. A box
+		// has no next roll: the caption sits there until something replaces it,
+		// so through a pause in the talking it sits there for the length of the
+		// pause — a sentence from half a minute ago presented as though it were
+		// current, and then a burst when the talking starts again. That is the
+		// half of the pacing that hangs.
+		//
+		// So it is taken down once it has been readable for as long as it asked
+		// for, with a moment's grace in case the next caption is a breath away.
+		// Broadcast pop-on has an out time for every caption; this is that.
+		if c.popon && c.started && len(c.held) == 0 && !c.lastBlock.IsZero() &&
+			time.Since(c.lastBlock) > c.curDwell.want+ccPopLinger {
+			c.ctrl(ccEDM)
+			c.started = false
+			c.col = 0
+			c.lastBlock = time.Time{}
+			c.lastText = time.Time{}
+			p := c.queue[0]
+			c.queue = c.queue[1:]
+			return p
+		}
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
 			c.started = false
@@ -3095,23 +4241,124 @@ func (c *cea608) next() [2]byte {
 		}
 		return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 	}
-	// A carriage return waits for the dwell before it rolls the display. Its
-	// doubled copy is exempt: control codes go out twice back to back, and a
-	// decoder is only guaranteed to drop the repeat when it arrives as one.
-	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) && p[1] == odd608(ccCR) {
+	// The moment a caption changes waits for the dwell, so that what is on the
+	// screen has been there long enough to read. Which code that is depends on
+	// the style: a roll-up changes the screen with a carriage return, a box
+	// with the swap that shows what it has loaded. Either one's doubled copy is
+	// exempt — control codes go out twice back to back, and a decoder is only
+	// guaranteed to drop the repeat when it arrives as one.
+	//
+	// Everything a box sends before that swap goes out at the channel's own
+	// speed and is held by nothing, which is the point of the style: the rows
+	// are being written where they cannot be seen, so there is no reason to
+	// spread them out and every reason not to. The caption is loaded and ready,
+	// and the only thing waiting is the instant it appears.
+	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) {
 		switch {
-		case c.crCopies > 0:
-			c.crCopies--
-		case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
-			return [2]byte{odd608(cc608Null), odd608(cc608Null)}
-		default:
-			c.lastCR = time.Now()
-			c.crCopies = 1
+		case c.popon && p[1] == odd608(ccEOC):
+			switch {
+			case c.blockCopies > 0:
+				c.blockCopies--
+			case time.Since(c.lastBlock) < c.popGap():
+				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+			default:
+				c.lastBlock = time.Now()
+				c.blockCopies = 1
+				// The caption going up now decides how long the one after it
+				// waits, because that is how long this one is on the screen.
+				if len(c.popDwells) > 0 {
+					c.curDwell, c.popDwells = c.popDwells[0], c.popDwells[1:]
+					if c.curDwell.last && c.popPending > 0 {
+						c.popPending--
+					}
+				}
+			}
+		case !c.popon && p[1] == odd608(ccCR):
+			switch {
+			case c.crCopies > 0:
+				c.crCopies--
+			case time.Since(c.lastCR) < c.minRollGap && !c.waiting():
+				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
+			default:
+				c.lastCR = time.Now()
+				c.crCopies = 1
+			}
 		}
 	}
 	p := c.queue[0]
 	c.queue = c.queue[1:]
 	return p
+}
+
+// ccPopGather is how long a fragment waits for the rest of its sentence before
+// it goes up on its own. Short, because the size bar below is what does the
+// work now; this only catches the fragment nothing more is coming for.
+const ccPopGather = 250 * time.Millisecond
+
+// worthShowing reports whether what is held is a caption yet.
+//
+// The display shows what it has the moment the screen is free, which is what
+// keeps a box current. Taken literally that put single words on the screen,
+// alone, one after another — a phrase model hands over a fragment, the screen
+// happens to be free, and three words become a caption of their own.
+//
+// So a fragment too short to be a caption waits a moment for the rest of its
+// sentence. A caption's worth goes at once; anything ending a sentence is a
+// caption whatever its length, because nothing more is coming for it; and
+// anything that has waited out the gather goes rather than being held for words
+// that may never arrive. Callers hold the lock.
+// minCaptionChars is the fewest characters a caption may carry, derived rather
+// than chosen.
+//
+// A caption is on screen for at least the guidance minimum, a second for one
+// row, whatever else is true — so a caption of ten characters occupies a second
+// to show ten characters, which is ten a second, against speech that produces
+// fifteen and a half. The display is then losing ground on every caption and
+// nothing downstream can win it back: that is a box falling further behind the
+// longer it runs, and it is arithmetic rather than tuning.
+//
+// The break-even point is the minimum time on screen multiplied by the reading
+// speed, and that is this. Above it the display gains on speech, below it the
+// display cannot keep up however good the recognizer is. It moves with the
+// reading speed on the page, because both sides of the sum do.
+//
+// The first two attempts at this bar were a whole row and then a third of one,
+// picked for how they looked rather than worked out. A third of a row is ten
+// characters, which is the losing side of this sum.
+func (c *cea608) minCaptionChars() int {
+	if c.pace <= 0 {
+		return c.maxCol / 2
+	}
+	// Rounded up, not to nearest: rounding down lands a character short of
+	// break-even, which is the one side of this that does not work.
+	n := int(math.Ceil(ccMinOnScreen(1).Seconds() * c.pace))
+	if n > c.maxCol {
+		n = c.maxCol
+	}
+	return n
+}
+
+func (c *cea608) worthShowing() bool {
+	if len(c.held) == 0 {
+		return false
+	}
+	if ccWordsWidth(analyze608(c.held)) >= c.minCaptionChars() {
+		return true
+	}
+	if last := c.held[len(c.held)-1]; endsSentence(last) {
+		return true
+	}
+	return time.Since(c.lastText) >= ccPopGather
+}
+
+// popGap is how long the caption on screen must stay before the next replaces
+// it: what it asks for, or the guidance floor when captions are queued behind
+// it. Callers hold the lock.
+func (c *cea608) popGap() time.Duration {
+	if c.waiting() {
+		return c.curDwell.floor
+	}
+	return c.curDwell.want
 }
 
 // headIsControl reports whether the next thing out is a control code rather
@@ -4070,7 +5317,7 @@ func (ci *captionInjector) emit(pkts [][tsPacketSize]byte) error {
 //
 // captions.go is the common part: the audio splitter, the voice detector, the
 // recognizer, both caption encoders, the injector, the tune gate. None of it
-// knows which model it is serving. cohere.go, nemotron.go and moonshine.go each
+// knows which model it is serving. cohere.go, canary.go, nemotron.go and parakeet.go each
 // hold one model — its catalog entry, and what it asks of the code around it —
 // and they are reachable from here and nowhere else.
 //
@@ -4119,6 +5366,15 @@ type modelQuirks struct {
 	// NoiseGate says this model will confidently transcribe things that are
 	// not speech, and wants stretches of steady noise held back from it.
 	NoiseGate bool
+	// StreamChunkSec is how much audio a streaming model wants per feed.
+	//
+	// Not a buffer size and not a tuning knob: a cache-aware streaming encoder
+	// runs one forward pass per feed over its whole attention context, so the
+	// work is per call and not per second of audio. Feeding it a tenth of what
+	// it is built for does not make it answer sooner — it cannot commit ahead
+	// of its own lookahead whatever it is handed — it simply does the same pass
+	// ten times as often. Zero means the shared default.
+	StreamChunkSec float64
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
@@ -4151,10 +5407,12 @@ func quirksFor(m captionModel) modelQuirks {
 	switch m.Key {
 	case cohereTranscribe.Key:
 		return cohereQuirks
+	case canaryFlash.Key:
+		return canaryQuirks
 	case nemotronStreaming.Key:
 		return nemotronQuirks
-	case moonshineTiny.Key:
-		return moonshineQuirks
+	case parakeetTDT.Key:
+		return parakeetQuirks
 	}
 	return modelDefaults
 }
@@ -4815,6 +6073,26 @@ func txCheckABI() error {
 	return nil
 }
 
+// runningOn says where the work is happening, in English.
+//
+// The build variants are lowercase identifiers — cpu, vulkan, cuda — and the
+// line said "on the" in front of whichever one it was. A processor takes the
+// article and an API does not, so this read "on the vulkan", which is a
+// different franchise.
+func runningOn(variant string) string {
+	switch {
+	case variant == "cpu" || variant == "":
+		return "on the processor"
+	case strings.HasPrefix(variant, "vulkan"):
+		return "on Vulkan"
+	case strings.HasPrefix(variant, "cuda"):
+		return "on CUDA"
+	case strings.HasPrefix(variant, "metal"):
+		return "on Metal"
+	}
+	return "on " + variant
+}
+
 func txBackendName(k int32) string {
 	switch k {
 	case txBackendCPU:
@@ -4884,7 +6162,7 @@ func captionVariantFor(m captionModel) (string, error) {
 		return variant, nil
 	}
 	if g := gpuVariant(rt); g != "" {
-		logger("[CC] %s needs a GPU, so it runs on the %s build rather than the processor", m.Name, g)
+		logger("[CC] %s needs a GPU, so it runs %s rather than on the processor", m.Name, runningOn(g))
 		return g, nil
 	}
 	return "", fmt.Errorf("%s needs a GPU build of %s and none is downloaded; fetch one from the Closed Captions page",
@@ -4998,15 +6276,19 @@ var (
 	txLive      = map[string]int{}
 )
 
-// gpuGate limits how many streams decode on the accelerator at once.
+// gpuGate limits how many phrase decodes are issued at the accelerator at once.
 //
-// A machine has one graphics card and may have seven tuners. Seven decodes
-// issued at it together do not run seven times faster than two — the card runs
-// them one at a time regardless, and the interleaving costs command buffer
-// churn and working memory on top. Letting a couple through at a time keeps the
-// card busy without the pile-up; the rest wait briefly, and if they wait too
-// long the phrase queue drops one, which is the same back-pressure the rest of
-// this file already uses.
+// A phrase decode is long and bursty: several seconds of audio arriving in a
+// clump when a phrase closes. Issuing every tuner's at the card together does
+// not run them faster — the card runs them one at a time regardless, and the
+// interleaving costs command buffer churn and working memory on top. Letting a
+// couple through keeps it busy without the pile-up.
+//
+// It does not apply to continuous recognition. A streaming session holds its
+// own copy of the model, which is the arrangement the engine's threading
+// contract names for parallel work, and its calls are short and steady rather
+// than long and bursty; see enterGPU. Back-pressure there is the per-stream job
+// queue instead.
 //
 // The processor path is not gated: threads are shared out there instead, which
 // is the right tool for a device that really does run things in parallel.
@@ -5022,16 +6304,55 @@ var gpuGate = make(chan struct{}, 2)
 // CC_WATCHDOG=1 turns the polling back on.
 var withWatchdog = os.Getenv("CC_WATCHDOG") == "1"
 
-// maxBatchAudioSec bounds how much audio one dispatch may carry. Compute time
-// follows audio length, and the run deadline is fixed: a batch allowed to grow
-// without limit under backlog was the one path left where a single call could
-// outgrow its deadline, fail wholesale, and spike the processor long enough to
-// trouble the streams. Anything past the cap simply waits for the next
-// dispatch, which leaves immediately.
-const maxBatchAudioSec = 20.0
+// What bounds one dispatch, and in which unit.
+//
+// It was twenty seconds of audio, on the reasoning that compute time follows
+// audio length and a batch allowed to grow without limit could outgrow the run
+// deadline. The first half of that is not what the engine reports: it prints
+// the encoder time per dispatch and it barely moves between a forty-four frame
+// phrase and a fifty frame one. The cost is per phrase.
+//
+// So the phrase count is the bound that matters and the audio figure is a
+// backstop. Ten phrases at the six hundred milliseconds this measures on
+// integrated graphics is six seconds against a twelve second deadline, and it
+// leaves the same room on a machine half the speed.
+//
+// Twenty seconds of audio was binding first and it was binding at five phrases
+// — so with six tuners captioned, one of them waited a whole dispatch for no
+// reason but the unit this was counted in.
+const (
+	maxBatchPhrases  = 10
+	maxBatchAudioSec = 90.0
+)
 
 func (t *transcribeModel) enterGPU() bool {
 	if !t.onGPU {
+		return false
+	}
+	// A per-stream copy does not queue behind the others, because the engine
+	// says so in as many words.
+	//
+	// Its threading contract is that at most one compute may be in flight
+	// across all sessions of a given model — sessions share the model's backend
+	// instances, so overlapping runs race, and it names what that looks like:
+	// corrupted decodes on the processor, command buffer failures on Metal.
+	// Then it says what to do instead: "Callers that want parallel
+	// transcription today should load one model per worker."
+	//
+	// Which is exactly the shape here. acquireTxModel loads a fresh handle for
+	// every streaming session, so each has its own model, and the compute lock
+	// taken in armSetup is per model rather than shared. The engine's rule is
+	// already satisfied — and the gate below was a second, self-imposed limit
+	// on top of it, holding seven streams that the engine permits to run
+	// together down to two at a time.
+	//
+	// The back-pressure that gate was providing is provided properly now, per
+	// stream, by the job queue in listenStreaming: audio that cannot be kept up
+	// with is coalesced and then passed over, with a count and a reason, rather
+	// than piling up behind a semaphore.
+	//
+	//	https://github.com/handy-computer/transcribe.cpp/blob/main/include/transcribe.h
+	if t.streaming {
 		return false
 	}
 	// Bounded: a decode that wedged while holding a slot must not turn the
@@ -5143,11 +6464,17 @@ const telemetryWindow = 100
 // backend and the machine, and there is no figure that is true of everybody's —
 // so the page shows this one or shows nothing.
 type recognizerReport struct {
-	Measured bool    `json:"measured"`
-	Speed    float64 `json:"speed"`
-	Phrases  float64 `json:"phrases"`
-	Backend  string  `json:"backend"`
-	AgeSec   int     `json:"ageSec"`
+	Measured bool `json:"measured"`
+	// Streaming says which path took the measurement, because the two paths
+	// can answer different questions. A batch recognizer has a queue, so it
+	// can say how long a phrase waited; a continuous one has no queue and
+	// nothing to say about waiting. Reporting a wait of zero for it would
+	// read as "keeping up perfectly" when it is really "not a thing here".
+	Streaming bool    `json:"streaming"`
+	Speed     float64 `json:"speed"`
+	Phrases   float64 `json:"phrases"`
+	Backend   string  `json:"backend"`
+	AgeSec    int     `json:"ageSec"`
 	// Streams is how many captioned streams were feeding this recognizer when
 	// the figure was taken. Reported, never used to derive anything: measuring
 	// four streams at the same speed as one is what proved the old arithmetic
@@ -5535,7 +6862,7 @@ func (svc *txBatchService) run(w *txWorker) {
 		// and holding phrases back for other workers turned every batched
 		// dispatch into a solo one. The log printed both figures side by side
 		// the whole time.
-		for len(batch) < 16 && audioSec < maxBatchAudioSec && len(svc.requests) > 0 {
+		for len(batch) < maxBatchPhrases && audioSec < maxBatchAudioSec && len(svc.requests) > 0 {
 			select {
 			case r := <-svc.requests:
 				batch = append(batch, r)
@@ -5634,6 +6961,8 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		}
 	}
 	waiting := len(svc.requests)
+	// Published so the segmenter can see it. See recogPressure.
+	recogPressure.Store(int64(waiting))
 	svc.telMu.Lock()
 	svc.tLag += lag / time.Duration(len(batch))
 	if !svc.advised && svc.backend != txBackendCPU {
@@ -5701,10 +7030,10 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		// speech, and it says the same thing whatever the stream count is. Under
 		// a second is keeping up. Climbing is not.
 		logger("[CC] recognizer: %.1fx real time, %.1f phrases per dispatch, %.2fs compute for %.1fs of audio, "+
-			"phrases waited %.2fs, %d in the queue, %d %s captioned — over the last %d dispatches",
+			"phrases waited %.2fs, %d in the queue, %s captioned — over the last %d dispatches",
 			speed, float64(svc.tPhrases)/telemetryWindow,
 			svc.tCompute.Seconds()/telemetryWindow, svc.tAudio.Seconds()/telemetryWindow,
-			svc.tLag.Seconds()/telemetryWindow, waiting, streams, plural(int64(streams), "stream", "streams"),
+			svc.tLag.Seconds()/telemetryWindow, waiting, plural(int64(streams), "stream", "streams"),
 			telemetryWindow)
 		svc.tPhrases, svc.tCompute, svc.tAudio, svc.tWinN, svc.tLag = 0, 0, 0, 0, 0
 	}
@@ -6049,6 +7378,55 @@ type transcribeModel struct {
 	// heldGPU is set between arm and disarm while this stream holds a place on
 	// the accelerator. Only the goroutine inside a call touches it.
 	heldGPU bool
+	// backend is what this session opened on, kept so the continuous path can
+	// name it the way the batch path names svc.backend.
+	backend int32
+	// telAudio and telCompute are the continuous path's throughput: seconds of
+	// audio fed against seconds of compute spent on it. Guarded by mu, which
+	// every caller already holds. telSince is the audio since the last time
+	// the figure was published.
+	telAudio, telCompute, telSince time.Duration
+}
+
+// How much audio goes by between publications, and how much is kept in the
+// average. A feed is a fraction of a second and nobody reads the page that
+// fast, so the figure is published about once a second from a window of half a
+// minute.
+const (
+	streamTelPublish = time.Second
+	streamTelWindow  = 30 * time.Second
+)
+
+// noteStreamCompute accumulates what the continuous path spent and publishes it
+// on a cadence. The caller holds mu.
+//
+// This exists because the figure was only ever taken on the batch path, so the
+// one model that transcribes a phrase at a time had a speed on the page and the
+// models that transcribe continuously showed nothing at all. It is the same
+// quantity either way — seconds of audio per second of compute — and it is the
+// figure that says whether this machine can keep up, which is if anything more
+// pressing for a continuous model: a batch that falls behind grows a queue that
+// can be seen, and a stream that falls behind just drifts.
+func (t *transcribeModel) noteStreamCompute(audio, compute time.Duration) {
+	t.telAudio += audio
+	t.telCompute += compute
+	t.telSince += audio
+	if t.telSince < streamTelPublish || t.telCompute <= 0 {
+		return
+	}
+	t.telSince = 0
+	noteRecognizerSpeed(recognizerReport{
+		Streaming: true,
+		Speed:     float64(t.telAudio) / float64(t.telCompute),
+		Backend:   txBackendName(t.backend),
+	})
+	if t.telAudio > streamTelWindow {
+		// Halved rather than cleared, so the window keeps sliding without the
+		// figure jumping at the boundary: both sides are scaled by the same
+		// amount and the ratio is exactly what it was.
+		t.telAudio /= 2
+		t.telCompute /= 2
+	}
 }
 
 // loadTranscribe opens the weights the user downloaded.
@@ -6069,7 +7447,8 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 		return nil, err
 	}
 
-	shared, key, err := acquireTxModel(weights, txBackend(variant), alive)
+	backend := txBackend(variant)
+	shared, key, err := acquireTxModel(weights, backend, alive)
 	if err != nil {
 		return nil, err
 	}
@@ -6114,7 +7493,7 @@ func loadTranscribe(gguf string, cfg captionConfig, alive func() bool) (*transcr
 
 	pnc, itn := supportedToggles(shared.handle, quirksFor(m))
 	t := &transcribeModel{model: shared.handle, shared: shared, modelKey: key, session: session,
-		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: pnc, itn: itn}
+		abort: &txAbortHandle{}, onGPU: variant != "cpu", pnc: pnc, itn: itn, backend: backend}
 	if withWatchdog {
 		txSetAbortCallback(session, txAbortCallback(), unsafe.Pointer(&t.abort.deadlineUnixNano))
 	}
@@ -6296,9 +7675,20 @@ func (t *transcribeModel) feedStream(pcm []float32) *streamResult {
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
 	t.arm()
+	began := time.Now()
 	st := txStreamFeed(t.session, unsafe.Pointer(&pcm[0]), int32(len(pcm)), unsafe.Pointer(&u))
+	compute := time.Since(began)
 	t.disarm()
 	runtime.KeepAlive(pcm)
+	// Audio only when the feed took it. A failed feed still spent the compute,
+	// and counting it against audio that never went through would report a
+	// machine as faster than it is — the one direction the figure must not err
+	// in, since its whole job is to say when the machine cannot keep up.
+	audio := time.Duration(0)
+	if st == txOK {
+		audio = time.Duration(float64(len(pcm)) / asrSampleRate * float64(time.Second))
+	}
+	t.noteStreamCompute(audio, compute)
 	if st != txOK {
 		// A failed feed leaves the session unusable; mark it so the next one
 		// reopens rather than feeding a stream that will never answer.
@@ -6327,6 +7717,7 @@ func (t *transcribeModel) idleFlush() *streamResult {
 	u := txStreamUpdate{}
 	txStreamUpdateInit(unsafe.Pointer(&u))
 	t.arm()
+	began := time.Now()
 	st := txStreamFinalize(t.session, unsafe.Pointer(&u))
 	t.disarm()
 	var r *streamResult
@@ -6339,6 +7730,10 @@ func (t *transcribeModel) idleFlush() *streamResult {
 		// captions for the rest of the tune.
 		logger("[CC] could not reopen the continuous session after a pause: %v", err)
 	}
+	// Counted with no audio against it, because that is what it is: real work
+	// on the same session that consumes nothing new. Timing only the feeds
+	// would leave this out and read high.
+	t.noteStreamCompute(0, time.Since(began))
 	t.mu.Unlock()
 
 	if r != nil {
@@ -6525,6 +7920,8 @@ type captionEngine struct {
 	// Both used to happen in silence.
 	tooShort  int64
 	audioLost int64
+	// recogLost counts chunks the recognizer was too far behind to be given.
+	recogLost int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -6553,7 +7950,7 @@ type captionEngine struct {
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
 		quirks:  quirksFor(m),
-		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM, captionLag(m, cfg)),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
@@ -6713,12 +8110,9 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	if e.streaming {
 		mode = "continuous"
 	}
-	where := currentEngineVariant()
-	if where == "cpu" {
-		where = "processor"
-	}
-	logger("[CC] %s captions on: %s, %s, %s, on the %s, ready in %s",
-		e.label, m.Key, cfg.Language, mode, where, time.Since(began).Round(time.Millisecond))
+	logger("[CC] %s captions on: %s, %s, %s, %s, ready in %s",
+		e.label, m.Key, cfg.Language, mode, runningOn(currentEngineVariant()),
+		time.Since(began).Round(time.Millisecond))
 }
 
 // loadRecognizer opens a model on whichever engine can run it.
@@ -7004,9 +8398,36 @@ const (
 	//
 	// The shape test does the first job properly now: room tone is flat and
 	// speech is not, whatever its length. So this is free to be what its name
-	// says, a floor under blips rather than a floor under short answers. Thirty
-	// five hundredths keeps a one-word reply and still refuses a door closing.
-	vadMinSpeech = 0.35
+	// says, a floor under blips rather than a floor under short answers.
+	//
+	// A quarter of a second, because the paragraph above names the range it is
+	// protecting and thirty five hundredths cut into the bottom of it. Three to
+	// five tenths is what a one-word reply measures, so a floor at thirty five
+	// hundredths keeps the long half of that range and throws away the short
+	// half — the shortest "Yes" is exactly the one it was meant to save, and it
+	// went into the count this line prints.
+	//
+	// Nothing is riskier for it. What refuses a door closing is the shape test,
+	// not the length: a door is one transient and flat across it, and it fails
+	// the crest bar at any duration. This is left only to refuse the clicks and
+	// edge effects that are too brief to have a shape worth measuring.
+	vadMinSpeech = 0.25
+	// The floor under the remainder of a phrase this code cut itself.
+	//
+	// The blip floor above assumes the stretch arrived on its own. The
+	// remainder of a gap cut did not: a phrase that runs long is closed at the
+	// widest gap between two words, so whatever follows is the rest of a
+	// sentence, and when the speaker stops shortly after it can be a single
+	// word. A word measures under the blip floor and was thrown away — "City
+	// Strata Elite Card" arriving as "City Strata Elite" with the beat before
+	// the last word being exactly where the cut landed.
+	//
+	// Rejecting a blip nobody asked for and discarding a fragment this code
+	// made are not the same decision, so they no longer share a number. This
+	// one is a floor under transients only: a stop consonant's closure runs to
+	// about a hundred and fifty milliseconds, so below that there is no
+	// syllable to transcribe.
+	vadMinTail   = 0.15
 	vadMinPhrase = 1.8 // past this, a word gap is enough to cut
 	// The gap between two spoken words — and it has to be a gap between words
 	// rather than a gap inside one.
@@ -7029,7 +8450,7 @@ const (
 	// A quarter of a second is above the closures and below a real pause.
 	vadWordGap   = 0.25
 	vadSilence   = 0.45 // a real pause: end the phrase whatever its length
-	vadMaxPhrase = 3.5  // backstop, so captions never fall this far behind
+	vadMaxPhrase = 3.5  // fallback only; every model in the catalog sets its own
 	vadLead      = 0.35 // audio kept before speech, so words are not clipped
 
 	// The bar for "somebody is talking" is three times an adaptive noise floor,
@@ -7190,7 +8611,26 @@ func supportedToggles(model uintptr, q modelQuirks) (pnc, itn int32) {
 // reason. The audio has to be flat, which is what room tone is and speech is
 // not. And there has to be barely any speech in it, because a phrase with a
 // sentence's worth of talking in it is not room tone whatever its shape.
-func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64) bool {
+//
+// And one thing on its own overrules all three: where the stretch came from.
+//
+// Flat and brief describes room tone that tripped the level bar, and it also
+// describes the last word of a sentence. A single word has no variation in it
+// to measure, so it reads flat, and it is under a second, so it reads brief —
+// two weak signals that were meant to be independent, both firing on the same
+// harmless thing. This gate only ever runs on the one model in the catalog that
+// hallucinates on silence, which is why the missing word was only ever seen on
+// that model.
+//
+// A phrase closed at a word gap was closed with the speaker still going, so the
+// next stretch is the rest of that sentence: the bar was already tripped by
+// speech, and this code is the reason the remainder is short and alone. Judging
+// it as though it had arrived out of a quiet room is judging it on a fact this
+// code invented.
+func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64, tailOfSplit bool) bool {
+	if tailOfSplit {
+		return false
+	}
 	return q.NoiseGate && !isSpeech && speechLen < vadGateBelow
 }
 
@@ -7198,6 +8638,56 @@ func heldBackAsNoise(q modelQuirks, isSpeech bool, speechLen float64) bool {
 // Long enough to contain a gap between words at any ordinary speaking rate,
 // short enough that the phrase does not lose a meaningful amount of its end.
 const vadCutSearch = 0.7
+
+// tooShortToSend says whether a stretch of speech is too brief to be worth
+// transcribing, and it needs to know where the stretch came from.
+//
+// A stretch that arrived on its own gets the blip floor: below that it is a
+// door, a click, a syllable of a jingle, and the model will write words for it.
+// The remainder of a cut this code made gets the transient floor instead,
+// because it is known to be speech — it is the back half of a sentence the
+// segmenter split, and the only reason it is short is that the speaker stopped.
+//
+// Both floors are still floors. A tail of nothing is still nothing.
+func tooShortToSend(speechLen float64, tailOfSplit bool) bool {
+	if tailOfSplit {
+		return speechLen < vadMinTail
+	}
+	return speechLen < vadMinSpeech
+}
+
+// recogPressure is how many phrases were waiting at the shared recognizer's
+// last dispatch. Written by the recognizer, read by the segmenter that feeds
+// it, and nothing else depends on it — a stale value costs one phrase.
+var recogPressure atomic.Int64
+
+// phraseCutAt is how much of the phrase window must pass before a gap between
+// two words is enough to end a phrase.
+//
+// Cutting early is what keeps captions close to the sound: a phrase closed at
+// two seconds is transcribed two seconds sooner than one closed at four. So the
+// bar is low while there is room for it.
+//
+// It stops being free the moment there is not. This model's encoder costs about
+// the same for a long phrase as a short one — its own log prints the figure,
+// and it barely moves between forty-four frames and fifty — so the work is per
+// phrase and not per second of audio, and cutting early doubles the work for
+// the same television. Six tuners at a four second window produce a phrase
+// every two and a half seconds each once word gaps are taken, which is half as
+// much again as the window implies and is what puts a machine that would carry
+// them at ninety-six percent over the line.
+//
+// So when phrases are waiting, the bar goes up and the segmenter stops taking
+// the cheap cuts. That costs a second or two of latency on the phrase in hand
+// and buys back a third of the work — against a queue that was running twelve
+// seconds behind, it is not a close trade. It relaxes the moment the queue
+// clears, so a machine with room never pays it.
+func phraseCutAt() float64 {
+	if recogPressure.Load() > 0 {
+		return 1
+	}
+	return 0.55
+}
 
 // quietestCut finds the best place to end a phrase that has run out of time,
 // and returns the sample index to cut at, or zero if there is nowhere better
@@ -7274,14 +8764,73 @@ func vadPeak(peak, rms float64) float64 {
 // There is no phrase segmenter here and no waiting: the model returns words as
 // the audio arrives and marks where an utterance ends, which is what keeps this
 // about a second behind instead of a phrase behind.
+// streamLagSec is how much audio may wait for the recognizer, in seconds.
+//
+// Seconds and not a number of feeds. It was thirty feeds, which was three
+// seconds when a feed was a tenth of one and became half a minute the moment
+// the feed became the size the model actually wants — so a recognizer that
+// could not keep up stopped skipping and started sinking instead, half a minute
+// deep, with nothing in the log because nothing was being dropped.
+//
+// A queue is only ever lag. What it can do is absorb the moment a model waits
+// its turn; what it must not do is let a shortfall accumulate, because past a
+// few seconds a caption is not late, it is about something else. Three seconds
+// is roughly the shortfall a busy machine produces in bursts, and past it the
+// audio is passed over and said so.
+const streamLagSec = 3.0
+
+// streamFeedMax bounds a coalesced feed, in samples.
+//
+// It has to be larger than one chunk or it coalesces nothing, which is what it
+// did the moment the chunk grew: a bound of one second against a chunk of one
+// and a bit meant every batch was already over it before a second was
+// considered. Four seconds is the whole queue in one call, which is the point
+// of coalescing, and short enough not to threaten the call's own deadline.
+const streamFeedMax = 4 * asrSampleRate
+
+// streamChunkDefault is the feed size for a streaming model that has not named
+// one. A second, which is the order of every cache-aware encoder's context, and
+// far enough from the old tenth to be obvious in a log.
+const streamChunkDefault = 1.0
+
+// streamJob is one thing for the recognizer to do, in the order it was asked.
+// Feeds carry audio; the other two carry none and are told apart by finish,
+// which ends the session rather than the utterance.
+type streamJob struct {
+	pcm    []float32
+	finish bool
+}
+
+func (j streamJob) run(e *captionEngine) *streamResult {
+	if j.finish {
+		return e.model.finishStream()
+	}
+	return e.model.idleFlush()
+}
+
 func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 	defer e.finish()
 	defer pcm.Close()
 
-	// 100 ms per feed: short enough that nothing waits on a buffer, long enough
-	// that the call overhead is irrelevant next to the work inside.
-	const chunk = asrSampleRate / 10
-	const chunkSec = 0.1
+	// How much audio goes in per feed, which the model decides and not this.
+	//
+	// This was a tenth of a second, chosen on the reasoning that it is short
+	// enough that nothing waits on a buffer and long enough that the call
+	// overhead is irrelevant next to the work inside. The second half of that
+	// was wrong for the models it was feeding.
+	//
+	// A cache-aware streaming encoder runs a forward pass over its attention
+	// context on every feed, so the cost is per call rather than per second of
+	// audio, and a tenth of a second was buying a tenth of the throughput. Nor
+	// did it buy any latency back: the family's default lookahead is 1040 ms,
+	// so it cannot commit a word ahead of that however small the pieces are.
+	// Ten times the work for nothing, and with several tuners captioned at once
+	// it was fifty trips a second at the accelerator between them.
+	chunkSec := e.quirks.StreamChunkSec
+	if chunkSec <= 0 {
+		chunkSec = streamChunkDefault
+	}
+	chunk := int(chunkSec * asrSampleRate)
 	// How long the talking has to stop before the sentence is closed off. Short
 	// enough that a natural pause ends the line while the pause is still
 	// happening, long enough that the gap between two words never does.
@@ -7316,6 +8865,139 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 	}
 
+	// Reading the audio and recognizing it are separate goroutines, and have to
+	// be, for the reason written at length over the phrase path — which had
+	// exactly this fault and was fixed there and not here.
+	//
+	// Every call into the model happened inline in this loop, so a model that
+	// took a moment stopped draining ffmpeg's output for as long as it was
+	// thinking. ffmpeg filled its pipe and blocked, a blocked ffmpeg stopped
+	// reading its own input, and the transport stream bytes behind that were
+	// dropped — which is not late captions, it is a corrupt stream, and it
+	// reported itself as "dropped audio the decoder could not keep up with"
+	// hundreds of times a minute. It needs no slow model to happen: three
+	// streams sharing one graphics chip is enough, because the model waits its
+	// turn for the chip inside the call.
+	//
+	// One channel rather than one per kind, because the order matters: a flush
+	// that overtook the audio it was meant to close off would commit a sentence
+	// that had not finished arriving.
+	// The queue is a number of seconds, converted into feeds at this model's
+	// chunk size rather than counted in feeds.
+	depth := int(streamLagSec/chunkSec + 0.5)
+	if depth < 2 {
+		depth = 2
+	}
+	jobs := make(chan streamJob, depth)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		// Audio that has piled up is fed in one call rather than ten.
+		//
+		// A hundred milliseconds a feed is the right size for one stream and
+		// the wrong size for five. Every call is a trip out to the accelerator
+		// — a slot to take, a command buffer to build, a submission, a wait —
+		// and that cost is paid per call rather than per second of audio. Five
+		// streams at ten calls a second is fifty trips a second for five
+		// seconds of audio, and the overhead of the trip stops being irrelevant
+		// next to the work inside it, which is the assumption the chunk size
+		// was chosen under.
+		//
+		// So when this falls behind, the queue itself says by how much, and
+		// everything waiting is concatenated into a single feed. Ten chunks
+		// behind becomes one call instead of ten. It costs nothing when it is
+		// keeping up, because then there is never more than one thing waiting —
+		// the coalescing only happens when there is something to coalesce,
+		// which is exactly when it is needed.
+		//
+		// Bounded, because a call's own deadline is fixed and an unbounded
+		// batch is the one way to outgrow it.
+		for job := range jobs {
+			if job.pcm != nil {
+				batch := job.pcm
+				for len(batch) < streamFeedMax {
+					select {
+					case next := <-jobs:
+						if next.pcm == nil {
+							// A flush closes the utterance, so it must not
+							// overtake the audio it is closing.
+							take(e.model.feedStream(batch))
+							batch = nil
+							take(next.run(e))
+						} else {
+							batch = append(batch, next.pcm...)
+						}
+					default:
+					}
+					if batch == nil {
+						break
+					}
+					if len(jobs) == 0 {
+						break
+					}
+				}
+				if batch != nil {
+					take(e.model.feedStream(batch))
+				}
+				continue
+			}
+			take(job.run(e))
+		}
+	}()
+	defer func() {
+		close(jobs)
+		<-drained
+	}()
+
+	// holed records that a chunk was dropped, so the utterance it belonged to
+	// is closed off rather than spliced.
+	//
+	// This family re-attends over its whole accumulated audio, so audio with a
+	// hole in it corrupts everything after the hole, and committed text cannot
+	// be taken back off the screen. The same reasoning as the tune gate below,
+	// for the same reason.
+	holed := false
+	post := func(job streamJob) {
+		select {
+		case jobs <- job:
+		default:
+			n := atomic.AddInt64(&e.recogLost, 1)
+			switch {
+			case n == 1:
+				// Said once and said fully, because the count on its own does
+				// not name a cause and this one has a specific one.
+				//
+				// A streaming model cannot be shared: every captioned tuner
+				// runs its own copy, and each of those needs the accelerator
+				// more or less continuously, because it recognizes as the audio
+				// arrives rather than in bursts between phrases. Several at once
+				// therefore want several times the device, and one graphics chip
+				// does not have it however the work is scheduled — the card runs
+				// them one at a time whatever is asked of it.
+				//
+				// A phrase model is the opposite: one copy serves every tuner
+				// and the work arrives in batches with gaps between them, which
+				// is why the same machine carries many more streams on Cohere
+				// or Parakeet than on either Nemotron.
+				logger("[CC] %s recognition is behind the audio. A model that transcribes as it listens runs a "+
+					"separate copy for each captioned tuner and each one wants the accelerator continuously, so "+
+					"several at once ask more of it than it has. Caption fewer tuners, or choose a model that "+
+					"transcribes a phrase at a time — those share one copy between all of them.", e.label)
+			case n%200 == 0:
+				logger("[CC] %s recognition is still behind the audio; %s passed over so far", e.label, plural(n, "chunk", "chunks"))
+			}
+			holed = true
+		}
+	}
+	feed := func(pcm []float32) {
+		if holed {
+			holed = false
+			post(streamJob{})
+		}
+		post(streamJob{pcm: append([]float32(nil), pcm...)})
+	}
+	flush := func() { post(streamJob{}) }
+
 	for {
 		select {
 		case <-e.closed:
@@ -7323,7 +9005,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		default:
 		}
 		if _, err := io.ReadFull(pcm, raw); err != nil {
-			take(e.model.finishStream())
+			post(streamJob{finish: true})
 			next, ok := e.restartDecoder(decoderTries + 1)
 			if !ok {
 				return
@@ -7360,7 +9042,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// never the other viewer's recording.
 		if tunesPending() {
 			if !settled {
-				take(e.model.idleFlush())
+				flush()
 				quiet, settled, uttered = 0, true, 0
 			}
 			continue
@@ -7388,13 +9070,13 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		}
 		if settled {
 			for _, l := range lead {
-				take(e.model.feedStream(l))
+				feed(l)
 				uttered += float64(len(l)) / asrSampleRate
 			}
 			lead = nil
 			settled = false
 		}
-		take(e.model.feedStream(buf))
+		feed(buf)
 		uttered += chunkSec
 
 		// An utterance cannot run forever: the model decodes each one against
@@ -7403,7 +9085,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 		// eight seconds long, or at twelve seconds wherever the speech is —
 		// a seam at a word beats a sentence that ends in nothing.
 		if !settled && (uttered >= 12 || (uttered >= 8 && quiet >= 0.2)) {
-			take(e.model.idleFlush())
+			flush()
 			quiet, settled, uttered = 0, true, 0
 			continue
 		}
@@ -7413,7 +9095,7 @@ func (e *captionEngine) listenStreaming(pcm io.ReadCloser) {
 			continue
 		}
 		if quiet += chunkSec; quiet >= flushSilence {
-			take(e.model.idleFlush())
+			flush()
 			settled, uttered = true, 0
 		}
 	}
@@ -7426,6 +9108,7 @@ func (e *captionEngine) show(text string, breakAfter bool) {
 
 // write puts a phrase into the caption encoder.
 func (e *captionEngine) write(text string, breakAfter bool) {
+	text = respell(text, e.cfg.Spelling)
 	e.enc.pushText(text, breakAfter)
 }
 
@@ -7454,6 +9137,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	var pending []float32
 	speaking := false
 	var silenceRun, speechLen float64
+	// wasSplit records that the last phrase was closed while the speaker was
+	// still going, so the next one is the rest of that sentence.
+	var wasSplit bool
 	// loudest and levelSum describe the shape of what is being heard, which is
 	// how steady noise is told from speech; see phraseIsSpeech.
 	var loudest, levelSum float64
@@ -7578,7 +9264,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		// Long phrases are cheaper per second of television, so how long to let
 		// one run is the same trade as a streaming model's lookahead and is
 		// made with the same setting.
-		gapped := phrase >= maxPhrase*0.55 && silenceRun >= vadWordGap
+		//
+		// How much of the window has to pass before a word gap will do is not
+		// fixed, because what it buys changes with the load. See phraseCutAt.
+		gapped := phrase >= maxPhrase*phraseCutAt() && silenceRun >= vadWordGap
 		forced := phrase >= maxPhrase
 		if !ended && !gapped && !forced {
 			continue
@@ -7621,7 +9310,38 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			pending = nil
 			speaking = false
 		}
-		if speechLen < vadMinSpeech {
+		// Whether the phrase being closed here is the remainder of a cut this
+		// code made, and whether the next one will be.
+		//
+		// A phrase closed at a real pause is a finished utterance and what
+		// follows it is a new one. A phrase closed at a word gap is not: speech
+		// was still running, and this is the only close that hands the next
+		// phrase nothing to start from, so that phrase can be a single word.
+		//
+		// The ceiling is deliberately not counted. It carries its audio forward
+		// rather than dropping it, so the phrase after it starts with up to
+		// seven tenths of a second already in hand and clears the floor on its
+		// own. Counting it would matter on continuous speech, where the ceiling
+		// is what fires and fires again: the flag would never clear, and the
+		// noise gate would be off for the length of a newscast — which is the
+		// content it exists for.
+		tailOfSplit := wasSplit
+		wasSplit = gapped && !ended
+		// The next phrase starts with whatever was carried into it.
+		//
+		// A forced cut splits the audio exclusively — audio[:at] goes now and
+		// audio[at:] waits — so the remainder is up to seven tenths of a second
+		// of speech that has already been read and already been counted. Zeroing
+		// the counters below then told the next phrase it was holding nothing.
+		// If the speaker stopped shortly after the cut, that phrase measured
+		// only the silence after it, fell under vadMinSpeech and was thrown away
+		// as too short — taking a word that existed in no other phrase, because
+		// the split gave it to this one and nowhere else.
+		//
+		// Intermittent by nature: it needs a forced cut, which is a minority of
+		// phrases, and the speaker to stop within a breath of it.
+		heldSec := float64(len(pending)) / asrSampleRate
+		if tooShortToSend(speechLen, tailOfSplit) {
 			// Counted, because it was not. Every other way audio is discarded
 			// says so, and a path that throws away sound in silence is a place
 			// words can go with nothing in the log to show for it.
@@ -7630,18 +9350,19 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				logger("[CC] %s passed over %s too short to be worth transcribing (%d so far)",
 					e.label, plural(n, "stretch", "stretches"), n)
 			}
+			speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 			continue
 		}
-		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen) {
+		if crest, ok := phraseCrest(loudest, levelSum, levelN); heldBackAsNoise(e.quirks, ok, speechLen, tailOfSplit) {
 			n := atomic.AddInt64(&e.gated, 1)
 			if n == 1 || n%25 == 0 {
 				logger("[CC] %s held back %s of steady noise that was not speech (%.1fs of it, peak %.1f times the average, floor is %.1f)",
 					e.label, plural(n, "stretch", "stretches"), speechLen, crest, vadCrestMin)
 			}
-			speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
+			speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 			continue
 		}
-		speechLen, loudest, levelSum, levelN = 0, 0, 0, 0
+		speechLen, loudest, levelSum, levelN = heldSec, 0, 0, 0
 		cutThisMinute++
 		e.queue(audio, carried, ended, forced && !ended && !gapped)
 	}
@@ -7684,7 +9405,7 @@ func (e *captionEngine) queue(audio []float32, carried, atPause, hardCut bool) {
 		// which is the trade that made captions stop altogether.
 		n := atomic.AddInt64(&e.dropped, 1)
 		if n == 1 || n%10 == 0 {
-			logger("[CC] %s behind: %d phrases dropped", e.label, n)
+			logger("[CC] %s behind: %s dropped", e.label, plural(n, "phrase", "phrases"))
 		}
 	}
 }
@@ -7759,10 +9480,10 @@ func (e *captionEngine) recognize() {
 	// happens, and nothing is held for the sake of something unrelated.
 	for {
 		var in <-chan phraseItem
-		if len(window) < 2 {
-			// Two in flight is the ceiling, so the channel is only listened to
-			// with room to accept. Not listening is the backpressure: it was a
-			// blocking settle before, which is the same bound reached by
+		if len(window) < maxInFlight {
+			// The ceiling on phrases in flight, so the channel is only listened
+			// to with room to accept. Not listening is the backpressure: it was
+			// a blocking settle before, which is the same bound reached by
 			// standing still instead of by waiting for the right thing.
 			in = e.phrases
 		}
@@ -7883,7 +9604,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		e.slow++
 		if e.slow == 1 || e.slow%20 == 0 {
 			if drops := atomic.LoadInt64(&e.dropped); drops > 0 {
-				logger("[CC] %s captions are running %.0fs behind (%d phrases dropped)", e.label, lag.Seconds(), drops)
+				logger("[CC] %s captions are running %.0fs behind (%s dropped)", e.label, lag.Seconds(), plural(drops, "phrase", "phrases"))
 			} else {
 				logger("[CC] %s captions are running %.0fs behind (nothing dropped)", e.label, lag.Seconds())
 			}
@@ -8836,7 +10557,7 @@ func memoryWarning(cfg captionConfig) string {
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return "cohere-transcribe", "The place to start on any machine: the most accurate captioning available, one copy shared by every tuner. One to three streams on the processor is fine; anything more, use a GPU. The tiny model below is for hardware that cannot run this one."
+	return "canary-180m", "The place to start: within a point of the most accurate model here at a sixth of the cost, with one copy shared by every tuner. Cohere is more accurate again and asks a great deal more of the graphics chip."
 }
 
 // memoryNote describes what a model costs to run.

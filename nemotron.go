@@ -26,15 +26,15 @@ package main
 var nemotronStreaming = captionModel{
 	Key:  "nemotron-streaming",
 	Name: "Nemotron 3.5 ASR Streaming 0.6B",
-	Role: "Best for anything but English, and as quick as the picture",
-	Desc: "Thirty-two languages, transcribed as the audio arrives rather than a phrase at a time, so the words appear about a second behind the speaker instead of four. Writes punctuation and sentence case. This is the one to pick for anything that is not English — and on a GPU it keeps up with the phrase model, so the second it saves is free.",
+	Role: "Best for low latency",
+	Desc: "Written as the audio arrives rather than a phrase at a time, so words appear about a second behind the speaker instead of four. Reads thirty-two languages, which is more than anything else here.",
 	// Streaming is a different shape of model, not a faster one: it keeps a
 	// running encoder state and commits words as they settle, so latency is
 	// a property of the architecture rather than a setting. The phrase
 	// window does not apply to it.
 	Latency:   "About a second behind the picture",
-	Accuracy:  "Very good; the phrase model is better in English",
-	Benchmark: "Between the other two in English; the only real choice elsewhere",
+	Accuracy:  "Very good",
+	Benchmark: "Between the other two in English",
 	// The memory is the thing to know about this one, and it is not the
 	// download.
 	//
@@ -105,4 +105,15 @@ var nemotronStreaming = captionModel{
 // window does not apply to it — it keeps a running state rather than waiting
 // for a phrase — and it has not shown the hallucination on silence that earns a
 // noise gate. If it does, this is where that would go.
-var nemotronQuirks = modelDefaults
+var nemotronQuirks = modelQuirks{
+	PhraseWindow: modelDefaults.PhraseWindow,
+	// 1040 ms a feed, which is this family's own figure and not a guess.
+	//
+	// It is the lookahead the model is run at by default — the engine offers
+	// 0, 80, 480 and 1040 ms and ships 13 frames, the last of them — and it is
+	// the chunk the engine's own accuracy measurement for this model uses:
+	// --stream-chunk-ms 1040 --stream-att-right 13. Feeding less does not
+	// produce a word sooner, because the model will not commit one ahead of its
+	// lookahead; it only runs the same encoder pass more often.
+	StreamChunkSec: 1.04,
+}

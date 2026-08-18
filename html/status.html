@@ -152,7 +152,7 @@
         function openTunerModal(index) {
             modalIndex = index;
             $('#modalTunerNumber').text(index);
-            $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
+            $('#modalTitle').text('Tuner ' + (index + 1) + ' — ' + (tunerIps[index] || ''));
             setModalHint();
             $('#tunerModal').addClass('open');
             startPreviewClicked();
@@ -285,11 +285,11 @@
 
         function releaseTuner(index) {
             if (releasing[index]) return;
-            if (tunerActive[index] && !confirm('Tuner ' + index + ' is streaming. Run the stop script and release its lock?')) return;
+            if (tunerActive[index] && !confirm('Tuner ' + (index + 1) + ' is streaming. Run the stop script and release its lock?')) return;
             releasing[index] = true;
             $('.release-btn-' + index).prop('disabled', true).text('Releasing…');
             $.ajax({ url: '/api/tuner/' + index + '/release', type: 'POST', timeout: 30000 })
-                .fail(function() { alert('Release failed for tuner ' + index + ' — check the logs.'); })
+                .fail(function() { alert('Release failed for tuner ' + (index + 1) + ' — check the logs.'); })
                 .always(function() { releasing[index] = false; });
         }
 
@@ -413,8 +413,8 @@
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
 		                        <div class="tuner-status-head">
-		                            <span class="tuner-number">${index}</span>
-		                            <strong>Tuner ${index}</strong>
+		                            <span class="tuner-number">${index + 1}</span>
+		                            <strong>Tuner ${index + 1}</strong>
 		                            ${badge}
 		                        </div>
 		                        <div class="tuner-pairing">
@@ -448,7 +448,7 @@
 		            $.each(data.Readers, function(index, reader) {
 		                readerStatusHtml += `
 		                    <tr>
-		                        <td class="num">${reader.T}</td>
+		                        <td class="num">${reader.T + 1}</td>
 		                        <td title="${esc(reader.Channel)}">${esc(reader.Name || reader.Channel)}</td>
 		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
 		                        <td class="mono">${esc(reader.FileName)}</td>

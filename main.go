@@ -547,6 +547,10 @@ func CustomLogger() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		if c.Request.URL.Path == "/api/captions" {
+			c.Next()
+			return
+		}
 		// Process request and log it
 		t := time.Now()
 		// Call the next handler in the chain
