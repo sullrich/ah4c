@@ -4380,7 +4380,7 @@ func (c *cea608) backlog() int {
 // buildCCData assembles the cc_data() structure from A/53 Part 4. ccCount is
 // fixed by the frame rate: the caption channel runs at 9600 bits per second, so
 // each frame carries 600/fps constructs of two bytes each.
-func buildCCData(pair [2]byte, ccCount int) []byte {
+func buildCCData(pair [2]byte, ccCount int, send608 bool) []byte {
 	if ccCount < 2 {
 		ccCount = 2
 	}
@@ -4401,13 +4401,18 @@ func buildCCData(pair [2]byte, ccCount int) []byte {
 	for i := 0; i < ccCount; i++ {
 		// marker_bits(5)=11111, cc_valid(1), cc_type(2)
 		switch {
-		case i == 0:
+		case i == 0 && send608:
 			// Field 1, which carries the captions.
 			b = append(b, 0xFC, pair[0], pair[1])
-		case i == 1:
+		case i == 1 && send608:
 			// Field 2, likewise. Claiming a field carries something it does not
 			// makes a player offer a caption track with nothing in it.
 			b = append(b, 0xF9, 0x00, 0x00)
+		case i == 0 || i == 1:
+			// This picture carries no line 21 data. Marked invalid rather than
+			// omitted: the construct count is fixed by the picture rate and the
+			// two line 21 slots are always the first two.
+			b = append(b, byte(0xF8|i), 0x00, 0x00)
 		default: // nothing to send this picture; padding, marked invalid
 			b = append(b, 0xFA, 0x00, 0x00)
 		}
@@ -4448,8 +4453,8 @@ func seiPayloadSize(n int) []byte {
 
 // buildCaptionSEI produces a complete Annex-B NAL, start code included, that
 // carries the frame's caption bytes as registered ITU-T T.35 user data.
-func buildCaptionSEI(pair [2]byte, ccCount int, hevc bool) []byte {
-	payload := buildCCData(pair, ccCount)
+func buildCaptionSEI(pair [2]byte, ccCount int, send608 bool, hevc bool) []byte {
+	payload := buildCCData(pair, ccCount, send608)
 
 	rbsp := make([]byte, 0, len(payload)+8)
 	rbsp = append(rbsp, 0x04) // payloadType 4, user_data_registered_itu_t_t35
@@ -4614,6 +4619,11 @@ type captionInjector struct {
 	ccCount  int
 	lastPTS  int64
 	haveRate bool
+	// ccOwed is how much of a line 21 pair this picture is due, accumulated so
+	// the pairs land at the rate the format runs at rather than at the rate
+	// pictures happen to arrive. See sendsCC.
+	ccOwed  float64
+	ccPerAU float64
 
 	frames   int64
 	injected int64
@@ -4627,7 +4637,8 @@ func newCaptionInjector(out io.Writer, enc *cea608, label string) *captionInject
 		log:      label,
 		videoPID: -1,
 		pmtPID:   -1,
-		ccCount:  20, // 29.97 fps until the stream tells us otherwise
+		ccCount:  20,  // 29.97 fps until the stream tells us otherwise
+		ccPerAU:  1.0, // and one pair per picture at that rate
 	}
 }
 
@@ -5051,7 +5062,12 @@ func (ci *captionInjector) flush() error {
 	}
 	ci.trackFrameRate(ptsVal)
 
-	sei := buildCaptionSEI(ci.enc.next(), ci.ccCount, ci.hevc)
+	send := ci.sendsCC()
+	pair := [2]byte{}
+	if send {
+		pair = ci.enc.next()
+	}
+	sei := buildCaptionSEI(pair, ci.ccCount, send, ci.hevc)
 	newES := injectSEI(es, sei, ci.hevc)
 	if len(newES) == len(es) {
 		// No slice NAL found; leave this access unit alone.
@@ -5115,17 +5131,48 @@ func (ci *captionInjector) trackFrameRate(pts int64) {
 			if n >= 2 && n <= 31 {
 				ci.ccCount = n
 				ci.haveRate = true
-				// One field-1 pair leaves per access unit, so the picture rate
-				// is the rate the caption channel clears its queue at — sixty
-				// a second here, thirty there, and nothing in the encoder
-				// should be guessing which. It is measured independently as
-				// well; this is so the first second is right too.
-				ci.enc.setPictureRate(fps)
-				logger("[CC] %s picture rate is %.2f fps, cc_count %d", ci.log, fps, n)
+				// How much of a pair each picture is due. Line 21 runs at its
+				// own rate and not the video's, so on a sixty picture stream
+				// every second picture carries one and the rest carry none.
+				ci.ccPerAU = cc608NominalRate / fps
+				if ci.ccPerAU > 1 {
+					ci.ccPerAU = 1
+				}
+				// What the encoder pays attention to is the rate pairs actually
+				// leave at, which is now the format's rate rather than the
+				// picture rate. Measured independently as well; this is so the
+				// first second is right too.
+				ci.enc.setPictureRate(fps * ci.ccPerAU)
+				logger("[CC] %s picture rate is %.2f fps, cc_count %d, line 21 at %.2f pairs a second",
+					ci.log, fps, n, fps*ci.ccPerAU)
 			}
 		}
 	}
 	ci.lastPTS = pts
+}
+
+// sendsCC reports whether this picture carries a line 21 pair.
+//
+// Line 21 is a 29.97 pair per second channel and it does not become a 60 pair
+// per second channel because the video is sixty pictures a second. A pair was
+// being put in every picture, so a sixty picture stream carried the caption
+// channel at twice its own rate — which decoders disagree about, and that
+// disagreement is what made the same recording look and pace differently in two
+// players. One consumed everything as it arrived; one clocked line 21 at the
+// rate the format defines and could not.
+//
+// So the pairs are metered out at the format's rate. One per picture at 29.97,
+// one in every two at 59.94, and the fraction carried between pictures so it
+// does not drift. A picture with none due says so — the two line 21 slots are
+// still in the construct, marked invalid, because the count is fixed by the
+// picture rate and only the contents vary.
+func (ci *captionInjector) sendsCC() bool {
+	ci.ccOwed += ci.ccPerAU
+	if ci.ccOwed < 1 {
+		return false
+	}
+	ci.ccOwed -= 1
+	return true
 }
 
 // packetize turns a PES packet back into transport packets on the video PID.
