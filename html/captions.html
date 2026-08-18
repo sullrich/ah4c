@@ -187,11 +187,18 @@
                 <label for="style">Presentation</label>
                 <select id="style" onchange="styleFields()">
                     <option value="rollup2">Roll-up, 2 lines</option>
-                    <option value="rollup3">Roll-up, 3 lines</option>
+                    <option value="rollup3">Roll-up, 3 lines (recommended)</option>
                     <option value="rollup4">Roll-up, 4 lines</option>
                     <option value="box2">Box, 2 lines</option>
                 </select>
             </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                <b>Roll-up</b> writes words as they are recognized and scrolls finished lines up. Nothing is
+                held back, so it is the closest to the sound. Use it unless you have a reason not to.<br>
+                <b>Box</b> shows a whole caption at once and replaces it whole, the way captions on recorded
+                programs look. It has to wait for enough of a sentence to show, and for the caption before it
+                to be read, so it always runs further behind. Choose it for the look, not for the timing.
+            </p>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="styleHelp"></p>
             <div class="field-row" id="phraseRow" style="display:none;">
                 <label for="phrase">Sentence length</label>
@@ -563,12 +570,8 @@ function render() {
 function styleFields() {
     const box = document.getElementById('style').value.startsWith('box');
     document.getElementById('styleHelp').innerHTML = box
-        ? `Each caption appears complete and stays until the next one replaces it. Nothing types and nothing
-           scrolls, which is how captions on recorded programs look. A long sentence becomes two captions,
-           and the second waits for the first to be read, so a box runs a little behind a roll-up. A model
-           that transcribes as it listens waits for the end of a sentence as well.`
-        : `Words appear as they are recognized and a finished line scrolls up, staying on screen while the
-           next one is written underneath. This is how live captioning looks.`;
+        ? `Set to Roll-up, 3 lines to go back to the faster one.`
+        : '';
     document.getElementById('speedHelp').innerHTML = box
         ? `How fast you read, which is what decides how long each caption stays: a short one clears quickly
            and a full one is given the time it needs. Lower it if captions are replaced before you finish
