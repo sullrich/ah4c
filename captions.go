@@ -2652,18 +2652,23 @@ type cea608 struct {
 	// that carriage return are still owed; see next() for what they pace.
 	lastCR   time.Time
 	crCopies int
-	// box replaces the whole caption between phrases instead of scrolling one
-	// row into the next. lastBlock is when it was last replaced and blockCopies
-	// how many repeats of that erase are still owed, the same bookkeeping the
-	// roll keeps for its carriage return.
-	box         bool
+	// popon writes the caption where it cannot be seen and then shows it whole,
+	// instead of typing it onto the screen as it arrives. held is the words of
+	// the caption being assembled, which have not been sent anywhere yet.
+	// lastBlock is when a caption was last shown and blockCopies how many
+	// repeats of that command are still owed, the same bookkeeping the roll
+	// keeps for its carriage return.
+	popon bool
+	held  []string
+	// popPending is how many finished captions are queued but not yet shown.
+	popPending  int
 	lastBlock   time.Time
 	blockCopies int
-	rows     byte // ccRU2 / ccRU3 / ccRU4
-	started  bool
-	col      int
-	maxCol   int
-	upper    bool
+	rows        byte // ccRU2 / ccRU3 / ccRU4
+	started     bool
+	col         int
+	maxCol      int
+	upper       bool
 	// drains counts calls to next since drainFrom, which is how fast this
 	// channel actually clears its queue: one entry leaves per call, whatever
 	// the picture rate or the caption packet layout upstream turns out to be.
@@ -2760,14 +2765,14 @@ func captionLag(m captionModel, cfg captionConfig) float64 {
 
 func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float64) *cea608 {
 	rows := byte(ccRU3)
-	box := false
+	popon := false
 	switch style {
 	case "rollup2":
 		rows = ccRU2
 	case "rollup4":
 		rows = ccRU4
 	case "box2":
-		rows, box = ccRU2, true
+		popon = true
 	}
 	n := 3
 	switch rows {
@@ -2777,10 +2782,11 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 		n = 4
 	}
 	gap := rollGapFor(onScreen, n)
-	if box {
-		// A roll divides the wanted time on screen by the rows because a line
-		// survives that many rolls. A box does not divide it: the caption is
-		// replaced whole, so the whole of it is what the setting asks for.
+	if popon {
+		// A roll divides the wanted time on screen by the rows, because a line
+		// survives that many rolls. A box does not divide it: the caption goes
+		// up whole and comes down whole, so the whole of it is what the setting
+		// asks for.
 		//
 		// Floored at the guidance for two lines rather than for one, because
 		// two lines is what a box puts up.
@@ -2789,7 +2795,7 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 			gap = min
 		}
 	}
-	return &cea608{rows: rows, box: box, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
+	return &cea608{rows: rows, popon: popon, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
 		minRollGap: gap}
 }
 
@@ -2801,15 +2807,19 @@ func (c *cea608) ctrl(code byte) {
 
 // begin puts the decoder into roll-up mode on the bottom row.
 //
-// Box style clears the display first. Starting is not always starting from
-// nothing: the backlog cull below throws away the queue and starts again, and
-// whatever the decoder was showing when that happened is still on the screen.
-// A roll scrolls it away in its own time; a box has to erase it, or the old
-// caption sits beside the new one. Erasing a blank display costs a control code
-// and does nothing, which is what it does at a genuine stream start.
+// Box style has no mode to set here: every caption states its own, and the
+// display is cleared instead. Starting is not always starting from nothing —
+// the backlog cull above throws away the queue and starts again, and whatever
+// the decoder was showing when that happened is still on the screen. A roll
+// scrolls it away in its own time; a box has to erase it. Erasing a blank
+// display costs a control code and does nothing, which is what it does at a
+// genuine stream start.
 func (c *cea608) begin() {
-	if c.box {
+	if c.popon {
 		c.ctrl(ccEDM)
+		c.started = true
+		c.col = 0
+		return
 	}
 	c.mode()
 	c.ctrl(ccCR)
@@ -2840,29 +2850,115 @@ func (c *cea608) newRow() {
 	c.col = 0
 }
 
-// newBlock starts the next caption, which is a different thing from starting
-// the next row.
+// wrap608 lays words out into caption rows of at most maxCol characters.
 //
-// Those two are the same act in a roll-up and are not in a box. A roll-up has
-// one hand-off and one command for it: the carriage return scrolls what is
-// there up a row, which is both how a caption ends and how a wrapped line gets
-// somewhere to go. The line just read stays on the screen underneath the new
-// one, which is the style.
+// A separate function from the roll-up's wrapping because the two need
+// different things at different times. A roll-up wraps as it writes, because it
+// is writing to the screen and the screen is what it is. A box has to know the
+// shape of the whole caption before it sends any of it: the rows are addressed
+// by number, so which row a word lands on has to be decided first.
 //
-// A box replaces the caption instead. Nothing is meant to survive into the next
-// one, so the hand-off between captions erases the display and starts again at
-// the bottom row, while a wrap inside a caption still rolls — that is how the
-// second line of the pair gets its room.
+// A word longer than a row is broken rather than dropped. Nothing in English
+// runs to thirty-two characters, but a caption is not always English and a
+// silently missing word is worse than an ugly one.
+func wrap608(words []string, maxCol int) []string {
+	var lines []string
+	cur := ""
+	for _, w := range words {
+		for len(w) > maxCol {
+			if cur != "" {
+				lines = append(lines, cur)
+				cur = ""
+			}
+			lines = append(lines, w[:maxCol])
+			w = w[maxCol:]
+		}
+		switch {
+		case cur == "":
+			cur = w
+		case len(cur)+1+len(w) <= maxCol:
+			cur += " " + w
+		default:
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
+// popPages is how many rows of caption may wait for an utterance to end.
 //
-// So the two hand-offs are separated. This one is between captions; the
-// newRow call inside the wrap is within one, and stays a roll for both styles.
-func (c *cea608) newBlock() {
-	if !c.box {
-		c.newRow()
+// A box cannot show anything until the caption is complete, and a streaming
+// model only says a phrase is complete when the speaker stops. Somebody talking
+// without a break would otherwise hold every word until they did. Two captions'
+// worth is the bound: past it the earlier rows go up on their own, which is
+// what a broadcast encoder does with a long sentence anyway.
+const popPages = 4
+
+// pac addresses a row, so the next characters land on it.
+//
+// Row 15 is the bottom of the screen and row 14 the line above it. The two
+// share a first byte and are told apart by the second: 0x40 to 0x5F selects row
+// 14 and 0x60 to 0x7F row 15, and within either range the low bits carry the
+// color, the indent and the underline. 0x50 and 0x70 are the same choice in
+// each — white, no italics, no underline, indent zero — which is why they
+// differ by the one bit that picks the row.
+//
+// Sent twice, like every other control pair: a decoder that catches the repeat
+// acts once, and the repeat is what survives a dropped frame.
+func (c *cea608) pac(row int) {
+	b := byte(0x70)
+	if row == 14 {
+		b = 0x50
+	}
+	c.queue = append(c.queue,
+		[2]byte{odd608(ccCtrlCC1), odd608(b)},
+		[2]byte{odd608(ccCtrlCC1), odd608(b)})
+}
+
+// showPopon writes one caption where it cannot be seen and then shows it whole.
+//
+// This is the difference between the two styles and it is the whole of it. A
+// roll-up writes to the screen, so the viewer watches the words arrive one at a
+// time and watches the line above scroll away. A box writes to the decoder's
+// other memory, which is not on screen, and then swaps the two: the caption
+// appears finished, all of it at once, and stays until the next swap replaces
+// it. It is what broadcast captioning does on anything not being typed live.
+//
+// Four commands say it. RCL puts the decoder in this mode and points writing at
+// the memory nobody can see; ENM clears that memory first, so a caption cannot
+// inherit the end of an older one; the rows are addressed and written; EOC
+// swaps. Nothing is visible between the first three and the fourth, which is
+// the point — and it is why the pacing meter has no business here, because
+// there is nothing to pace when there is nothing to watch. What the meter does
+// for a roll-up, the dwell on EOC does for this: it decides how long a finished
+// caption stays up, which is the only timing a viewer of this style can see.
+func (c *cea608) showPopon(lines []string) {
+	if len(lines) == 0 {
 		return
 	}
-	c.ctrl(ccEDM)
-	c.mode()
+	if len(lines) > 2 {
+		lines = lines[:2]
+	}
+	c.ctrl(ccRCL)
+	c.ctrl(ccENM)
+	row := 15
+	if len(lines) == 2 {
+		row = 14
+	}
+	for _, line := range lines {
+		c.pac(row)
+		c.col = 0
+		for _, r := range line {
+			c.writeRune(r)
+		}
+		row++
+	}
+	c.ctrl(ccEOC)
+	c.popPending++
 	c.col = 0
 }
 
@@ -2905,9 +3001,24 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
+		c.popPending = 0
 	}
 	if !c.started {
 		c.begin()
+	}
+	if c.popon {
+		// Held rather than written. A box shows a caption complete or not at
+		// all, so there is nothing to send until the phrase is finished — and
+		// for a streaming model, which finalizes a few words at a time, that is
+		// the end of the utterance rather than the end of every arrival.
+		c.lastText = time.Now()
+		c.held = append(c.held, strings.Fields(text)...)
+		if breakAfter {
+			c.flushPopon()
+		} else if lines := wrap608(c.held, c.maxCol); len(lines) >= popPages {
+			c.flushPopon()
+		}
+		return
 	}
 	// The break owed by the previous phrase is taken now, with this phrase's
 	// words behind it, and not when that phrase ended.
@@ -2921,7 +3032,7 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	// how the new line gets its row, and that is all this is.
 	if c.pendingBreak {
 		c.pendingBreak = false
-		c.newBlock()
+		c.newRow()
 	}
 	c.lastText = time.Now()
 	for _, w := range strings.Fields(text) {
@@ -2942,6 +3053,27 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	if breakAfter {
 		// Owed, not taken: the next phrase collects it on the way in.
 		c.pendingBreak = true
+	}
+}
+
+// flushPopon sends everything held as one caption, or as several when it does
+// not fit on two rows.
+//
+// A sentence longer than sixty-four characters becomes two captions shown one
+// after the other, which is how a broadcast encoder handles the same thing.
+// Each of them is a caption in its own right and waits out its own time on
+// screen, because a page nobody could read is not a page that was shown.
+//
+// Called with the lock held.
+func (c *cea608) flushPopon() {
+	lines := wrap608(c.held, c.maxCol)
+	c.held = c.held[:0]
+	for i := 0; i < len(lines); i += 2 {
+		end := i + 2
+		if end > len(lines) {
+			end = len(lines)
+		}
+		c.showPopon(lines[i:end])
 	}
 }
 
@@ -3022,6 +3154,18 @@ const ccCharsPerPair = 2.0
 // could sit just under that threshold for ever — captions a quarter of a minute
 // late, with nothing in the design to drain them.
 func (c *cea608) waiting() bool {
+	// A box is behind when captions are queued behind the one on screen, and
+	// that is the only reading of it that means anything here.
+	//
+	// The character count below asks how much reading time is waiting, which
+	// assumes the queue is text on its way to the screen. For a box it is not:
+	// a whole caption sits in the queue and then appears at once, so a single
+	// ordinary two line caption measures as five seconds of reading and would
+	// declare a backlog every time — standing the dwell down permanently and
+	// flipping captions as fast as they were recognized.
+	if c.popon {
+		return c.popPending > 1
+	}
 	if c.maxLag <= 0 {
 		return len(c.queue) > 2
 	}
@@ -3200,7 +3344,7 @@ func (c *cea608) next() [2]byte {
 	// A pair whose second byte is padding carries one character; any other
 	// carries two. Control codes are not charged at all: they are not words,
 	// and withholding inside a doubled pair splits it and rolls twice.
-	if c.maxLag > 0 && len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
+	if c.maxLag > 0 && !c.popon && len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
 		cost := 1.0
 		if c.queue[0][1] != odd608(cc608Null) {
 			cost = 2
@@ -3213,12 +3357,6 @@ func (c *cea608) next() [2]byte {
 	if len(c.queue) == 0 {
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
-			// This erase is handed out below without passing the dwell, so the
-			// dwell is told about it here. Otherwise box style meets the second
-			// copy of a pair whose first copy it never saw, and can withhold
-			// it — which splits a doubled control code, the one thing this
-			// queue must never do.
-			c.lastBlock, c.blockCopies = time.Now(), 1
 			c.started = false
 			c.col = 0
 			c.lastText = time.Time{}
@@ -3230,22 +3368,21 @@ func (c *cea608) next() [2]byte {
 		}
 		return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 	}
-	// The hand-off between captions waits for the dwell, so that what is on the
+	// The moment a caption changes waits for the dwell, so that what is on the
 	// screen has been there long enough to read. Which code that is depends on
-	// the style: a roll-up hands off with a carriage return, a box with an
-	// erase. Either one's doubled copy is exempt — control codes go out twice
-	// back to back, and a decoder is only guaranteed to drop the repeat when it
-	// arrives as one.
+	// the style: a roll-up changes the screen with a carriage return, a box
+	// with the swap that shows what it has loaded. Either one's doubled copy is
+	// exempt — control codes go out twice back to back, and a decoder is only
+	// guaranteed to drop the repeat when it arrives as one.
 	//
-	// A box also emits carriage returns, and they are deliberately not held.
-	// Those are the wrap from the first line of a caption to its second, and
-	// time on screen is a promise about a finished caption rather than about
-	// how soon its own second line may follow its first. Holding them would
-	// also push the erase that follows further out than the setting asked for,
-	// because the caption cannot be replaced until it has finished arriving.
+	// Everything a box sends before that swap goes out at the channel's own
+	// speed and is held by nothing, which is the point of the style: the rows
+	// are being written where they cannot be seen, so there is no reason to
+	// spread them out and every reason not to. The caption is loaded and ready,
+	// and the only thing waiting is the instant it appears.
 	if p := c.queue[0]; p[0] == odd608(ccCtrlCC1) {
 		switch {
-		case c.box && p[1] == odd608(ccEDM):
+		case c.popon && p[1] == odd608(ccEOC):
 			switch {
 			case c.blockCopies > 0:
 				c.blockCopies--
@@ -3254,8 +3391,11 @@ func (c *cea608) next() [2]byte {
 			default:
 				c.lastBlock = time.Now()
 				c.blockCopies = 1
+				if c.popPending > 0 {
+					c.popPending--
+				}
 			}
-		case !c.box && p[1] == odd608(ccCR):
+		case !c.popon && p[1] == odd608(ccCR):
 			switch {
 			case c.crCopies > 0:
 				c.crCopies--
@@ -5301,7 +5441,7 @@ const telemetryWindow = 100
 // backend and the machine, and there is no figure that is true of everybody's —
 // so the page shows this one or shows nothing.
 type recognizerReport struct {
-	Measured bool    `json:"measured"`
+	Measured bool `json:"measured"`
 	// Streaming says which path took the measurement, because the two paths
 	// can answer different questions. A batch recognizer has a queue, so it
 	// can say how long a phrase waited; a continuous one has no queue and
@@ -5309,9 +5449,9 @@ type recognizerReport struct {
 	// read as "keeping up perfectly" when it is really "not a thing here".
 	Streaming bool    `json:"streaming"`
 	Speed     float64 `json:"speed"`
-	Phrases  float64 `json:"phrases"`
-	Backend  string  `json:"backend"`
-	AgeSec   int     `json:"ageSec"`
+	Phrases   float64 `json:"phrases"`
+	Backend   string  `json:"backend"`
+	AgeSec    int     `json:"ageSec"`
 	// Streams is how many captioned streams were feeding this recognizer when
 	// the figure was taken. Reported, never used to derive anything: measuring
 	// four streams at the same speed as one is what proved the old arithmetic
