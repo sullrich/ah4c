@@ -2659,9 +2659,14 @@ type cea608 struct {
 	// repeats of that command are still owed, the same bookkeeping the roll
 	// keeps for its carriage return.
 	popon bool
-	// boxRows is how many rows a box caption may fill. It decides how much of a
-	// sentence fits before the rest has to become a second caption, and a
-	// second caption cannot appear until the first has been read.
+	// boxRows is how many rows a box caption may fill.
+	//
+	// Two, and it is not a setting. A caption of more than two lines is not a
+	// box — every published style guide caps it there, and the reason is that
+	// three lines cover enough of the picture to be worth avoiding. It decides
+	// how much of a sentence fits before the rest has to become a second
+	// caption, so it is tempting to raise when a box runs behind, and raising
+	// it buys the time back by breaking the style.
 	boxRows int
 	held    []string
 	// popPending is how many finished captions are queued but not yet shown,
@@ -2782,8 +2787,6 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 		rows = ccRU4
 	case "box2":
 		popon, boxRows = true, 2
-	case "box3":
-		popon, boxRows = true, 3
 	}
 	n := 3
 	switch rows {
