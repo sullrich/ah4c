@@ -2943,6 +2943,11 @@ func popDwell(chars, rows int, pace float64, want time.Duration) popTiming {
 type popTiming struct {
 	want  time.Duration
 	floor time.Duration
+	// last marks the final page of a phrase. A sentence too long for two rows
+	// becomes several captions, and those are not a backlog — they are one
+	// thing being said. Counting them as one is what stops a sentence from
+	// hurrying itself.
+	last bool
 }
 
 // popPages is how many rows of caption may wait for an utterance to end.
@@ -3019,9 +3024,18 @@ func (c *cea608) showPopon(lines []string) {
 		chars += len([]rune(line))
 	}
 	c.popDwells = append(c.popDwells, popDwell(chars, len(lines), c.pace, c.minRollGap))
-	c.popPending++
 	c.col = 0
 }
+
+// ccPopLinger is how long a box caption may stay past its own reading time when
+// nothing has arrived to replace it.
+//
+// Nothing rules on this number, so it is small on purpose. Its whole job is to
+// keep the screen from blanking in the gap between two sentences of the same
+// paragraph, which is a fraction of a second of silence rather than a pause.
+// Longer and the caption is stale; shorter and the display flickers between
+// every sentence.
+const ccPopLinger = time.Second
 
 // ccMaxBacklogSec is the most unshown caption data we will hold, measured as
 // the time it would take to air. Reaching it means recognition has outrun the
@@ -3129,6 +3143,9 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 func (c *cea608) flushPopon() {
 	lines := wrap608(c.held, c.maxCol)
 	c.held = c.held[:0]
+	if len(lines) == 0 {
+		return
+	}
 	for i := 0; i < len(lines); i += 2 {
 		end := i + 2
 		if end > len(lines) {
@@ -3136,6 +3153,15 @@ func (c *cea608) flushPopon() {
 		}
 		c.showPopon(lines[i:end])
 	}
+	// One phrase, one thing waiting — not one per page.
+	//
+	// The pages of a long sentence are queued together, so counting pages made
+	// every long sentence look like a backlog to itself: the moment the second
+	// page was queued the first was declared late and cut to its floor. Half a
+	// sentence flashing past while the rest of it waited is not a display
+	// catching up, it is a display rushing something nothing was behind.
+	c.popDwells[len(c.popDwells)-1].last = true
+	c.popPending++
 }
 
 // writeRune appends a character, pairing it with the previous one where it can.
@@ -3416,6 +3442,30 @@ func (c *cea608) next() [2]byte {
 		c.credit -= cost
 	}
 	if len(c.queue) == 0 {
+		// A box caption comes down when its time is up.
+		//
+		// A roll-up leaves its lines where they are because the next roll will
+		// take them, and until then they are the most recent thing said. A box
+		// has no next roll: the caption sits there until something replaces it,
+		// so through a pause in the talking it sits there for the length of the
+		// pause — a sentence from half a minute ago presented as though it were
+		// current, and then a burst when the talking starts again. That is the
+		// half of the pacing that hangs.
+		//
+		// So it is taken down once it has been readable for as long as it asked
+		// for, with a moment's grace in case the next caption is a breath away.
+		// Broadcast pop-on has an out time for every caption; this is that.
+		if c.popon && c.started && !c.lastBlock.IsZero() &&
+			time.Since(c.lastBlock) > c.curDwell.want+ccPopLinger {
+			c.ctrl(ccEDM)
+			c.started = false
+			c.col = 0
+			c.lastBlock = time.Time{}
+			c.lastText = time.Time{}
+			p := c.queue[0]
+			c.queue = c.queue[1:]
+			return p
+		}
 		if c.started && !c.lastText.IsZero() && time.Since(c.lastText) > ccStaleAfter {
 			c.ctrl(ccEDM)
 			c.started = false
@@ -3456,9 +3506,9 @@ func (c *cea608) next() [2]byte {
 				// waits, because that is how long this one is on the screen.
 				if len(c.popDwells) > 0 {
 					c.curDwell, c.popDwells = c.popDwells[0], c.popDwells[1:]
-				}
-				if c.popPending > 0 {
-					c.popPending--
+					if c.curDwell.last && c.popPending > 0 {
+						c.popPending--
+					}
 				}
 			}
 		case !c.popon && p[1] == odd608(ccCR):
