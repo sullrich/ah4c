@@ -2673,9 +2673,11 @@ type cea608 struct {
 	// speed setting.
 	minRollGap time.Duration
 	// credit is the pacing allowance, in characters, accrued per picture, and
-	// pace the rate it accrues at.
+	// pace the rate it accrues at. maxLag is how much unread text may wait
+	// before the meter stands aside.
 	credit float64
 	pace   float64
+	maxLag float64
 	// pendingBreak is a carriage return the last phrase finished with and this
 	// one has yet to spend. See pushText.
 	pendingBreak bool
@@ -2738,7 +2740,18 @@ func (c *cea608) countDrain() {
 	}
 }
 
-func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
+// captionLag is how much unread text the meter may hold for this model.
+func captionLag(m captionModel, cfg captionConfig) float64 {
+	if m.Streaming {
+		return ccLagStreaming
+	}
+	if w := phraseWindowFor(quirksFor(m), cfg); w > 0 {
+		return w
+	}
+	return ccLagFallback
+}
+
+func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float64) *cea608 {
 	rows := byte(ccRU3)
 	switch style {
 	case "rollup2":
@@ -2753,7 +2766,7 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int) *cea608 {
 	case ccRU4:
 		n = 4
 	}
-	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm),
+	return &cea608{rows: rows, maxCol: 32, upper: upper, pace: paceFor(wpm), maxLag: maxLag,
 		minRollGap: rollGapFor(onScreen, n)}
 }
 
@@ -2950,13 +2963,38 @@ const ccCharsPerPair = 2.0
 // could sit just under that threshold for ever — captions a quarter of a minute
 // late, with nothing in the design to drain them.
 func (c *cea608) waiting() bool {
+	if c.maxLag <= 0 {
+		return len(c.queue) > 2
+	}
 	if c.pace <= 0 {
 		return len(c.queue) > 2
 	}
-	return float64(len(c.queue))*ccCharsPerPair/c.pace > ccMaxLagSec
+	return float64(len(c.queue))*ccCharsPerPair/c.pace > c.maxLag
 }
 
-const ccMaxLagSec = 6.0
+// The tolerance is the shape of the model, not a constant.
+//
+// A phrase model hands over a whole sentence at once, so the meter must be
+// allowed to hold roughly one phrase in order to spread it — that is the entire
+// job. A streaming model hands over words as they are spoken, so nothing needs
+// spreading and every queued character is pure lag on a model chosen precisely
+// for not having any. Giving both the same six seconds put Nemotron six seconds
+// behind the picture to smooth a burst it never produces.
+// Zero turns the meter off, which is what a streaming model wants.
+//
+// The meter exists to spread a burst. A phrase model hands over a whole
+// sentence at once and the words have to be let onto the screen at reading
+// speed or they land in a heap; that is the entire job. A streaming model hands
+// over words as it hears them, already at the speed they were spoken, so there
+// is nothing to spread and every character the meter holds is delay added to a
+// model chosen for not having any.
+//
+// The dwell still applies either way: a finished line rests before it rolls
+// whichever model wrote it.
+const (
+	ccLagStreaming = 0
+	ccLagFallback  = 4.0
+)
 
 // cc608NominalRate is the pair rate assumed until the channel has been running
 // long enough to measure its own. Field 1 of CEA-608 carries one pair per
@@ -3103,7 +3141,7 @@ func (c *cea608) next() [2]byte {
 	// A pair whose second byte is padding carries one character; any other
 	// carries two. Control codes are not charged at all: they are not words,
 	// and withholding inside a doubled pair splits it and rolls twice.
-	if len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
+	if c.maxLag > 0 && len(c.queue) > 0 && !c.headIsControl() && !c.waiting() {
 		cost := 1.0
 		if c.queue[0][1] != odd608(cc608Null) {
 			cost = 2
@@ -6585,7 +6623,7 @@ type captionEngine struct {
 func newCaptionEngine(cfg captionConfig, m captionModel, label string) (*captionEngine, error) {
 	e := &captionEngine{
 		quirks:  quirksFor(m),
-		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM),
+		enc:     newCEA608(cfg.Style, cfg.Uppercase, cfg.OnScreenSec, cfg.SpeedWPM, captionLag(m, cfg)),
 		label:   label,
 		cfg:     cfg,
 		audioCh: make(chan []byte, 64),
