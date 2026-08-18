@@ -92,12 +92,21 @@ var canaryFlash = captionModel{
 // hallucination dataset, collected against Whisper, which is to say it is a
 // list of what AED models write when there is nothing to write.
 //
-// Windows because there is no reason to withhold the choice. The trade is the
-// same one it is for Cohere — longer is more of the sentence in hand before it
-// is transcribed, and a caption that cannot appear until the sentence has
-// finished — and this model leaves enough graphics chip spare to spend on it.
+// No sentence length choice, and it is not an oversight.
+//
+// One was added here by copying Cohere's list across, on the reasoning that
+// there was no reason to withhold the choice. There was: the list is what makes
+// a saved sentence length apply. phraseWindowFor takes the configured value
+// only when the model's own list contains it, so a model with no list ignores
+// whatever is saved and runs its own window — and the moment this one had a
+// list, a length chosen for Cohere started driving a model it was never chosen
+// for. It showed up as the accuracy falling apart.
+//
+// Cohere offers the choice because its card discusses the trade and its numbers
+// were measured across it. Nothing of the kind is published for this one, so
+// what would be on offer is a range of untested operating points with the
+// tested one buried among them.
 var canaryQuirks = modelQuirks{
 	PhraseWindow: modelDefaults.PhraseWindow,
-	Windows:      []float64{2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0},
 	Suppress:     cohereSuppresses,
 }
