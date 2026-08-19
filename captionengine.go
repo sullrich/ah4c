@@ -390,10 +390,17 @@ func initTranscribe(variant string) error {
 		// on a busy channel is a line a second, for ever.
 		txLogSet(txLogCallback(), nil)
 		// Ask the engine for its per-stage timing breakdown; the log callback
-		// samples it every half minute. This is how a slow stage gets named
-		// by the engine itself instead of inferred from the outside.
+		// samples it every half minute. This is how a slow stage gets named by
+		// the engine itself instead of inferred from the outside, and it is
+		// where the figures that decided the phrase cut came from.
+		//
+		// The flag takes the families to profile and it used to name one, which
+		// put a model's name in the engine binding — the profiling stopped
+		// meaning anything the day the default model changed, and nobody would
+		// have noticed. Every family this program can load is named instead,
+		// from the catalog, so it cannot go stale.
 		if os.Getenv("TRANSCRIBE_PERF_DEBUG") == "" {
-			os.Setenv("TRANSCRIBE_PERF_DEBUG", "cohere")
+			os.Setenv("TRANSCRIBE_PERF_DEBUG", profiledFamilies())
 		}
 		// The conv-dispatch overrides were tried here and measured: the
 		// per-utterance encoder time did not move. The engine's own

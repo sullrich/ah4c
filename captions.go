@@ -547,21 +547,6 @@ func mustFindModel(key string) captionModel {
 	return m
 }
 
-// quirksFor is the single place a model's name is turned into its handling.
-func quirksFor(m captionModel) modelQuirks {
-	switch m.Key {
-	case cohereTranscribe.Key:
-		return cohereQuirks
-	case canaryFlash.Key:
-		return canaryQuirks
-	case nemotronStreaming.Key:
-		return nemotronQuirks
-	case parakeetTDT.Key:
-		return parakeetQuirks
-	}
-	return modelDefaults
-}
-
 // isSoundEventTag reports whether a phrase is a model describing a noise
 // rather than repeating a word. Shape rather than words, because the words are
 // endless and a list of them would be out of date by the next advertisement: a

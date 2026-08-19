@@ -73,6 +73,21 @@ var captionModelCatalog = []captionModel{
 	parakeetTDT,
 }
 
+// quirksFor is the single place a model's name is turned into its handling.
+func quirksFor(m captionModel) modelQuirks {
+	switch m.Key {
+	case cohereTranscribe.Key:
+		return cohereQuirks
+	case canaryFlash.Key:
+		return canaryQuirks
+	case nemotronStreaming.Key:
+		return nemotronQuirks
+	case parakeetTDT.Key:
+		return parakeetQuirks
+	}
+	return modelDefaults
+}
+
 // captionLanguageNames turns the catalog's ISO codes into something readable in
 // the language picker.
 var captionLanguageNames = map[string]string{
@@ -185,7 +200,7 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:     false,
-		Model:       "canary-180m",
+		Model:       canaryFlash.Key,
 		Language:    "en",
 		Style:       "box2",
 		OnScreenSec: 4,
@@ -302,3 +317,30 @@ func modelInstalled(m captionModel) bool {
 }
 
 // ---------------------------------------------------------------------------
+
+// recommendedModel is the one to use on this machine.
+func recommendedModel() (key, why string) {
+	// Guidance, never a gate: every model runs anywhere, and the page only
+	// says where to start.
+	return canaryFlash.Key, "The place to start: within a point of the most accurate model here at a sixth of the cost, with one copy shared by every tuner. Cohere is more accurate again and asks a great deal more of the graphics chip."
+}
+
+// profiledFamilies is the engine families to ask for a timing breakdown,
+// derived from the catalog so it cannot name a model that is no longer here or
+// miss one that is.
+//
+// The engine takes the family rather than the model, and a family is the first
+// word of the model's file name — cohere, canary, nemotron, parakeet.
+func profiledFamilies() string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range captionModelCatalog {
+		fam := strings.ToLower(strings.SplitN(filepath.Base(m.File), "-", 2)[0])
+		if fam == "" || seen[fam] {
+			continue
+		}
+		seen[fam] = true
+		out = append(out, fam)
+	}
+	return strings.Join(out, ",")
+}

@@ -181,13 +181,6 @@ func memoryWarning(cfg captionConfig) string {
 	return warn
 }
 
-// recommendedModel is the one to use on this machine.
-func recommendedModel() (key, why string) {
-	// Guidance, never a gate: every model runs anywhere, and the page only
-	// says where to start.
-	return "canary-180m", "The place to start: within a point of the most accurate model here at a sixth of the cost, with one copy shared by every tuner. Cohere is more accurate again and asks a great deal more of the graphics chip."
-}
-
 // memoryNote describes what a model costs to run.
 //
 // No model shares one copy between two streams that are both transcribing. The
