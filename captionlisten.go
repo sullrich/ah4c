@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 // Listening
@@ -103,7 +104,8 @@ type captionEngine struct {
 	// tail is the end of the phrase last shown. A forced cut carries a moment
 	// of audio forward so it does not slice through a word, and that moment is
 	// then recognized twice, so the repeat is trimmed against this.
-	tail []string
+	tail          []string
+	missedOverlap int
 }
 
 // newCaptionEngine returns immediately and finishes starting in the background.
@@ -2114,6 +2116,48 @@ func (e *captionEngine) maxOverlapWords() int {
 	return n
 }
 
+// ccNormWord reduces a word to what two renderings of the same speech agree on:
+// letters and digits, folded. Punctuation and capitals are exactly what differ
+// between the first rendering and the second.
+func ccNormWord(w string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(w) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ccOverlapMatches reports whether the end of what was shown and the start of
+// what came back are the same speech.
+//
+// Not word for word. The carried audio is transcribed a second time and a model
+// that commits tokens as it goes does not have to agree with itself: a word can
+// split differently, a comma can appear, a hesitation can be heard as a word.
+// Requiring every word to match is why the carry had to be turned off — one
+// disagreement anywhere and the whole context went on screen.
+//
+// Short runs still have to match exactly. A single word tolerating a single
+// mismatch matches everything, and trimming words nobody repeated is worse than
+// showing words twice: one is untidy, the other is speech that never appears.
+func ccOverlapMatches(tail, head []string) bool {
+	n := len(tail)
+	if n == 0 || n != len(head) {
+		return false
+	}
+	bad := 0
+	for i := range tail {
+		if ccNormWord(tail[i]) != ccNormWord(head[i]) {
+			bad++
+		}
+	}
+	if n < 4 {
+		return bad == 0
+	}
+	return bad*4 <= n
+}
+
 func (e *captionEngine) trimOverlap(text string, carried bool) string {
 	words := strings.Fields(text)
 	if len(words) == 0 || len(e.tail) == 0 || !carried {
@@ -2122,17 +2166,20 @@ func (e *captionEngine) trimOverlap(text string, carried bool) string {
 	}
 	best := 0
 	for n := min(len(e.tail), min(len(words), e.maxOverlapWords())); n > 0; n-- {
-		match := true
-		for i := 0; i < n; i++ {
-			if !strings.EqualFold(strings.Trim(e.tail[len(e.tail)-n+i], ".,!?;:"),
-				strings.Trim(words[i], ".,!?;:")) {
-				match = false
-				break
-			}
-		}
-		if match {
+		if ccOverlapMatches(e.tail[len(e.tail)-n:], words[:n]) {
 			best = n
 			break
+		}
+	}
+	if best == 0 {
+		// Said, because the alternative is silence about text that is about to
+		// appear twice. Audio was carried, so something was repeated; finding
+		// nothing means the two renderings disagreed past what the matcher
+		// allows, and that is worth seeing rather than guessing at.
+		e.missedOverlap++
+		if e.missedOverlap == 1 || e.missedOverlap%25 == 0 {
+			logger("[CC] %s could not find the carried words in what came back (%d so far); some may be on screen twice",
+				e.label, e.missedOverlap)
 		}
 	}
 	words = words[best:]

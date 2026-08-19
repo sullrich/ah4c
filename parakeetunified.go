@@ -86,20 +86,23 @@ var parakeetUnified = captionModel{
 // costs about the same for a long phrase as a short one, so context is paid for
 // in bytes rather than in time.
 var parakeetUnifiedQuirks = modelQuirks{
-	PhraseWindow: modelDefaults.PhraseWindow,
-	Suppress:     stockHallucination,
-	// No carried context, deliberately. It was confined to Canary and then
-	// handed to this model when it was added, which put every phrase's opening
-	// words on screen a second time.
+	Suppress: stockHallucination,
+	// Carried again, now that the trimmer can take it off.
 	//
-	// The carry only works if the model renders the same audio the same way
-	// twice: trimOverlap takes the repeat off the front by matching words, and
-	// Canary is an encoder-decoder that re-transcribes the whole clip and comes
-	// back with the same words. This one does not — it commits tokens as it
-	// goes, so the second rendering of the carried seconds differs in casing,
-	// in punctuation or in where a word was split, the match fails, and the
-	// context is shown rather than removed.
+	// It was turned off because it put every phrase's opening words on screen
+	// twice: the trimmer matched word for word, and this model commits tokens
+	// as it goes, so its second rendering of the carried seconds disagreed with
+	// its first over a comma or a word split and nothing matched. The matcher
+	// compares letters and digits now and tolerates a disagreement in four.
 	//
-	// What the carry buys is accuracy on a short phrase. What it cost here was
-	// every caption repeating itself, which is worth more than the accuracy.
+	// It is here to pay for the shorter phrase below. A phrase cut sooner is a
+	// caption sooner, and what it costs is the model seeing less of the
+	// sentence — unless the seconds before it come along too, which is exactly
+	// what this is.
+	ContextSec: vadMinPhrase,
+	// Cut sooner. Four seconds was the wait for a phrase to end and it was most
+	// of the distance between the sound and the caption; the model no longer
+	// pays for it, because the context in front of the phrase is what it reads
+	// into rather than the phrase's own length.
+	PhraseWindow: 2.5,
 }
