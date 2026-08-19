@@ -1172,7 +1172,16 @@ const maxInFlight = 4
 // five seconds at thirty pictures a second, which made it two and a half on a
 // sixty-picture stream. The ceiling moved with the format instead of staying
 // where it was meant to be.
-const ccMaxBacklogSec = 5.0
+//
+// Twelve rather than five, because five was measuring the wrong thing. A box
+// queues a whole caption at once — around forty-five pairs for two rows — and a
+// sentence too long for one box queues every page of itself together. Three
+// captions is a second and a half of speech and it was over the ceiling, so an
+// ordinary long sentence could arrive and be thrown away entire. That is not a
+// backlog; it is one thing being said, and the display already knows the
+// difference — it marks the last page of a phrase so the pages are not counted
+// against each other.
+const ccMaxBacklogSec = 12.0
 
 // push queues a complete phrase and closes the line after it.
 func (c *cea608) push(text string) { c.pushText(text, true) }
@@ -1208,6 +1217,12 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 	// the text permanently behind the picture, so drop what has not aired and
 	// start the roll-up again on the current phrase.
 	if float64(len(c.queue)) > ccMaxBacklogSec*c.pairRate() {
+		// Said out loud. This is the one place caption text is discarded after
+		// the recognizer has already produced it, and it did it in silence —
+		// so words that never reached the screen looked exactly like words
+		// nobody said. Every other way a phrase is thrown away says so.
+		logger("[CC] captions dropped %.1fs of text that had not aired yet; the display was too far behind to catch up",
+			float64(len(c.queue))/c.pairRate())
 		c.queue = c.queue[:0]
 		c.started = false
 		c.col = 0
