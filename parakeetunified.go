@@ -88,5 +88,18 @@ var parakeetUnified = captionModel{
 var parakeetUnifiedQuirks = modelQuirks{
 	PhraseWindow: modelDefaults.PhraseWindow,
 	Suppress:     stockHallucination,
-	ContextSec:   vadMinPhrase,
+	// No carried context, deliberately. It was confined to Canary and then
+	// handed to this model when it was added, which put every phrase's opening
+	// words on screen a second time.
+	//
+	// The carry only works if the model renders the same audio the same way
+	// twice: trimOverlap takes the repeat off the front by matching words, and
+	// Canary is an encoder-decoder that re-transcribes the whole clip and comes
+	// back with the same words. This one does not — it commits tokens as it
+	// goes, so the second rendering of the carried seconds differs in casing,
+	// in punctuation or in where a word was split, the match fails, and the
+	// context is shown rather than removed.
+	//
+	// What the carry buys is accuracy on a short phrase. What it cost here was
+	// every caption repeating itself, which is worth more than the accuracy.
 }
