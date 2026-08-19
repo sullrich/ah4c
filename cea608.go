@@ -198,7 +198,10 @@ type cea608 struct {
 	started     bool
 	col         int
 	maxCol      int
-	upper       bool
+	// textCol is how wide a row of words may be, which is not how wide the
+	// grid is. See ccTextCol.
+	textCol int
+	upper   bool
 	// toldRate is the picture rate the injector read out of the stream, used
 	// until this channel has clocked itself.
 	toldRate float64
@@ -343,7 +346,7 @@ func newCEA608(style string, upper bool, onScreen float64, wpm int, maxLag float
 			gap = min
 		}
 	}
-	return &cea608{rows: rows, popon: popon, boxRows: boxRows, maxCol: 32, upper: upper,
+	return &cea608{rows: rows, popon: popon, boxRows: boxRows, maxCol: 32, textCol: ccTextCol, upper: upper,
 		pace: paceFor(wpm), maxLag: maxLag, minRollGap: gap}
 }
 
@@ -807,6 +810,29 @@ func rows608(w []ccWord, cols int) []string {
 	return out
 }
 
+// ccTextCol is the widest row of words this writes, against a grid that is 32
+// columns wide.
+//
+// The grid is the standard's and does not change. What changes is how much of
+// it is filled, and filling it to the edge is what nobody else does: a
+// broadcast captioner leaves the last few columns alone, which is part of why
+// over-the-air captions look right and these did not.
+//
+// It matters because not every player renders on the grid. A television's
+// decoder sizes its font so that 32 columns fit, by definition — the grid is
+// the layout. A browser does not: the Channels web player hands each row to
+// video.js as its own subtitle cue, and video.js picks a font size from the
+// height of the video with no knowledge of columns at all. A row written to
+// the full 32 then does not fit the width it is given, and the last word wraps
+// onto a line of its own — two rows of captions arriving as three lines of
+// text, the third holding one word.
+//
+// Six columns, because that is about a word and a space, and one word is what
+// was seen to overflow. Observed rather than derived: nothing here can measure
+// a font it does not choose, so if a row still wraps this is the number to
+// lower, and lowering it costs only that captions are cut into more of them.
+const ccTextCol = 26
+
 // wrap608 lays words out into caption rows of at most maxCol characters.
 //
 // A separate function from the roll-up's wrapping because the two need
@@ -1248,7 +1274,7 @@ func (c *cea608) flushPopon(final bool) {
 	// guidance puts them in. The other way round — rows filled greedily, then
 	// cut into captions every two rows — makes where a caption ends a side
 	// effect of where the wrapper ran out of room.
-	caps := segment608(held, c.maxCol, c.boxRows)
+	caps := segment608(held, c.textCol, c.boxRows)
 	// The last of them may still be growing, so it is only shown when it is
 	// finished: when the speaker has stopped, when it fills the caption, or
 	// when a sentence ends in it. Otherwise it waits for the next few words.
@@ -1256,7 +1282,7 @@ func (c *cea608) flushPopon(final bool) {
 	shown := len(caps)
 	if !final && shown > 0 {
 		last := caps[shown-1]
-		full := len(rows608(last, c.maxCol)) >= c.boxRows
+		full := len(rows608(last, c.textCol)) >= c.boxRows
 		if !full && !last[len(last)-1].endsSentence {
 			shown--
 		}
@@ -1273,7 +1299,7 @@ func (c *cea608) flushPopon(final bool) {
 	c.held = append(c.held[:0], kept...)
 	var captions int
 	for _, caption := range caps[:shown] {
-		rows := rows608(caption, c.maxCol)
+		rows := rows608(caption, c.textCol)
 		if c.upper {
 			for i := range rows {
 				rows[i] = strings.ToUpper(rows[i])
@@ -1816,13 +1842,13 @@ const ccPopGather = 250 * time.Millisecond
 // characters, which is the losing side of this sum.
 func (c *cea608) minCaptionChars() int {
 	if c.pace <= 0 {
-		return c.maxCol / 2
+		return c.textCol / 2
 	}
 	// Rounded up, not to nearest: rounding down lands a character short of
 	// break-even, which is the one side of this that does not work.
 	n := int(math.Ceil(ccMinOnScreen(1).Seconds() * c.pace))
-	if n > c.maxCol {
-		n = c.maxCol
+	if n > c.textCol {
+		n = c.textCol
 	}
 	return n
 }
