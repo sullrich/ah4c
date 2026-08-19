@@ -61,7 +61,7 @@ var parakeetUnified = captionModel{
 	// first thing to try. The log prints the real-time factor to settle it.
 	File:        "parakeet-unified-en-0.6b-Q4_K_M.gguf",
 	SizeMB:      477,
-	Streaming:   false,
+	Streaming:   true,
 	Punctuation: true,
 	// Cased and punctuated by the model, and English only: its own command line
 	// passes "--language en" and the model does nothing else.
@@ -86,8 +86,13 @@ var parakeetUnified = captionModel{
 // costs about the same for a long phrase as a short one, so context is paid for
 // in bytes rather than in time.
 var parakeetUnifiedQuirks = modelQuirks{
-	PhraseWindow: modelDefaults.PhraseWindow,
-	Suppress:     stockHallucination,
+	// A fifth of a second a feed. The model keeps a running encoder state, so a
+	// feed adds frames to it rather than re-running anything, and feeding more
+	// often is the difference between a word appearing when it settles and up
+	// to a second later.
+	StreamChunkSec: 0.2,
+	PhraseWindow:   modelDefaults.PhraseWindow,
+	Suppress:       stockHallucination,
 	// No carried context, deliberately. It was confined to Canary and then
 	// handed to this model when it was added, which put every phrase's opening
 	// words on screen a second time.
