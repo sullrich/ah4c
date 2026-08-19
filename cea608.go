@@ -1818,7 +1818,6 @@ func (c *cea608) next() [2]byte {
 				return [2]byte{odd608(cc608Null), odd608(cc608Null)}
 			default:
 				c.lastBlock = c.streamNow()
-				c.blockCopies = 1
 				// The caption going up now decides how long the one after it
 				// waits, because that is how long this one is on the screen.
 				if len(c.popDwells) > 0 {
@@ -1827,6 +1826,23 @@ func (c *cea608) next() [2]byte {
 						c.popPending--
 					}
 				}
+				// Erased and then swapped, EDM EDM EOC EOC, which is the order
+				// a broadcast caption file puts them in: the caption on screen
+				// has an out time of its own and the one replacing it an in
+				// time, and the two are written one after the other even when
+				// they coincide. The swap alone was enough for a decoder that
+				// paints as it goes, and that is all this stream was sent to
+				// until it was measured — a box never erased, every caption
+				// went down by being replaced. A decoder that turns captions
+				// into timed cues stamps each one from the last event it saw,
+				// and with nothing but swaps to see, the last event before a
+				// caption was the caption before it. The erase is what gives
+				// the new caption an edge of its own to be stamped from. Both
+				// copies of the swap go out unheld behind the erase: the gap
+				// was served the moment the erase left.
+				c.blockCopies = 2
+				edm := [2]byte{odd608(ccCtrlCC1), odd608(ccEDM)}
+				c.queue = append([][2]byte{edm, edm}, c.queue...)
 			}
 		case !c.popon && p[1] == odd608(ccCR):
 			switch {
@@ -1941,6 +1957,8 @@ func (c *cea608) reset() {
 	c.lastText = time.Time{}
 	c.lastBlock = time.Time{}
 	c.lastCR = time.Time{}
+	c.blockCopies = 0
+	c.crCopies = 0
 }
 
 func (c *cea608) backlog() int {
