@@ -827,11 +827,12 @@ func rows608(w []ccWord, cols int) []string {
 // onto a line of its own — two rows of captions arriving as three lines of
 // text, the third holding one word.
 //
-// Six columns, because that is about a word and a space, and one word is what
-// was seen to overflow. Observed rather than derived: nothing here can measure
-// a font it does not choose, so if a row still wraps this is the number to
-// lower, and lowering it costs only that captions are cut into more of them.
-const ccTextCol = 26
+// Four columns of margin. Six was tried and reads as narrow; four still keeps
+// the last word off a line of its own and leaves the centring something to work
+// with. Observed rather than derived: nothing here can measure a font it does
+// not choose, so this is the number to move if a row wraps again, and moving it
+// costs only that captions are cut into more of them.
+const ccTextCol = 28
 
 // wrap608 lays words out into caption rows of at most maxCol characters.
 //
@@ -901,16 +902,29 @@ func popDwell(chars, rows int, pace float64, want time.Duration) popTiming {
 		d = want
 	}
 	// The floor is how long the caption needs at the fastest anyone should ever
-	// be asked to read, not merely the shortest a caption may legally be. Those
-	// are different numbers and only the second was here: two full rows have a
-	// guidance minimum of a second and a half, which is four hundred words a
-	// minute, and draining a backlog down to that puts captions on the screen
-	// nobody can read. Whichever is longer wins.
+	// be asked to read, and it is what a backlog drains against: falling behind
+	// costs comfort and never legibility.
 	floor := ccMinOnScreen(rows)
 	if pace > 0 {
 		if fastest := time.Duration(float64(chars) / ccMaxPace * float64(time.Second)); fastest > floor {
 			floor = fastest
 		}
+	}
+	// And never less than a caption is worth looking at.
+	//
+	// Reading time alone made a short caption a flash: a few words divide out
+	// to well under a second, and the guidance floor for two rows is a second
+	// and a half. A decoder that pads a short caption hides that; one that
+	// shows exactly what it was told does not, which is why the same stream
+	// looked steady on a television and hurried in a browser. The browser was
+	// showing the truth.
+	//
+	// Broadcast does not measure each caption against how fast it could be
+	// read — it puts one up, leaves it, and replaces it when the next is ready.
+	// This is the part of that worth copying: below this, the eye has to find
+	// the caption before it can read it, and finding it is most of the work.
+	if d < ccPopMinHold {
+		d = ccPopMinHold
 	}
 	if d < floor {
 		d = floor
@@ -1106,6 +1120,11 @@ func (c *cea608) showPopon(lines []string) {
 	c.popDwells = append(c.popDwells, popDwell(chars, len(lines), c.pace, c.minRollGap))
 	c.col = 0
 }
+
+// ccPopMinHold is the least time a box caption stays up, however few words it
+// carries. Two seconds: long enough that the eye can find it and read it,
+// short enough that a run of short captions does not fall behind the speaker.
+const ccPopMinHold = 2 * time.Second
 
 // ccPopLinger is how long a box caption may stay past its own reading time when
 // nothing has arrived to replace it.
