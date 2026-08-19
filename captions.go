@@ -4404,6 +4404,27 @@ func (c *cea608) headIsControl() bool {
 	return len(c.queue) > 0 && c.queue[0][0] == odd608(ccCtrlCC1)
 }
 
+// reset throws away everything the encoder is holding, so it begins where the
+// viewer does.
+//
+// Not a cull: the backlog cull drops what can no longer be shown in time and
+// carries on. This drops what should never have been queued at all, at the one
+// moment that can be known — the first picture the viewer is going to see.
+func (c *cea608) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queue = c.queue[:0]
+	c.held = c.held[:0]
+	c.popDwells = c.popDwells[:0]
+	c.popPending = 0
+	c.started = false
+	c.col = 0
+	c.pendingBreak = false
+	c.lastText = time.Time{}
+	c.lastBlock = time.Time{}
+	c.lastCR = time.Time{}
+}
+
 func (c *cea608) backlog() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -5100,6 +5121,25 @@ func (ci *captionInjector) flush() error {
 	}
 	ci.trackFrameRate(ptsVal)
 
+	// Everything recognized before the first picture goes out belongs to audio
+	// the viewer will never hear.
+	//
+	// The recognizer starts on the encoder's audio the moment the tuner opens.
+	// The viewer's stream starts later — the app is still tuning, playback
+	// detection is waiting for a keyframe that moves — so by the time there is
+	// a picture to carry captions, seconds of transcript can have piled up
+	// behind audio from before anything the viewer sees. Dropping that onto the
+	// first pictures puts captions on screen ahead of the sound that produced
+	// them, which reads as the transcript running early.
+	//
+	// It depends on how long the tune took, which is why it happens on some
+	// tunes and not others: playback after a fifth of a second leaves nothing
+	// queued, playback after five seconds leaves five seconds of it.
+	//
+	// The viewer's timeline starts here, so this is where the encoder starts.
+	if ci.injected == 0 {
+		ci.enc.reset()
+	}
 	send := ci.onPicture(ptsVal)
 	pair := [2]byte{}
 	if send {
