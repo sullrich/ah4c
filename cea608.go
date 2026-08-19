@@ -1122,9 +1122,15 @@ func (c *cea608) showPopon(lines []string) {
 }
 
 // ccPopMinHold is the least time a box caption stays up, however few words it
-// carries. Two seconds: long enough that the eye can find it and read it,
-// short enough that a run of short captions does not fall behind the speaker.
-const ccPopMinHold = 2 * time.Second
+// carries.
+//
+// Three seconds. Two was tried and still read as hurried on a decoder that
+// shows exactly what it is told rather than padding a short caption itself.
+// Reading is not the only cost: the eye has to find the caption, and finding it
+// is most of the work on a line of three or four words. A backlog still drains
+// past this — the floor the display catches up against is the reading-speed one
+// below, not this — so the headroom is spent only when nothing is waiting.
+const ccPopMinHold = 3 * time.Second
 
 // ccPopLinger is how long a box caption may stay past its own reading time when
 // nothing has arrived to replace it.
