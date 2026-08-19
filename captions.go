@@ -5614,6 +5614,16 @@ type modelQuirks struct {
 	// NoiseGate says this model will confidently transcribe things that are
 	// not speech, and wants stretches of steady noise held back from it.
 	NoiseGate bool
+	// ContextSec is how much already-transcribed audio to carry in front of a
+	// phrase so this model has something to read into. Zero carries nothing,
+	// which is how every model behaved before it existed.
+	//
+	// Per model because what it buys and what it costs are both per model. It
+	// buys accuracy on short phrases, which matters to a model being cut short;
+	// it costs a longer encoder run, which is close to free only on a family
+	// whose encoder time barely moves with the length — measured for one
+	// family and assumed for none.
+	ContextSec float64
 	// StreamChunkSec is how much audio a streaming model wants per feed.
 	//
 	// Not a buffer size and not a tuning knob: a cache-aware streaming encoder
@@ -8819,6 +8829,15 @@ func phraseCrest(loudest, levelSum float64, n int) (float64, bool) {
 
 // plural picks the right word for a count, because "1 stretches" is the sort of
 // thing that makes a log look machine-written.
+// plural2 is plural for a count that is already being printed, so it names the
+// thing without repeating the number.
+func plural2(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 func plural(n int64, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)
@@ -8925,16 +8944,6 @@ var (
 	phraseStreams atomic.Int64
 )
 
-// ccContextSec is how much already-transcribed audio is carried in front of a
-// phrase so the model has something to read into.
-//
-// The same figure the phrase floor used to be, and for the same reason: it is
-// how much audio an encoder-decoder wants in front of it before it stops
-// guessing. Moving it from the phrase to the context is the whole idea — the
-// model still never sees less than this, and the phrase in front of it is free
-// to be as short as the machine can afford.
-const ccContextSec = vadMinPhrase
-
 // ccComputeBudget is the share of the recognizer the segmenter will plan to
 // use. Half, so that the other half absorbs what planning cannot: phrases do
 // not arrive evenly, the encoder runs serially across a batch, and a machine
@@ -8970,16 +8979,25 @@ const ccComputeBudget = 0.5
 // busy machine gets long ones and captions that arrive rather than pile up. The
 // same code does both without being told which it is on.
 //
-// Floored at the shortest phrase worth transcribing and capped at the window,
-// because below the floor the model is being handed fragments and above the cap
-// there is no phrase left to lengthen. Until the recognizer has run enough to
-// have measured anything, the floor is the answer: that is the fast case, and
-// being wrong about it costs one phrase of extra work rather than a caption.
-func phraseCutAt(window float64) float64 {
+// Two floors, and which applies depends on whether this model is handed context
+// in front of its phrases. Without context the floor is the shortest phrase the
+// model can work from, because the phrase is all it gets. With context what the
+// model sees does not shrink when the phrase does, so the only floor left is
+// the shortest caption the display will hold converted back into speech —
+// anything shorter reaches the screen as part of the next caption anyway.
+//
+// Capped at the window, because above it there is no phrase left to lengthen.
+// Until the recognizer has run enough to have measured anything, the floor is
+// the answer: that is the fast case, and being wrong about it costs one phrase
+// of extra work rather than a caption.
+func phraseCutAt(window float64, context bool) float64 {
 	if window <= 0 {
 		return 1
 	}
 	interval := vadMinPhrase
+	if context {
+		interval = ccMinOnScreen(1).Seconds()
+	}
 	cost := time.Duration(phraseCost.Load()).Seconds()
 	streams := float64(phraseStreams.Load())
 	if cost > 0 && streams > 0 {
@@ -9583,7 +9601,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		//
 		// How much of the window has to pass before a word gap will do is not
 		// fixed, because what it buys changes with the load. See phraseCutAt.
-		gapped := phrase >= maxPhrase*phraseCutAt(maxPhrase) && silenceRun >= vadWordGap
+		gapped := phrase >= maxPhrase*phraseCutAt(maxPhrase, e.quirks.ContextSec > 0) && silenceRun >= vadWordGap
 		forced := phrase >= maxPhrase
 		if !ended && !gapped && !forced {
 			continue
@@ -9623,7 +9641,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			}
 			ctxLen = len(pending)
 			silenceRun = 0
-		} else if gapped && !ended {
+		} else if gapped && !ended && e.quirks.ContextSec > 0 {
 			// A gap between words is not the end of anything, so the next
 			// phrase keeps what came before it.
 			//
@@ -9646,7 +9664,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			// phrase as a short one — its own log prints the figure and it
 			// barely moves across the lengths in play — so context is paid for
 			// in bytes rather than in time.
-			ctx := int(ccContextSec * asrSampleRate)
+			ctx := int(e.quirks.ContextSec * asrSampleRate)
 			if len(audio) < ctx {
 				ctx = len(audio)
 			}
@@ -9968,6 +9986,7 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 			}
 		}
 	}
+	fromModel := len(strings.Fields(text))
 	text = e.trimOverlap(text, item.carried)
 	// Punctuation is only wrong where the ceiling cut with no gap at all.
 	//
@@ -9987,14 +10006,20 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 		// that applies to all of them: audio can be thrown away, but never
 		// without the log being able to say afterward that it was.
 		//
-		// Music is where it happens. Handed a sung passage an encoder-decoder
+		// Music is one way it happens: handed a sung passage an encoder-decoder
 		// can emit its end token immediately and hand back an empty string,
-		// which is not an error and not a failure — it is the model declining,
-		// and there is nothing in the transcript to show for it.
+		// which is the model declining rather than failing.
+		//
+		// The trimmers are the other way, and the line has to say which. Both
+		// of them run before this and both can empty a phrase — the overlap
+		// trimmer takes off words the previous phrase already showed, and it is
+		// perfectly capable of taking off all of them. Blaming the model for
+		// that would send somebody looking at the model.
 		n := atomic.AddInt64(&e.empty, 1)
 		if n == 1 || n%25 == 0 {
-			logger("[CC] %s the model returned nothing for %s of audio (%s so far; music does this)",
-				e.label, item.span(), plural(n, "stretch", "stretches"))
+			logger("[CC] %s nothing to show for %s of audio (%s so far; the model wrote %d %s)",
+				e.label, item.span(), plural(n, "stretch", "stretches"),
+				fromModel, plural2(fromModel, "word", "words"))
 		}
 		return
 	}
@@ -10125,6 +10150,27 @@ func trimFalseStop(text string, atPause bool) string {
 // A phrase cut at a silence or a word gap carries nothing forward and therefore
 // cannot repeat anything, so there is nothing to look for and nothing to lose
 // by not looking.
+// maxOverlapWords is the most words that can be a repeat of the phrase before.
+//
+// Four was right when the only thing ever carried forward was a third of a
+// second from a forced cut — one word, two at a push. A model carrying context
+// in front of every phrase repeats seconds rather than fractions, and a trimmer
+// capped below what is carried leaves the difference on screen twice, which is
+// what carrying context without touching this produced.
+//
+// Derived from what this model carries, so the two cannot drift apart again:
+// however much audio is in front of the phrase, this is how many words can be
+// in it at the fastest speech this program will ever show.
+func (e *captionEngine) maxOverlapWords() int {
+	n := 4
+	if e.quirks.ContextSec > 0 {
+		if w := int(math.Ceil(e.quirks.ContextSec * ccMaxPace / ccCharsPerWord)); w > n {
+			n = w
+		}
+	}
+	return n
+}
+
 func (e *captionEngine) trimOverlap(text string, carried bool) string {
 	words := strings.Fields(text)
 	if len(words) == 0 || len(e.tail) == 0 || !carried {
@@ -10132,7 +10178,7 @@ func (e *captionEngine) trimOverlap(text string, carried bool) string {
 		return strings.TrimSpace(text)
 	}
 	best := 0
-	for n := min(len(e.tail), min(len(words), 4)); n > 0; n-- {
+	for n := min(len(e.tail), min(len(words), e.maxOverlapWords())); n > 0; n-- {
 		match := true
 		for i := 0; i < n; i++ {
 			if !strings.EqualFold(strings.Trim(e.tail[len(e.tail)-n+i], ".,!?;:"),
@@ -10151,12 +10197,21 @@ func (e *captionEngine) trimOverlap(text string, carried bool) string {
 	return strings.Join(words, " ")
 }
 
+// rememberTail keeps the end of what was shown, so the next phrase can be
+// checked against it for a repeat.
+//
+// It keeps as many words as the trimmer can match, and no fewer. Keeping four
+// while the trimmer looked for six meant the trimmer could never find what it
+// was looking for: a phrase carrying two seconds of context begins in the
+// middle of the phrase before it, so the words it repeats are the last six of
+// that phrase and a memory of four cannot contain them. Nothing matched, and
+// every carried phrase put its context on screen a second time.
 func (e *captionEngine) rememberTail(words []string) {
 	if len(words) == 0 {
 		return
 	}
-	if len(words) > 4 {
-		words = words[len(words)-4:]
+	if n := e.maxOverlapWords(); len(words) > n {
+		words = words[len(words)-n:]
 	}
 	e.tail = append([]string(nil), words...)
 }
