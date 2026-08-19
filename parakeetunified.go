@@ -87,22 +87,20 @@ var parakeetUnified = captionModel{
 // in bytes rather than in time.
 var parakeetUnifiedQuirks = modelQuirks{
 	Suppress: stockHallucination,
-	// Carried again, now that the trimmer can take it off.
+	// No carried context, and the full phrase window. Tried the other way and
+	// took it back: with the carry on, the trimmer sometimes matched further
+	// than the repeat actually went and took real words off the front of a
+	// phrase, so captions skipped forward in the sentence — from the sofa it
+	// reads as the captions running ahead of the speaker.
 	//
-	// It was turned off because it put every phrase's opening words on screen
-	// twice: the trimmer matched word for word, and this model commits tokens
-	// as it goes, so its second rendering of the carried seconds disagreed with
-	// its first over a comma or a word split and nothing matched. The matcher
-	// compares letters and digits now and tolerates a disagreement in four.
+	// A caption two seconds late is worse to look at than one that is early is
+	// to read. But a caption missing its first words is not late or early, it
+	// is wrong, and no amount of timing makes it right again.
 	//
-	// It is here to pay for the shorter phrase below. A phrase cut sooner is a
-	// caption sooner, and what it costs is the model seeing less of the
-	// sentence — unless the seconds before it come along too, which is exactly
-	// what this is.
-	ContextSec: vadMinPhrase,
-	// Cut sooner. Four seconds was the wait for a phrase to end and it was most
-	// of the distance between the sound and the caption; the model no longer
-	// pays for it, because the context in front of the phrase is what it reads
-	// into rather than the phrase's own length.
-	PhraseWindow: 2.5,
+	// The trimmer that tolerates the model disagreeing with itself is still
+	// there and does no harm — with nothing carried it is never asked. What is
+	// missing before this can be tried again is knowing how far the repeat
+	// really goes, and matching words is a guess at that. Word timings from the
+	// engine would answer it exactly.
+	PhraseWindow: modelDefaults.PhraseWindow,
 }
