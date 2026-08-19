@@ -8885,6 +8885,16 @@ var (
 	phraseStreams atomic.Int64
 )
 
+// ccContextSec is how much already-transcribed audio is carried in front of a
+// phrase so the model has something to read into.
+//
+// The same figure the phrase floor used to be, and for the same reason: it is
+// how much audio an encoder-decoder wants in front of it before it stops
+// guessing. Moving it from the phrase to the context is the whole idea — the
+// model still never sees less than this, and the phrase in front of it is free
+// to be as short as the machine can afford.
+const ccContextSec = vadMinPhrase
+
 // ccComputeBudget is the share of the recognizer the segmenter will plan to
 // use. Half, so that the other half absorbs what planning cannot: phrases do
 // not arrive evenly, the encoder runs serially across a batch, and a machine
@@ -9400,6 +9410,9 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 	// wasSplit records that the last phrase was closed while the speaker was
 	// still going, so the next one is the rest of that sentence.
 	var wasSplit bool
+	// ctxLen is how many samples at the head of pending are carried context
+	// rather than new audio. See the word-gap cut below.
+	var ctxLen int
 	// loudest and levelSum describe the shape of what is being heard, which is
 	// how steady noise is told from speech; see phraseIsSpeech.
 	var loudest, levelSum float64
@@ -9519,7 +9532,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			continue
 		}
 
-		phrase := float64(len(pending)) / asrSampleRate
+		// The context carried in front of this phrase is not part of it: it has
+		// been transcribed already and it is here so the model has something to
+		// read into. Counting it would close every phrase a context early.
+		phrase := float64(len(pending)-ctxLen) / asrSampleRate
 		ended := silenceRun >= vadSilence
 		// Long phrases are cheaper per second of television, so how long to let
 		// one run is the same trade as a streaming model's lookahead and is
@@ -9565,9 +9581,42 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 					pending = nil
 				}
 			}
+			ctxLen = len(pending)
+			silenceRun = 0
+		} else if gapped && !ended {
+			// A gap between words is not the end of anything, so the next
+			// phrase keeps what came before it.
+			//
+			// Cutting early is what puts captions close to the sound, and the
+			// reason it could not be done freely is accuracy: a model handed a
+			// second of audio has a second of sentence to work from, and an
+			// encoder-decoder does badly on a fragment. That is an argument
+			// about how much the model sees, not about how often this cuts —
+			// and the two were the same thing only because each phrase was
+			// handed over alone.
+			//
+			// So the tail is carried forward as context. The model sees the
+			// preceding audio and the new audio together, trimOverlap takes the
+			// repeated words off the front of what comes back, and the phrase
+			// can be as short as the machine can afford without the model ever
+			// seeing less than it needs.
+			//
+			// It is close to free, which is the measurement that makes it worth
+			// doing: this family's encoder costs about the same for a long
+			// phrase as a short one — its own log prints the figure and it
+			// barely moves across the lengths in play — so context is paid for
+			// in bytes rather than in time.
+			ctx := int(ccContextSec * asrSampleRate)
+			if len(audio) < ctx {
+				ctx = len(audio)
+			}
+			pending = append([]float32(nil), audio[len(audio)-ctx:]...)
+			ctxLen = len(pending)
+			carryNext = true
 			silenceRun = 0
 		} else {
 			pending = nil
+			ctxLen = 0
 			speaking = false
 		}
 		// Whether the phrase being closed here is the remainder of a cut this
@@ -9600,7 +9649,10 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		//
 		// Intermittent by nature: it needs a forced cut, which is a minority of
 		// phrases, and the speaker to stop within a breath of it.
-		heldSec := float64(len(pending)) / asrSampleRate
+		heldSec := float64(len(pending)-ctxLen) / asrSampleRate
+		if heldSec < 0 {
+			heldSec = 0
+		}
 		if tooShortToSend(speechLen, tailOfSplit) {
 			// Counted, because it was not. Every other way audio is discarded
 			// says so, and a path that throws away sound in silence is a place
