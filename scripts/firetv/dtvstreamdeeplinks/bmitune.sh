@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for firetv/dtvstreamdeeplinks
-# 2026.08.17
+# 2026.08.19
 
 #Debug on if uncommented
 set -x
@@ -12,6 +12,7 @@ streamerIP="$2"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
 packageName=com.att.tv
+packageAction=com.clientapp.MainActivity
 
 #Trap end of script run
 finish() {
@@ -33,13 +34,8 @@ updateReferenceFiles() {
 }
 
 #Tuning is based on channel name values from dtvdeeplinks.m3u.
-#Resolves the launch activity on-device instead of hardcoding it, force-stops the
-#app for a clean state (-S), and waits for the launch to complete (-W).
 tuneChannel() {
-  local tuneURL="dtvnow://deeplink.directvnow.com/play/channel/$channelName/$channelID"
-  local remoteCmd="am start -S -W -n $packageName/\$(cmd package resolve-activity -a android.intent.action.MAIN $packageName | awk -F= '/name=/{print \$2; exit}') -a android.intent.action.VIEW -d '$tuneURL'"
-
-  $adbTarget shell "$remoteCmd"
+  $adbTarget shell am start -n $packageName/$packageAction dtvnow://deeplink.directvnow.com/play/channel/$channelName/$channelID
 }
 
 main() {
