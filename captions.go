@@ -8134,8 +8134,10 @@ type captionEngine struct {
 	// Both used to happen in silence.
 	tooShort  int64
 	audioLost int64
-	// recogLost counts chunks the recognizer was too far behind to be given.
+	// recogLost counts chunks the recognizer was too far behind to be given,
+	// and empty counts phrases the model was given and answered nothing for.
 	recogLost int64
+	empty     int64
 	// lastAudio is when the decoder last produced a byte, as unix nanoseconds.
 	// Watched by a goroutine that kills a decoder which has gone quiet.
 	lastAudio int64
@@ -9629,6 +9631,12 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 // phraseItem is a cut phrase and the moment it was cut. The stamp is what
 // keeps the pipeline honest: any stage may compare it against now and refuse
 // to spend work on the past.
+// span is how much audio this phrase carries, for a log line that would
+// otherwise have to say "a stretch" and leave the reader guessing.
+func (p phraseItem) span() string {
+	return fmt.Sprintf("%.1fs", float64(len(p.pcm))/asrSampleRate)
+}
+
 type phraseItem struct {
 	pcm []float32
 	cut time.Time
@@ -9878,6 +9886,24 @@ func (e *captionEngine) captionResult(item phraseItem, text string, err error, t
 	// them.
 	text = trimFalseStop(text, !item.hardCut)
 	if text == "" {
+		// Counted, because it was not.
+		//
+		// This is the one way audio reached the model and produced nothing at
+		// all, and it returned silently — so a stretch of television with no
+		// captions on it looked exactly like a stretch with nothing said. Every
+		// other way a phrase is discarded says so out loud and this is the rule
+		// that applies to all of them: audio can be thrown away, but never
+		// without the log being able to say afterward that it was.
+		//
+		// Music is where it happens. Handed a sung passage an encoder-decoder
+		// can emit its end token immediately and hand back an empty string,
+		// which is not an error and not a failure — it is the model declining,
+		// and there is nothing in the transcript to show for it.
+		n := atomic.AddInt64(&e.empty, 1)
+		if n == 1 || n%25 == 0 {
+			logger("[CC] %s the model returned nothing for %s of audio (%s so far; music does this)",
+				e.label, item.span(), plural(n, "stretch", "stretches"))
+		}
 		return
 	}
 	if e.quirks.Suppress != nil && e.quirks.Suppress(text) {
