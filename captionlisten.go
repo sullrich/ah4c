@@ -1507,8 +1507,29 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		//
 		// How much of the window has to pass before a word gap will do is not
 		// fixed, because what it buys changes with the load. See phraseCutAt.
-		gapped := phrase >= maxPhrase*phraseCutAt(maxPhrase, e.quirks.ContextSec > 0) && silenceRun >= vadWordGap
+		context := e.quirks.ContextSec > 0
+		target := maxPhrase * phraseCutAt(maxPhrase, context)
+		gapped := phrase >= target && silenceRun >= vadWordGap
 		forced := phrase >= maxPhrase
+		if context {
+			// With context carried, the target is the ceiling rather than the
+			// earliest a gap will do.
+			//
+			// A cut had to land at a quarter second of quiet between two words,
+			// because a cut anywhere else lands inside one and the next phrase
+			// begins on half a word. Fast television does not offer that gap
+			// often — a presenter reading copy does not stop — so the phrase
+			// ran past its target and closed at the four second ceiling
+			// instead, which is the waiting that shows up as captions well
+			// behind the sound.
+			//
+			// The gap was standing in for something the context now does. The
+			// next phrase gets the audio before it whatever the cut, so a cut
+			// inside a word is read with the word around it rather than as a
+			// fragment, and quietestCut still lands it at the least bad moment
+			// available. There is nothing left for the gap to protect.
+			forced = phrase >= target
+		}
 		if !ended && !gapped && !forced {
 			continue
 		}
@@ -1532,7 +1553,16 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			// phrases then begin and end on whole words. Nothing is duplicated
 			// either, because this splits the audio rather than overlapping it.
 			if at := quietestCut(audio); at > 0 {
-				pending = append([]float32(nil), audio[at:]...)
+				// The next phrase gets the tail of this one in front of it, the
+				// same as a gap cut does. Without it the ceiling path was the
+				// one place a phrase still began cold — and once the ceiling is
+				// what normally fires, that is every phrase.
+				keep := at - int(e.quirks.ContextSec*asrSampleRate)
+				if keep < 0 {
+					keep = 0
+				}
+				pending = append([]float32(nil), audio[keep:]...)
+				ctxLen = at - keep
 				audio = audio[:at]
 			} else {
 				// No dip to be found, which means speech straight through.
