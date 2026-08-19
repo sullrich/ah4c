@@ -32,7 +32,7 @@ var canaryFlash = captionModel{
 	// Not "Recommended": the page works that out for the machine it is running
 	// on and puts a badge on whichever model it picks. Saying it here as well
 	// put the word beside two different models at once.
-	Role: "Accurate and light",
+	Role: "Lightest of the accurate ones",
 	Desc: "Nearly the accuracy of the best one at a sixth of the cost, so an ordinary machine captions several tuners at once rather than four or five. English, German, Spanish and French. Start here.",
 	// A phrase model: nothing is transcribed until the sentence is complete.
 	Latency:   "A couple of seconds behind",
@@ -111,5 +111,24 @@ var canaryFlash = captionModel{
 // tested one buried among them.
 var canaryQuirks = modelQuirks{
 	PhraseWindow: modelDefaults.PhraseWindow,
-	Suppress:     cohereSuppresses,
+	Suppress:     stockHallucination,
+	// Context in front of every phrase, so the phrase can be short.
+	//
+	// Cutting early is what puts captions close to the sound, and what stops it
+	// is that a model handed a fragment guesses: "I would in a heartbeat" came
+	// back as "I wouldn't a hot beat" from a phrase that began inside it. That
+	// is an argument about how much this model sees, not about how often the
+	// segmenter cuts, and the two were the same thing only because each phrase
+	// was handed over alone.
+	//
+	// It is close to free here and that is why it is here and not everywhere:
+	// this family's encoder costs about the same for a long phrase as a short
+	// one, which its own log prints. On a family where that has not been
+	// measured, context would be paid for in time and this should stay zero.
+	//
+	// The figure is the shortest phrase a model of this kind works from, which
+	// is what the phrase floor used to be. Moving it from the phrase to the
+	// context is the whole idea: what the model sees does not shrink when the
+	// phrase does.
+	ContextSec: vadMinPhrase,
 }
