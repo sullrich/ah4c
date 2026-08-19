@@ -67,6 +67,7 @@ type captionModel struct {
 // Quantized weights: on CPU they are what make these run faster than real time,
 // and they keep the download manageable.
 var captionModelCatalog = []captionModel{
+	parakeetUnified,
 	canaryFlash,
 	cohereTranscribe,
 	nemotronStreaming,
@@ -78,6 +79,8 @@ func quirksFor(m captionModel) modelQuirks {
 	switch m.Key {
 	case cohereTranscribe.Key:
 		return cohereQuirks
+	case parakeetUnified.Key:
+		return parakeetUnifiedQuirks
 	case canaryFlash.Key:
 		return canaryQuirks
 	case nemotronStreaming.Key:
@@ -200,7 +203,7 @@ type captionConfig struct {
 func defaultCaptionConfig() captionConfig {
 	return captionConfig{
 		Enabled:     false,
-		Model:       canaryFlash.Key,
+		Model:       parakeetUnified.Key,
 		Language:    "en",
 		Style:       "box2",
 		OnScreenSec: 4,
@@ -322,7 +325,7 @@ func modelInstalled(m captionModel) bool {
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return canaryFlash.Key, "The place to start: within a point of the most accurate model here at a sixth of the cost, with one copy shared by every tuner. Cohere is more accurate again and asks a great deal more of the graphics chip."
+	return parakeetUnified.Key, "The place to start: within half a point of the most accurate model here, sharing one copy across every tuner rather than loading one each. Canary is lighter again on the graphics chip; Cohere is more accurate and asks a great deal more of it."
 }
 
 // profiledFamilies is the engine families to ask for a timing breakdown,

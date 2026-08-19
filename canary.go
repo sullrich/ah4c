@@ -32,7 +32,7 @@ var canaryFlash = captionModel{
 	// Not "Recommended": the page works that out for the machine it is running
 	// on and puts a badge on whichever model it picks. Saying it here as well
 	// put the word beside two different models at once.
-	Role: "Accurate and light",
+	Role: "Lightest of the accurate ones",
 	Desc: "Nearly the accuracy of the best one at a sixth of the cost, so an ordinary machine captions several tuners at once rather than four or five. English, German, Spanish and French. Start here.",
 	// A phrase model: nothing is transcribed until the sentence is complete.
 	Latency:   "A couple of seconds behind",
@@ -111,7 +111,7 @@ var canaryFlash = captionModel{
 // tested one buried among them.
 var canaryQuirks = modelQuirks{
 	PhraseWindow: modelDefaults.PhraseWindow,
-	Suppress:     cohereSuppresses,
+	Suppress:     stockHallucination,
 	// Context in front of every phrase, so the phrase can be short.
 	//
 	// Cutting early is what puts captions close to the sound, and what stops it
