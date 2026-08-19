@@ -102,3 +102,79 @@ func TestBoxSwapIsErasedFirst(t *testing.T) {
 		t.Fatalf("expected 3 captions, saw %d in %+v", eocs, out)
 	}
 }
+
+// A box that is behind writes the next caption as late as it can be loaded in
+// time, so the words arriving while the caption on screen still has time left
+// join it rather than waiting a whole caption longer — and the swap itself is
+// not delayed by the waiting.
+func TestBoxFillsInsteadOfFlashingWhenBehind(t *testing.T) {
+	feed := map[time.Duration]string{
+		1 * time.Second: "We have the first caption up now.",
+		// The next caption's words arrive in two pieces shortly after the
+		// first goes up, the way a phrase model hands over a sentence.
+		2600 * time.Millisecond: "Then the second,",
+		3000 * time.Millisecond: "arriving a moment later.",
+	}
+	out := driveBox(t, 12, feed)
+	var swaps []time.Duration
+	var captions []string
+	var cur []string
+	for _, e := range out {
+		switch e.kind {
+		case "text":
+			cur = append(cur, e.text)
+		case "EOC":
+			swaps = append(swaps, e.at)
+			captions = append(captions, strings.Join(cur, " "))
+			cur = nil
+		}
+	}
+	if len(captions) != 2 {
+		t.Fatalf("expected the late words to join the second caption and make 2 captions, got %d: %q", len(captions), captions)
+	}
+	if !strings.Contains(captions[1], "THEN THE SECOND") || !strings.Contains(captions[1], "ARRIVING A MOMENT LATER") {
+		t.Fatalf("second caption should carry both pieces, got %q", captions[1])
+	}
+	// The first caption had the floor of a behind box: it must not have come
+	// down before the guidance minimum for its rows, and the waiting must not
+	// have held the swap past the floor by more than the estimate allows.
+	held := swaps[1] - swaps[0]
+	if held < ccMinOnScreen(1) {
+		t.Fatalf("first caption was up only %v", held)
+	}
+	if held > 3*time.Second {
+		t.Fatalf("first caption was held %v, the waiting delayed the swap", held)
+	}
+}
+
+// A box that is keeping up is unchanged: with nothing on the screen, words go
+// up the moment they are worth a caption.
+func TestBoxShowsAtOnceWhenScreenIsFree(t *testing.T) {
+	feed := map[time.Duration]string{
+		1 * time.Second: "Nothing is on the screen yet.",
+	}
+	out := driveBox(t, 5, feed)
+	for _, e := range out {
+		if e.kind == "EOC" {
+			if e.at > 2500*time.Millisecond {
+				t.Fatalf("caption took until %v to go up with a free screen", e.at)
+			}
+			return
+		}
+	}
+	t.Fatal("caption never went up")
+}
+
+// popLoad counts what a caption costs on the wire: the loading codes, a
+// preamble and tab per row, the characters two to a pair, the erase and swap.
+func TestPopLoad(t *testing.T) {
+	c := newCEA608("box2", true, 4, 160, ccLagFallback)
+	c.setPictureRate(cc608NominalRate)
+	words := analyze608(strings.Fields("TWELVE CHARS"))
+	// one row of 12 characters: 8 + 4 + 6 = 18 pairs
+	rate := float64(cc608NominalRate)
+	want := time.Duration(18 / rate * float64(time.Second))
+	if got := c.popLoad(words); got < want-time.Millisecond || got > want+time.Millisecond {
+		t.Fatalf("popLoad = %v, want %v", got, want)
+	}
+}

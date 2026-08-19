@@ -1257,7 +1257,13 @@ func (c *cea608) pushText(text string, breakAfter bool) {
 		// it, and neither of those needs the speaker to stop.
 		c.lastText = c.streamNow()
 		c.held = append(c.held, strings.Fields(cased)...)
-		c.flushPopon(breakAfter)
+		// Unless the caption on screen has longer to run than it would take
+		// to write these words behind it, in which case they wait for the
+		// words after them and go up together; see boxCanWait. The display
+		// writes them out from next when the time comes.
+		if !c.boxCanWait() {
+			c.flushPopon(breakAfter)
+		}
 		return
 	}
 	// The break owed by the previous phrase is taken now, with this phrase's
@@ -1736,8 +1742,11 @@ func (c *cea608) next() [2]byte {
 		// asks: the moment there is nothing left on the wire, whatever has been
 		// held is written out. That is self-correcting in both directions —
 		// when it is keeping up the captions are small and current, and when it
-		// falls behind they fill, because more has arrived by the time the wire
-		// clears.
+		// falls behind they fill, because more has arrived by the time they are
+		// written. The wire clearing is the earliest that can be, not the
+		// moment it happens: what is held waits while the caption on screen has
+		// longer to run than the words take to load behind it, so that the
+		// words arriving in the meantime go up with them. See boxCanWait.
 		//
 		// Written out, and not shown: the two are a second and a half apart and
 		// that gap was being paid twice. A full two row caption is forty-six
@@ -1751,7 +1760,7 @@ func (c *cea608) next() [2]byte {
 		// still up — that is what the second memory is for. So the bytes go now
 		// and the swap waits: the dwell is enforced on the swap in next, and
 		// everything ahead of it drains during the caption it is replacing.
-		if c.popon && c.worthShowing() {
+		if c.popon && c.worthShowing() && !c.boxCanWait() {
 			c.flushPopon(true)
 			if len(c.queue) > 0 {
 				p := c.queue[0]
@@ -1920,6 +1929,60 @@ func (c *cea608) worthShowing() bool {
 		return true
 	}
 	return c.streamNow().Sub(c.lastText) >= ccPopGather
+}
+
+// boxCanWait reports whether the words held should go on waiting for more
+// before they are written behind the caption on screen. Callers hold the lock.
+//
+// The comment in next that sends a box caption the moment the wire clears
+// says that when a box falls behind its captions fill, because more has
+// arrived by the time the wire clears. Measured on a news channel, they did
+// not. The wire clears a second or so after a swap and the
+// swap after that is not due for another one or two, so the next caption was
+// being written the moment the first few words of it were worth a caption,
+// and then it sat finished in the hidden memory while the rest of its sentence
+// arrived and went to the caption after. Thirty-five captions out of thirty-six
+// went up at the floor, most of them a row or less, and every word that came in
+// during the wait was shown a caption later than it needed to be. That is a box
+// keeping pace by flashing, which is the one thing a box is not supposed to do;
+// it is also why the same stream read as hurried on a renderer that shows
+// exactly what it is told.
+//
+// So the caption is written as late as it can be and still be loaded by the
+// time the screen is due to change: what is held waits while the time left on
+// the caption up now is more than the time it takes to send what is held behind
+// it. Waiting costs nothing — the swap was not going to come any sooner — and
+// everything that arrives in the meantime goes up with this caption instead of
+// the next. A box that is keeping up is unchanged: its screen is free, or has
+// been up past its time, and what is held goes at once as before.
+//
+// What is held stops waiting when it would no longer fit in one caption,
+// because it cannot get fuller than that, and when there is nothing on the
+// screen to wait behind.
+func (c *cea608) boxCanWait() bool {
+	if !c.popon || !c.started || c.lastBlock.IsZero() || len(c.held) == 0 {
+		return false
+	}
+	words := analyze608(c.held)
+	if len(rows608(words, c.textCol)) > c.boxRows {
+		return false
+	}
+	left := c.popGap() - c.streamNow().Sub(c.lastBlock)
+	return left > c.popLoad(words)
+}
+
+// popLoad is how long it takes the channel to carry what is held as one box
+// caption: the loading codes, a preamble and tab for each row, the characters
+// two to a pair, and the erase and swap at the end. The tab is counted whether
+// or not the row will use one, so that the estimate errs toward writing early
+// rather than swapping late. Callers hold the lock.
+func (c *cea608) popLoad(words []ccWord) time.Duration {
+	pairs := 8 // RCL, ENM, EDM and EOC, each sent twice
+	for _, row := range rows608(words, c.textCol) {
+		pairs += 4 // preamble and tab, each sent twice
+		pairs += (len([]rune(row)) + 1) / 2
+	}
+	return time.Duration(float64(pairs) / c.pairRate() * float64(time.Second))
 }
 
 // popGap is how long the caption on screen must stay before the next replaces
