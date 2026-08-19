@@ -7169,8 +7169,14 @@ func (svc *txBatchService) dispatch(w *txWorker, batch []txBatchRequest) {
 		}
 	}
 	waiting := len(svc.requests)
-	// Published so the segmenter can see it. See recogPressure.
+	// Published so the segmenter can see it. See phraseCutAt.
 	recogPressure.Store(int64(waiting))
+	if len(batch) > 0 {
+		phraseCost.Store(int64(compute) / int64(len(batch)))
+	}
+	txServiceLock.Lock()
+	phraseStreams.Store(int64(svc.refs))
+	txServiceLock.Unlock()
 	svc.telMu.Lock()
 	svc.tLag += lag / time.Duration(len(batch))
 	if !svc.advised && svc.backend != txBackendCPU {
@@ -8864,37 +8870,81 @@ func tooShortToSend(speechLen float64, tailOfSplit bool) bool {
 	return speechLen < vadMinSpeech
 }
 
-// recogPressure is how many phrases were waiting at the shared recognizer's
-// last dispatch. Written by the recognizer, read by the segmenter that feeds
-// it, and nothing else depends on it — a stale value costs one phrase.
-var recogPressure atomic.Int64
+// What the recognizer knows about itself, published for the segmenter that
+// feeds it. Written at each dispatch, read when a phrase is being closed, and
+// nothing else depends on them — a stale value costs one phrase.
+//
+// recogPressure is how many phrases were waiting. phraseCost is how long one
+// phrase took, in nanoseconds of compute. phraseStreams is how many streams
+// were sharing the recognizer.
+var (
+	recogPressure atomic.Int64
+	phraseCost    atomic.Int64
+	phraseStreams atomic.Int64
+)
+
+// ccComputeBudget is the share of the recognizer the segmenter will plan to
+// use. Half, so that the other half absorbs what planning cannot: phrases do
+// not arrive evenly, the encoder runs serially across a batch, and a machine
+// doing this is also doing everything else it was already doing.
+const ccComputeBudget = 0.5
 
 // phraseCutAt is how much of the phrase window must pass before a gap between
-// two words is enough to end a phrase.
+// two words is enough to end a phrase, worked out from what the machine is
+// actually doing rather than fixed.
 //
-// Cutting early is what keeps captions close to the sound: a phrase closed at
-// two seconds is transcribed two seconds sooner than one closed at four. So the
-// bar is low while there is room for it.
+// Cutting early is what keeps captions close to the sound. A phrase is not
+// transcribed until it is closed, so its first word waits however long the
+// phrase ran — close at one second and the caption is a second behind the
+// sentence, close at four and it is four. Every stream should therefore cut as
+// early as the machine it is running on can afford.
 //
-// It stops being free the moment there is not. This model's encoder costs about
-// the same for a long phrase as a short one — its own log prints the figure,
-// and it barely moves between forty-four frames and fifty — so the work is per
-// phrase and not per second of audio, and cutting early doubles the work for
-// the same television. Six tuners at a four second window produce a phrase
-// every two and a half seconds each once word gaps are taken, which is half as
-// much again as the window implies and is what puts a machine that would carry
-// them at ninety-six percent over the line.
+// What it costs is one encoder run per phrase, and that cost is per phrase
+// rather than per second of audio: this family's encoder takes about the same
+// time for a short phrase as a long one, which its own log prints. So halving
+// the phrase length doubles the work for the same television, and the shortest
+// phrase a machine can sustain is the one where the work still fits.
 //
-// So when phrases are waiting, the bar goes up and the segmenter stops taking
-// the cheap cuts. That costs a second or two of latency on the phrase in hand
-// and buys back a third of the work — against a queue that was running twelve
-// seconds behind, it is not a close trade. It relaxes the moment the queue
-// clears, so a machine with room never pays it.
-func phraseCutAt() float64 {
-	if recogPressure.Load() > 0 {
+//	one stream produces          1 / interval phrases a second
+//	n streams produce            n / interval
+//	each costs                   the measured compute of one phrase
+//	so the work is              (n / interval) * cost, and that must fit
+//	  giving                     interval >= n * cost / budget
+//
+// Every term is measured on the machine it is running on: the cost of a phrase
+// and the number of streams come from the recognizer's own dispatches, and the
+// budget is the share of it this will plan to use. A fast model on a fast
+// machine gets short phrases and captions close to the sound; a slow one on a
+// busy machine gets long ones and captions that arrive rather than pile up. The
+// same code does both without being told which it is on.
+//
+// Floored at the shortest phrase worth transcribing and capped at the window,
+// because below the floor the model is being handed fragments and above the cap
+// there is no phrase left to lengthen. Until the recognizer has run enough to
+// have measured anything, the floor is the answer: that is the fast case, and
+// being wrong about it costs one phrase of extra work rather than a caption.
+func phraseCutAt(window float64) float64 {
+	if window <= 0 {
 		return 1
 	}
-	return 0.55
+	interval := vadMinPhrase
+	cost := time.Duration(phraseCost.Load()).Seconds()
+	streams := float64(phraseStreams.Load())
+	if cost > 0 && streams > 0 {
+		if need := streams * cost / ccComputeBudget; need > interval {
+			interval = need
+		}
+	}
+	// A queue that is not draining is the measurement being wrong about this
+	// machine right now — something else is using it, or the phrases are longer
+	// than the ones that were measured. Take the whole window until it clears.
+	if recogPressure.Load() > 0 {
+		interval = window
+	}
+	if interval > window {
+		interval = window
+	}
+	return interval / window
 }
 
 // quietestCut finds the best place to end a phrase that has run out of time,
@@ -9475,7 +9525,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 		//
 		// How much of the window has to pass before a word gap will do is not
 		// fixed, because what it buys changes with the load. See phraseCutAt.
-		gapped := phrase >= maxPhrase*phraseCutAt() && silenceRun >= vadWordGap
+		gapped := phrase >= maxPhrase*phraseCutAt(maxPhrase) && silenceRun >= vadWordGap
 		forced := phrase >= maxPhrase
 		if !ended && !gapped && !forced {
 			continue
