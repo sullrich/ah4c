@@ -40,22 +40,27 @@ var parakeetUnified = captionModel{
 	Hardware:  "Shares one copy across every tuner being captioned, so the memory does not grow with the tuner count. Heavier on the graphics chip than Canary and far lighter than Cohere.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/parakeet-unified-en-0.6b-gguf",
-	// Q8_0, and the reason is speed rather than size.
+	// Q4_K_M, and accuracy did not choose it because accuracy has nothing to
+	// say: 1.59% at full precision, 1.60% at Q8_0, 1.58% at Q5_K_M and 1.62%
+	// here. Four hundredths of a point across a file that more than halves.
 	//
-	// One copy serves every tuner, so the file size is not the constraint it
-	// would be on a model loaded per stream. What is left is how fast the
-	// quantization decodes, which is published for none of these and has been
-	// measured once on this class of chip — for a different model, where the
-	// difference between two K presets was threefold. Q8_0 is the one preset
-	// the engine does not mix: every K preset falls back to Q8_0 for tensors
-	// whose dimensions do not divide the block size.
+	// Speed chose it, on the only evidence anyone has for this class of chip.
+	// Cohere's author measured that model at eight times real time on
+	// integrated graphics at Q4_K_M where Q5_K_M managed a third of that — the
+	// shaders differ per quantization and the difference was not small. Nothing
+	// equivalent is published for this model, so the nearest thing to evidence
+	// is the same quantization on the same engine on the same kind of chip,
+	// which is how Nemotron's was chosen too.
 	//
-	// Accuracy does not choose it either. This model measures 1.59% at F16,
-	// 1.60% at Q8_0 and 1.58% at Q5_K_M — flat, and the K preset is nominally
-	// the best of them. If the real-time factor in the log disappoints, Q5_K_M
-	// is the first thing to try and it costs nothing in accuracy to try it.
-	File:        "parakeet-unified-en-0.6b-Q8_0.gguf",
-	SizeMB:      731,
+	// It is also the question this model is being added to answer. Whether it
+	// carries ten captioned tuners is decided on the graphics chip and not on
+	// the disk, so of two files that transcribe the same the faster one is the
+	// only one worth shipping — and it happens to be the smaller.
+	//
+	// If it disappoints, Q8_0 is the one preset the engine does not mix and the
+	// first thing to try. The log prints the real-time factor to settle it.
+	File:        "parakeet-unified-en-0.6b-Q4_K_M.gguf",
+	SizeMB:      477,
 	Streaming:   false,
 	Punctuation: true,
 	// Cased and punctuated by the model, and English only: its own command line
