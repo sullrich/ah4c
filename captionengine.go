@@ -420,6 +420,7 @@ func initTranscribe(variant string) error {
 		// used honestly. Better no Vulkan device than that one: the engine
 		// then lands on its native CPU backend and says so.
 		pinHardwareVulkanICDs()
+		forceDirectPointwiseConv()
 		if st := txInitBackends(dir); st != txOK {
 			txErr = fmt.Errorf("registering the transcribe.cpp backends: %s", txStatusString(st))
 			return
@@ -579,6 +580,63 @@ func persistShaderCache() {
 //
 // A caller who has set VK_DRIVER_FILES or VK_ICD_FILENAMES themselves is
 // assumed to mean it, and nothing is touched.
+// forceDirectPointwiseConv keeps the conformer off the engine's im2col path.
+//
+// The engine builds a conformer's pointwise convolutions two ways. The direct
+// one carries the utterance batch explicitly — it reads B from ne[2] and adds
+// the bias straight onto [d_model, T, B]. The im2col one does this:
+//
+//	// conv_1d_f32 returns ne=[T, 2*d_model, 1]. Reshape the
+//	// 1-D bias to [1, 2*d_model] so ggml_add broadcasts.
+//	x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1]);
+//
+// which is only true when there is one utterance. On a batch of n the tensor
+// holds n times what the reshape asks for, GGML_ASSERT fails, and the library
+// calls abort() — taking this program down and every tune it is carrying.
+//
+// Which path is taken is decided by the backend, not by us: detect_direct_pw
+// returns false for Vulkan and true for everything else, on a measurement of
+// f32 weights on an AMD Renoir. So the crash is Vulkan's alone, and every
+// caption model here goes through that conformer — parakeet, canary, cohere.
+//
+// The engine offers this override for exactly this kind of disagreement, and it
+// is the only lever on the outside of a library we do not build. What it may
+// cost is encode time on Vulkan, where their measurement preferred im2col; what
+// it buys is being able to hand the engine more than one phrase at a time,
+// which is the whole reason a batch entry point exists.
+//
+// Remove this when the reshape upstream carries ne[2].
+// directPW records whether the override is in place. Batching is allowed only
+// when it is: without it a second phrase in a dispatch aborts the process.
+var directPW atomic.Bool
+
+func forceDirectPointwiseConv() {
+	const key = "TRANSCRIBE_CONV_DIRECT_PW"
+	// Never over an explicit choice: somebody debugging this wants their own
+	// value to win.
+	if v, set := os.LookupEnv(key); set {
+		directPW.Store(transcribeEnvTrue(v))
+		return
+	}
+	if err := os.Setenv(key, "1"); err != nil {
+		logger("[CC] %s could not be set (%v); batches will be held to one phrase", key, err)
+		return
+	}
+	directPW.Store(true)
+	logger("[CC] Pointwise convolutions pinned to the direct path, so more than one phrase can be transcribed at once")
+}
+
+// transcribeEnvTrue reads a flag the way the engine's own env::flag does, so an
+// explicit setting is honored as the engine will honor it rather than as this
+// program would guess.
+func transcribeEnvTrue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func pinHardwareVulkanICDs() {
 	if os.Getenv("VK_DRIVER_FILES") != "" || os.Getenv("VK_ICD_FILENAMES") != "" {
 		return
@@ -1394,6 +1452,18 @@ func (svc *txBatchService) run(w *txWorker) {
 		// Captions pause for the pending window and the
 		// freshness ceiling snaps them back to live afterward; a recording
 		// is never the thing that pays.
+		// How many phrases this model may be given at once. Most take the
+		// shared limit; one family aborts the process above one. See MaxBatch.
+		// One phrase a dispatch unless the conformer is on its direct path.
+		// See forceDirectPointwiseConv: the other path aborts the process on
+		// the second phrase, and a crash costs every tune this program carries.
+		phraseCap := maxBatchPhrases
+		if !directPW.Load() {
+			phraseCap = 1
+		}
+		if n := quirksFor(mustFindModel(currentCaptionConfig().Model)).MaxBatch; n > 0 && n < phraseCap {
+			phraseCap = n
+		}
 		audioCap := maxBatchAudioSec
 		// Polled finely, not every two seconds. Yielding to the tune is the
 		// point and that does not change; what changed is how long the
@@ -1439,7 +1509,7 @@ func (svc *txBatchService) run(w *txWorker) {
 		// and holding phrases back for other workers turned every batched
 		// dispatch into a solo one. The log printed both figures side by side
 		// the whole time.
-		for len(batch) < maxBatchPhrases && audioSec < maxBatchAudioSec && len(svc.requests) > 0 {
+		for len(batch) < phraseCap && audioSec < maxBatchAudioSec && len(svc.requests) > 0 {
 			select {
 			case r := <-svc.requests:
 				batch = append(batch, r)

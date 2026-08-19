@@ -520,6 +520,28 @@ type modelQuirks struct {
 	// of its own lookahead whatever it is handed — it simply does the same pass
 	// ten times as often. Zero means the shared default.
 	StreamChunkSec float64
+	// MaxBatch caps how many phrases may be handed to the engine in one
+	// dispatch. Zero means the shared default.
+	//
+	// One, for the parakeet family, and it is a crash rather than a
+	// preference. The engine's conformer adds its pointwise convolution bias
+	// by reshaping the activations to two dimensions:
+	//
+	//	// conv_1d_f32 returns ne=[T, 2*d_model, 1]. Reshape the
+	//	// 1-D bias to [1, 2*d_model] so ggml_add broadcasts.
+	//	x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1]);
+	//
+	// That comment says ne[2] == 1, and in a batch of n the tensor is
+	// [T, 2*d_model, n] — n times as many elements as the reshape asks for. So
+	// GGML_ASSERT(ggml_nelements(a) == ne0*ne1) fails and the library calls
+	// abort(), which takes this whole program down and every tune with it.
+	//
+	// It fires on the second phrase in a dispatch, so it needs two tuners
+	// talking at once, or one tuner talking while another's phrase is queued —
+	// which is to say it is rare on a quiet machine and reliable on a busy one.
+	// Nothing here can be quantized or configured around it: the shape is wrong
+	// before any arithmetic happens.
+	MaxBatch int
 	// Suppress reports text this model produces when nothing was said. It is
 	// given a whole phrase and answers about the whole phrase.
 	Suppress func(string) bool
