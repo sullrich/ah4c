@@ -1563,6 +1563,12 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				}
 				pending = append([]float32(nil), audio[keep:]...)
 				ctxLen = at - keep
+				// Carried, and said so. Audio put in front of the next phrase
+				// is transcribed again, and the only thing that takes the
+				// repeat back off is trimOverlap, which does nothing unless the
+				// phrase is marked as carrying something. Setting the one
+				// without the other is the context reaching the screen twice.
+				carryNext = ctxLen > 0
 				audio = audio[:at]
 			} else {
 				// No dip to be found, which means speech straight through.
@@ -1570,12 +1576,13 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 				lead := int(vadLead * asrSampleRate)
 				if len(audio) > lead {
 					pending = append([]float32(nil), audio[len(audio)-lead:]...)
+					ctxLen = len(pending)
 					carryNext = true
 				} else {
 					pending = nil
+					ctxLen = 0
 				}
 			}
-			ctxLen = len(pending)
 			silenceRun = 0
 		} else if gapped && !ended && e.quirks.ContextSec > 0 {
 			// A gap between words is not the end of anything, so the next
@@ -1606,7 +1613,7 @@ func (e *captionEngine) listen(pcm io.ReadCloser) {
 			}
 			pending = append([]float32(nil), audio[len(audio)-ctx:]...)
 			ctxLen = len(pending)
-			carryNext = true
+			carryNext = ctxLen > 0
 			silenceRun = 0
 		} else {
 			pending = nil
