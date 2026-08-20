@@ -1135,10 +1135,16 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// If it fails, the loop below still runs. A set that will not go in
 	// together may still go in singly, and a driver missing one library is
 	// worth more than a driver missing all of them.
+	// Priority is re-asked at each spawn rather than carried from atStartup:
+	// the door can open while this is still running — restoreGPURuntime's
+	// budget expires and main binds the port with packages left to go — and
+	// from that moment every dpkg here runs beside live tunes and owes them
+	// the backstop. The latched value chooses the plan; it must not choose
+	// the priority for work that outlives it.
 	asSet := false
 	if atStartup {
 		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
-		cmd := installCommand(atStartup, "dpkg", args...)
+		cmd := installCommand(!serving.Load(), "dpkg", args...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
@@ -1162,7 +1168,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
-		cmd := installCommand(atStartup, "dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
+		cmd := installCommand(!serving.Load(), "dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
