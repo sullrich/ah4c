@@ -15,14 +15,31 @@ package main
 // work — and a per-session architecture that would lift it is named as planned
 // rather than present.
 //
-// It is a unified model and does stream, which is not used here and is the
-// interesting thing about it. In streaming mode the port publishes 1.64% at a
-// third of a second of lookahead and 1.40% at a second, with no phrase to wait
-// for at all — better than this offline figure and far closer to the sound.
+// It is a unified model and does stream, which is the interesting thing about
+// it, and that is a choice on the page now rather than an unused capability.
+//
+// The engine runs this family's buffered streaming at (70, 13, 13) — 5.6s of
+// left context, a 1.04s chunk, 1.04s of right context — and its own docs call
+// that the highest-accuracy tuple and the row the model card reports streaming
+// accuracy for. Latency there is the chunk plus the right context, so 2.08
+// seconds, at 1.44% of words wrong against 1.62% for these offline weights.
+// Real time is, if anything, the more accurate of the two modes here.
+//
+// What it does not buy is much of the wait. Two seconds of lookahead is close
+// to what waiting for a sentence costs anyway, so the difference a viewer sees
+// is mostly that words arrive as they are spoken instead of a whole caption
+// landing at once. Tighter tuples exist and the port publishes them — 1.64% at
+// 320ms, 1.40% at 1.12s — but the engine is not asked for one, because picking
+// a config it does not default to means owning that choice on every machine
+// this runs on and nothing here has measured one.
+//
 // What it costs is a copy per tuner, in memory and in the graphics chip, and
-// that is the trade this program cannot make on a machine captioning ten of
-// them. If the engine ever shares a model across concurrent streams, this entry
-// is the one to revisit first.
+// the work of re-encoding: that window is recomputed for every chunk, so each
+// second of audio is encoded several times over. It was reported here at about
+// twice the offline mode's processing. That is a trade a machine captioning ten
+// tuners cannot make and a machine captioning two may well want, so it is the
+// transcription mode in the configuration: chosen on the page, a sentence at a
+// time by default, and decided in modelStreams.
 //
 // Delete this file and two references break, both named by the compiler: its
 // line in captionModelCatalog and its case in quirksFor.
@@ -31,13 +48,14 @@ var parakeetUnified = captionModel{
 	Key:  "parakeet-unified",
 	Name: "Parakeet Unified EN 0.6B",
 	Role: "Recommended",
-	Desc: "Within half a point of the most accurate model here, and it shares one copy across every tuner rather than loading one each. English only. Start here.",
-	// A phrase model as it is used here: nothing is transcribed until the
-	// sentence is complete.
-	Latency:   "A couple of seconds behind",
+	Desc: "Within half a point of the most accurate model here, and one copy serves every tuner. English only. Runs in real time too, if you ask for it.",
+	// A phrase model as it is used by default: nothing is transcribed until the
+	// sentence is complete. Set to real time it commits words as they settle,
+	// about two seconds behind the sound rather than a sentence behind it.
+	Latency:   "A couple of seconds behind; in real time the words arrive as they are spoken",
 	Accuracy:  "Excellent",
-	Benchmark: "1.6% of words come out wrong",
-	Hardware:  "Shares one copy across every tuner being captioned, so the memory does not grow with the tuner count. Heavier on the graphics chip than Canary and far lighter than Cohere.",
+	Benchmark: "1.6% of words come out wrong, 1.4% in real time",
+	Hardware:  "One copy serves every tuner. Heavier on the graphics chip than Canary, far lighter than Cohere. Real time loads a copy per tuner at roughly double the work.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/parakeet-unified-en-0.6b-gguf",
 	// Q4_K_M, and accuracy did not choose it because accuracy has nothing to
@@ -59,9 +77,14 @@ var parakeetUnified = captionModel{
 	//
 	// If it disappoints, Q8_0 is the one preset the engine does not mix and the
 	// first thing to try. The log prints the real-time factor to settle it.
-	File:        "parakeet-unified-en-0.6b-Q4_K_M.gguf",
-	SizeMB:      477,
-	Streaming:   false,
+	File:      "parakeet-unified-en-0.6b-Q4_K_M.gguf",
+	SizeMB:    477,
+	Streaming: false,
+	// Offline by default, and the streaming mode is real: the engine runs this
+	// model either way — "buffered streaming is supported on
+	// parakeet-unified-en-0.6b", and on nothing else in its family — so the
+	// page offers the choice. See modelStreams.
+	EitherMode:  true,
 	Punctuation: true,
 	// Cased and punctuated by the model, and English only: its own command line
 	// passes "--language en" and the model does nothing else.
@@ -103,4 +126,13 @@ var parakeetUnifiedQuirks = modelQuirks{
 	// really goes, and matching words is a guess at that. Word timings from the
 	// engine would answer it exactly.
 	PhraseWindow: modelDefaults.PhraseWindow,
+	// 1040 ms a feed when the streaming mode is chosen, which is the engine's
+	// own default for this family and not a guess: it runs buffered streaming
+	// at (70, 13, 13) — 5.6s of left context, a 1.04s chunk, 1.04s of right
+	// context, the tuple the model card's streaming accuracy is reported at —
+	// and its command line ships --stream-buf-chunk-ms 1040. Feeding less does
+	// not produce a word sooner, because the model cannot commit ahead of its
+	// right context; smaller pieces only re-encode the same window more often.
+	// The phrase path never reads this.
+	StreamChunkSec: 1.04,
 }

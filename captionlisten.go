@@ -249,7 +249,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	e.model = model
 	e.mu.Unlock()
 
-	if m.Streaming {
+	if modelStreams(m, cfg) {
 		// The same spelling the weights were loaded with.
 		//
 		// loadRecognizer corrects the language onto whatever locale the model
@@ -303,7 +303,7 @@ func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool, stop <
 	// Spell the language the way this model wants it before anything is loaded;
 	// cfg is a copy, so the correction lives exactly as long as this model.
 	cfg.Language = modelLanguage(m, cfg.Language)
-	if !m.Streaming {
+	if !modelStreams(m, cfg) {
 		// One shared copy serves every tuner; see txBatchService.
 		variant, err := captionVariantFor(m)
 		if err != nil {
@@ -438,21 +438,15 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 		// every successful read, so this is a decoder that will not start at
 		// all rather than one that hiccuped six times over three hours.
 		logger("[CC] %s the audio decoder failed %d times in a row; captions are off for this tune", e.label, attempt-1)
+		// The dead decoder comes off the engine here, because the watchdog
+		// stands down only when nothing is registered: left in place, it
+		// relogged the restart every fifteen seconds for the rest of the tune
+		// and killed the same corpse each time, promising captions this path
+		// had already turned off.
+		e.stopDecoder()
 		return nil, false
 	}
-	e.mu.Lock()
-	old, oldIn := e.ffmpeg, e.audioIn
-	// Cleared while held, so Close cannot pick up the same command and Wait on
-	// it concurrently: exec.Cmd.Wait is not safe to call twice.
-	e.ffmpeg, e.audioIn = nil, nil
-	e.mu.Unlock()
-	if oldIn != nil {
-		oldIn.Close()
-	}
-	if old != nil && old.Process != nil {
-		old.Process.Kill()
-		old.Wait()
-	}
+	e.stopDecoder()
 	// Checked again after the kill: Close may have run while this was working,
 	// and starting a decoder afterwards leaves an ffmpeg nobody owns and a
 	// reader blocked on it forever.
@@ -468,6 +462,26 @@ func (e *captionEngine) restartDecoder(attempt int) (io.ReadCloser, bool) {
 	}
 	logger("[CC] %s the audio decoder stopped and was restarted (attempt %d); captions resume shortly", e.label, attempt)
 	return pcm, true
+}
+
+// stopDecoder takes the audio decoder off the engine and puts it down.
+//
+// Cleared while the lock is held, so Close cannot pick up the same command and
+// Wait on it concurrently: exec.Cmd.Wait is not safe to call twice. The Wait
+// here also reaps the process, so a decoder that was killed does not linger as
+// a zombie for the rest of the tune.
+func (e *captionEngine) stopDecoder() {
+	e.mu.Lock()
+	old, oldIn := e.ffmpeg, e.audioIn
+	e.ffmpeg, e.audioIn = nil, nil
+	e.mu.Unlock()
+	if oldIn != nil {
+		oldIn.Close()
+	}
+	if old != nil && old.Process != nil {
+		old.Process.Kill()
+		old.Wait()
+	}
 }
 
 // watchDecoder kills an audio decoder that has stopped producing.

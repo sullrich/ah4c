@@ -1071,7 +1071,11 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// still what a driver installed from the page gets.
 	atStartup := !serving.Load()
 	if atStartup {
-		logger("[CC] Installing %d saved packages for %s in one go; nothing can be tuning yet", len(debs), g.Name)
+		// The reason for taking them all at once was said by the line above
+		// this one, which runs immediately before it on this path. Repeating
+		// "nothing can be tuning yet" a second time in three lines made a short
+		// deliberate wait read as a program repeating itself.
+		logger("[CC] Installing all %d saved packages for %s at once", len(debs), g.Name)
 	} else {
 		logger("[CC] Installing %d saved packages for %s, one at a time with a look for a quiet moment between each", len(debs), g.Name)
 	}
@@ -1131,10 +1135,16 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// If it fails, the loop below still runs. A set that will not go in
 	// together may still go in singly, and a driver missing one library is
 	// worth more than a driver missing all of them.
+	// Priority is re-asked at each spawn rather than carried from atStartup:
+	// the door can open while this is still running — restoreGPURuntime's
+	// budget expires and main binds the port with packages left to go — and
+	// from that moment every dpkg here runs beside live tunes and owes them
+	// the backstop. The latched value chooses the plan; it must not choose
+	// the priority for work that outlives it.
 	asSet := false
 	if atStartup {
 		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
-		cmd := politeCommand("dpkg", args...)
+		cmd := installCommand(!serving.Load(), "dpkg", args...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
@@ -1158,7 +1168,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
-		cmd := politeCommand("dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
+		cmd := installCommand(!serving.Load(), "dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
@@ -1257,6 +1267,29 @@ func politeCommand(name string, args ...string) *exec.Cmd {
 	}
 	full := append(append(pre, name), args...)
 	return exec.Command(full[0], full[1:]...)
+}
+
+// installCommand is politeCommand everywhere except in front of the listener.
+//
+// nice and ionice are here so an install loses every contest with a tune.
+// Before the port is bound there is no tune to lose to: the DVR gets connection
+// refused rather than a request nobody answers, and the only thing waiting on
+// dpkg is the door itself. Being polite there means the startup install yields
+// to nothing, for nobody, while the one thing it delays is ah4c answering at
+// all.
+//
+// Idle-class I/O is the expensive half of it. It is serviced only when nothing
+// else wants the disk, and this runs on machines where something else usually
+// does — an array, a parity check, a dozen other containers — so the packages
+// land at whatever rate the rest of the box allows. The same file already
+// argues this for the shape of the install ("no reason to take the whole set a
+// package at a time"); the priority was the one part that did not get the same
+// treatment.
+func installCommand(atStartup bool, name string, args ...string) *exec.Cmd {
+	if atStartup {
+		return exec.Command(name, args...)
+	}
+	return politeCommand(name, args...)
 }
 
 // driverFault is why the graphics driver cannot be used, in the words the page
@@ -1598,6 +1631,7 @@ const driverRestoreBudget = 2 * time.Minute
 func restoreGPURuntime() {
 	// The door opens the moment this returns, whichever way it returns.
 	defer serving.Store(true)
+	began := time.Now()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1605,6 +1639,26 @@ func restoreGPURuntime() {
 	}()
 	select {
 	case <-done:
+		// What the wait cost, said once it is over.
+		//
+		// Everything above runs with 7654 unbound, so anything asking during it
+		// gets connection refused — and nothing anywhere said how long that
+		// lasted. From outside, "ah4c is starting", most of a minute of silence
+		// and then "ah4c is ready" reads as a program that hung and recovered,
+		// which is exactly what a deliberate wait must never look like. A
+		// startup that held the door is a decision, and the log has to be able
+		// to account for it afterward.
+		//
+		// Under [START] rather than [CC] because it belongs to the startup
+		// sequence and not to the captions: it is the line that joins those
+		// other two, and somebody reading the gap between them is reading for
+		// that prefix.
+		//
+		// The threshold keeps it off the ordinary path, where nothing was saved,
+		// this returns in milliseconds and there is nothing to explain.
+		if held := time.Since(began); held > 3*time.Second {
+			logger("[START] The graphics driver held the door shut for %s. ah4c is binding 7654 now.", held.Round(time.Second))
+		}
 	case <-time.After(driverRestoreBudget):
 		logger("[CC] The graphics driver has been going in for %s and is not finished. ah4c is coming up now; the rest of it waits for quiet like everything else does.", driverRestoreBudget)
 	}
@@ -1725,7 +1779,21 @@ func restoreSavedDriverNow() {
 	}
 	if need {
 		if !serving.Load() {
-			logger("[CC] Putting the saved graphics driver back before the web server starts. Nothing can be tuning yet, so this is the one time it costs nobody anything; ah4c answers as soon as it is done.")
+			// Says the thing the reader is about to experience, which the old
+			// wording left out: not that the web server has yet to start, but
+			// that 7654 is unbound, so the DVR and a browser both get connection
+			// refused for the length of this rather than a slow answer. That is
+			// the difference between "it is working on something" and "it is
+			// broken", and only the log can tell them apart from outside.
+			//
+			// No estimate of how long, deliberately. driverRestoreBudget is the
+			// point where startup stops waiting and comes up with the install
+			// still running — it bounds the patience, not the work, and quoting
+			// it here would read as "this takes two minutes". Nothing has timed
+			// the one-dpkg startup path, so there is no honest figure to give in
+			// advance. The line at the end reports the time it actually took,
+			// which is worth more than a guess in front of it.
+			logger("[START] Putting the saved graphics driver back before the port is bound. Nothing can be tuning yet, which is the whole reason it happens here — but ah4c is not answering on 7654 until it is done, so anything asking meanwhile gets connection refused rather than a slow reply.")
 		}
 		reinstallSavedDriver()
 	}

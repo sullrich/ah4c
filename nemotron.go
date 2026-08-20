@@ -14,8 +14,16 @@ package main
 // It was measured against the phrase model on a graphics chip and keeps up with
 // it, so the second it saves costs nothing in throughput. What it costs is
 // context: it can never see what is said next, which is where its accuracy goes
-// against Cohere in English — and memory, because a streaming model cannot be
-// shared between tuners and loads a copy for each.
+// against Cohere in English — and memory, because a stream transcribing
+// continuously cannot share its copy with another and loads one for each tuner.
+//
+// That memory is why the mode is a choice here rather than a fact about the
+// model. Set to a sentence at a time it runs on the shared batch path with one
+// copy between every tuner, which is what it has always done as the fallback
+// when a streaming session will not open — so the path is the well-worn one and
+// not a new one written for the setting. That is the default, as it is for
+// every model that offers both; real time is a setting away for anybody who
+// came to this model for the second it saves.
 //
 // The engine handles it as a parakeet family model, which is worth knowing
 // because that is the name that appears in the log when it picks a backend.
@@ -27,12 +35,17 @@ var nemotronStreaming = captionModel{
 	Key:  "nemotron-streaming",
 	Name: "Nemotron 3.5 ASR Streaming 0.6B",
 	Role: "Best for low latency",
-	Desc: "Written as the audio arrives rather than a phrase at a time, so words appear about a second behind the speaker instead of four. Reads thirty-two languages, which is more than anything else here.",
-	// Streaming is a different shape of model, not a faster one: it keeps a
-	// running encoder state and commits words as they settle, so latency is
-	// a property of the architecture rather than a setting. The phrase
-	// window does not apply to it.
-	Latency:   "About a second behind the picture",
+	Desc: "32 languages, more than anything else here. Built for real time, about a second behind the speaker instead of four — switch it on under Caption settings.",
+	// Real time is a different shape of model, not a faster one: it keeps a
+	// running encoder state and commits words as they settle, so the second it
+	// saves is a property of the architecture rather than a setting that can be
+	// turned up elsewhere.
+	//
+	// What is a setting is which shape this model runs in. Set to a sentence at
+	// a time it goes down the shared phrase path like any other phrase model —
+	// the path it has always taken as the fallback when a streaming session
+	// will not open — and lands with that path's latency instead of this one.
+	Latency:   "About a second behind in real time; a couple of seconds otherwise",
 	Accuracy:  "Very good",
 	Benchmark: "Between the other two in English",
 	// The memory is the thing to know about this one, and it is not the
@@ -45,12 +58,22 @@ var nemotronStreaming = captionModel{
 	// and the memory is the size of the model times the number of tuners
 	// being captioned. Three streams is comfortable on most machines. Ten
 	// is seven gigabytes and worth deciding on deliberately.
-	Hardware:    "About 500 MB of memory for every tuner being captioned, because a streaming model cannot be shared between them. Comfortable for a few streams; worth adding up before running many.",
-	Runtime:     rtTranscribe,
-	Repo:        "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
-	File:        "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
-	SizeMB:      496,
-	Streaming:   true,
+	Hardware:    "One copy serves every tuner. Real time loads a copy each, about 500 MB per captioned tuner.",
+	Runtime:   rtTranscribe,
+	Repo:      "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+	File:      "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
+	SizeMB:    496,
+	Streaming: true,
+	// Real time is what this model is for, and it is still opted into rather
+	// than assumed: a sentence at a time is the default here as it is on every
+	// model that offers both. The engine takes this family down the phrase path
+	// without complaint; it always has, as the fallback when a streaming
+	// session will not open. What that mode buys is the shared arrangement
+	// every phrase model gets — one copy of the weights between every tuner
+	// instead of one each, and bursts of work with gaps between them instead of
+	// the accelerator held continuously. What it costs is the second this model
+	// saves, so anybody who came for that turns it on under Caption settings.
+	EitherMode:  true,
 	Punctuation: true,
 	// Q4_K_M, and the reason is the graphics chip rather than the model.
 	//

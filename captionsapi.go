@@ -146,7 +146,7 @@ func memoryWarning(cfg captionConfig) string {
 	n := captionedStreams(cfg)
 	per := streamMemoryMB(m)
 	totalMB := per * n
-	if runtimeOf(m) == rtTranscribe && !m.Streaming {
+	if runtimeOf(m) == rtTranscribe && !modelStreams(m, cfg) {
 		// Shared: the total is one copy no matter how many tuners, and by the
 		// same yardstick as everything else that rarely warrants a banner.
 		totalMB = per
@@ -159,10 +159,9 @@ func memoryWarning(cfg captionConfig) string {
 	if totalMB < 4000 {
 		return ""
 	}
-	if runtimeOf(m) == rtTranscribe && !m.Streaming {
-		return fmt.Sprintf("%s keeps about %s in memory — one copy shared by every tuner, loaded when "+
-			"the first stream needs it and freed when the last one ends — on top of everything else "+
-			"this machine is doing.", m.Name, humanMB(totalMB))
+	if runtimeOf(m) == rtTranscribe && !modelStreams(m, cfg) {
+		return fmt.Sprintf("%s keeps about %s in memory — one copy, shared by every tuner, freed when "+
+			"the last stream ends.", m.Name, humanMB(totalMB))
 	}
 	each := humanMB(per)
 	total := humanMB(totalMB)
@@ -170,14 +169,20 @@ func memoryWarning(cfg captionConfig) string {
 	if len(cfg.Tuners) > 0 {
 		which = fmt.Sprintf("the %d tuners you have selected", n)
 	}
-	warn := fmt.Sprintf("%s uses about %s of memory per stream, and every stream captioned at "+
-		"the same time loads its own copy. With captions on for %s that is up to %s of RAM at "+
-		"once, on top of everything else this machine is doing. Copies are not shared, because "+
-		"sharing one would make the streams wait for each other and fall behind the picture. "+
-		"Memory is released as soon as a stream ends.",
-		m.Name, each, which, total)
-
-	warn += " If this is more than you have, caption fewer tuners below or pick a smaller model."
+	// Name the cause and the cheapest fix, in that order, and stop.
+	//
+	// Real time is what makes memory grow with the tuner count: each stream
+	// keeps recognition state, so each keeps its own copy of the weights. This
+	// used to spend a paragraph explaining that and then advise a smaller
+	// model, which sends somebody shopping for a downgrade when the setting
+	// above gives the memory back and keeps the model they picked.
+	warn := fmt.Sprintf("Real time loads a copy of %s per stream — about %s each, up to %s across %s.",
+		m.Name, each, total, which)
+	if m.EitherMode {
+		warn += " Set Transcription to a sentence at a time and one copy serves them all."
+	} else {
+		warn += " Caption fewer tuners below, or pick a model that waits for sentences and shares one copy."
+	}
 	return warn
 }
 
@@ -188,20 +193,20 @@ func memoryWarning(cfg captionConfig) string {
 // concurrent streams take turns, and a stream that waits its turn falls behind
 // live audio and drops speech. Every simultaneous stream therefore loads its
 // own copy, and every copy is freed the moment its stream ends.
-func memoryNote(m captionModel, streams int) (memory, reuse, total string) {
+func memoryNote(m captionModel, cfg captionConfig, streams int) (memory, reuse, total string) {
 	per := streamMemoryMB(m)
-	if runtimeOf(m) == rtTranscribe && !m.Streaming {
+	if runtimeOf(m) == rtTranscribe && !modelStreams(m, cfg) {
 		// One copy serves every tuner on this path; see txBatchService.
 		memory = "one copy shared by every stream"
-		total = "about " + humanMB(per) + " total, however many tuners caption"
+		total = "about " + humanMB(per) + ", shared"
 		reuse = "Freed when the last stream ends."
 		return memory, reuse, total
 	}
 	memory = humanMB(per) + " per stream"
 	if streams > 1 {
-		total = fmt.Sprintf("up to %s with %d tuners captioning at once", humanMB(per*streams), streams)
+		total = fmt.Sprintf("up to %s across %d tuners", humanMB(per*streams), streams)
 	} else {
-		total = "about " + humanMB(per) + " with one tuner captioning"
+		total = "about " + humanMB(per)
 	}
 	reuse = "Each stream has its own copy, freed the moment it ends."
 	return memory, reuse, total
@@ -485,27 +490,23 @@ func captionStatusPayload() captionStatus {
 	models := make([]captionStatusModel, 0, len(captionModelCatalog))
 	for _, m := range captionModelCatalog {
 		rt := runtimeOf(m)
-		mem, reuse, total := memoryNote(m, streams)
+		mem, reuse, total := memoryNote(m, cfg, streams)
 		perMB := streamMemoryMB(m)
 		totalMB := perMB * streams
-		if runtimeOf(m) == rtTranscribe && !m.Streaming {
+		if runtimeOf(m) == rtTranscribe && !modelStreams(m, cfg) {
 			totalMB = perMB // one shared copy, whatever the tuner count
 		}
 		blocked := ""
 		switch {
 		case m.NeedsGPU && !hasGPU:
-			blocked = "This model needs a GPU and no GPU build can run in this container yet. " +
-				"On a processor it cannot keep pace with live audio: it falls further behind every " +
-				"minute and drops most of what is said, so it is not offered rather than left to " +
-				"disappoint after a multi-gigabyte download. The bar is low — integrated graphics " +
-				"clear it comfortably — so set up Vulkan or CUDA above and this appears."
+			blocked = "Needs a GPU, and no GPU build can run in this container yet. On a processor it " +
+				"falls behind live audio and drops most of what is said. Set up Vulkan or CUDA above " +
+				"and this appears — integrated graphics are enough."
 		case m.NeedsGPU && gpuVariant(rt) == "":
 			// The card is there; the build that uses it is not. Saying so is
 			// the difference between a two minute fix and a mystery.
 			blocked = "This machine has a usable GPU, but the GPU build of " + findSpeechRuntime(rt).Name +
-				" has not been downloaded yet. Download it above and this becomes available. It is " +
-				"deliberately not offered on the processor build: this model cannot keep pace with " +
-				"live audio there and would drop most of what is said."
+				" has not been downloaded yet. Download it above and this appears."
 		}
 		models = append(models, captionStatusModel{
 			captionModel:  m,

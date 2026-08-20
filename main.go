@@ -97,6 +97,7 @@ type reader struct {
 	gateStop      sync.Once
 	gateBase      map[string]bool
 	gateSig       string
+	gate          *gateReader
 	startedAt     time.Time
 }
 
@@ -235,7 +236,9 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 			if r.gateReady != nil {
 				if base != nil {
-					waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone)
+					if waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone) && r.gate != nil {
+						r.gate.expectNewStream()
+					}
 				} else {
 					logger("[PLAYBACK] %s no audio baseline, gating on motion alone", r.t.tunerip)
 				}
@@ -492,8 +495,10 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 					return r.Body, nil
 				}, fmt.Sprintf("tuner=%s", t.tunerip))
 			}
+			var gate *gateReader
 			if ready != nil {
-				body = newGateReader(body, ready)
+				gate = newGateReader(body, ready)
+				body = gate
 			}
 			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
@@ -506,6 +511,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				gateDone:   make(chan struct{}),
 				gateBase:   base,
 				gateSig:    sig,
+				gate:       gate,
 			}
 			return r, nil
 		}
@@ -1240,6 +1246,7 @@ func loadenv() {
 	logger("[ENV] NULL_FRAME_INSERTION       %s", os.Getenv("NULL_FRAME_INSERTION"))
 	logger("[ENV] PLAYBACK_DETECTION         %s", os.Getenv("PLAYBACK_DETECTION"))
 	logger("[ENV] PLAYBACK_DELAY             %s", os.Getenv("PLAYBACK_DELAY"))
+	logger("[ENV] PLAYBACK_STATIC_TIMEOUT    %s", os.Getenv("PLAYBACK_STATIC_TIMEOUT"))
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
@@ -1667,7 +1674,12 @@ type stallTolerantReader struct {
 	reconnectFn   func() (io.ReadCloser, error)
 	label         string
 	hasFirstChunk atomic.Bool
+	reconnects    atomic.Int64
 }
+
+type sessionSource interface{ sessions() int64 }
+
+func (s *stallTolerantReader) sessions() int64 { return s.reconnects.Load() }
 
 const (
 	stallReadGap         = 500 * time.Millisecond
@@ -1733,6 +1745,7 @@ func (s *stallTolerantReader) producer() {
 				continue
 			}
 			logger("[%s] reconnected to encoder", s.label)
+			s.reconnects.Add(1)
 			s.bodyMu.Lock()
 			s.body = nb
 			s.bodyMu.Unlock()
@@ -1805,6 +1818,7 @@ const (
 	playbackSessionEvery = time.Second
 	playbackTimeout      = 12 * time.Second
 	keyframeWait         = 8 * time.Second
+	keyframeCeiling      = 2 * keyframeWait
 	riseWindow           = 250 * time.Millisecond
 	riseFactor           = 4
 	riseWait             = time.Second
@@ -1823,16 +1837,52 @@ type gateReader struct {
 	keep     []byte
 	t0       time.Time
 	armedAt  time.Time
+	armed0   time.Time
 	winBytes int
 	winStart time.Time
 	lastWin  int
 	floor    int
 	peak     int
 	vid      map[int]bool
+
+	sess       sessionSource
+	sessSeen   int64
+	sess0      int64
+	expectSwap atomic.Bool
 }
 
 func newGateReader(src io.ReadCloser, ready <-chan struct{}) *gateReader {
-	return &gateReader{src: src, ready: ready, t0: time.Now()}
+	g := &gateReader{src: src, ready: ready, t0: time.Now()}
+	if sc, ok := src.(sessionSource); ok {
+		g.sess = sc
+		g.sessSeen = sc.sessions()
+		g.sess0 = g.sessSeen
+	}
+	return g
+}
+
+func (g *gateReader) resync() {
+	g.pat, g.pmt, g.carry, g.keep = nil, nil, nil, nil
+	g.vid = nil
+	g.winBytes, g.lastWin, g.floor, g.peak = 0, 0, 0, 0
+	g.winStart = time.Time{}
+	if !g.armedAt.IsZero() {
+		g.armedAt = time.Now()
+	}
+}
+
+func (g *gateReader) expectNewStream() { g.expectSwap.Store(true) }
+
+func (g *gateReader) releaseKind() string {
+	if g.floor > 0 && g.lastWin >= g.floor*riseFactor {
+		return "moving"
+	}
+	if g.floor > 0 && g.peak < g.floor*riseFactor && g.lastWin >= busyWindow &&
+		time.Since(g.armedAt) >= riseWait &&
+		!(g.sess != nil && g.expectSwap.Load() && g.sessSeen == g.sess0) {
+		return "uniform"
+	}
+	return ""
 }
 
 func (g *gateReader) armed() bool {
@@ -1923,18 +1973,14 @@ func (g *gateReader) scan(b []byte) int {
 		}
 		if g.armedAt.IsZero() {
 			g.armedAt = time.Now()
+			if g.armed0.IsZero() {
+				g.armed0 = g.armedAt
+			}
 		}
 		if g.vid[pid] && afc >= 2 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
-			risen := g.floor > 0 && g.lastWin >= g.floor*riseFactor
-			uniform := g.floor > 0 && g.peak < g.floor*riseFactor && g.lastWin >= busyWindow &&
-				time.Since(g.armedAt) >= riseWait
-			if risen || uniform {
+			if kind := g.releaseKind(); kind != "" {
 				g.keep = append(g.keep[:0], b[i:]...)
-				if risen {
-					g.release("moving")
-				} else {
-					g.release("uniform")
-				}
+				g.release(kind)
 				return len(b)
 			}
 		}
@@ -1947,6 +1993,12 @@ func (g *gateReader) Read(p []byte) (int, error) {
 	for !g.open && len(g.pend) == 0 {
 		buf := make([]byte, 32*1024)
 		n, err := g.src.Read(buf)
+		if g.sess != nil {
+			if s := g.sess.sessions(); s != g.sessSeen {
+				g.sessSeen = s
+				g.resync()
+			}
+		}
 		if n > 0 {
 			b := append(g.carry, buf[:n]...)
 			used := g.scan(b)
@@ -1959,6 +2011,12 @@ func (g *gateReader) Read(p []byte) (int, error) {
 				return 0, err
 			}
 			break
+		}
+		if !g.open && !g.armed0.IsZero() && time.Since(g.armed0) > keyframeCeiling {
+			logger("[PLAYBACK] the encoder kept replacing its stream for %v after playback, starting unaligned",
+				time.Since(g.armed0).Round(time.Second))
+			g.pend = append(append([]byte{}, g.pat...), g.pmt...)
+			g.open, g.carry = true, nil
 		}
 		if !g.open && !g.armedAt.IsZero() && time.Since(g.armedAt) > keyframeWait {
 			logger("[PLAYBACK] no keyframe within %v of playback, starting unaligned", keyframeWait)
@@ -2195,36 +2253,45 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
-func playbackBudget() time.Duration {
-	if s := os.Getenv("PLAYBACK_TIMEOUT"); s != "" {
+// playbackStaticBudget is how long the box may keep the exact player and media
+// session it already had before the adb check concludes a tune cannot be seen
+// from here and hands off to motion gating. Two seconds suits an Osprey, which
+// tears into a tune at once; the DTV app holds one player across channel
+// changes for longer than that, so PLAYBACK_STATIC_TIMEOUT overrides it, in
+// seconds. A value at or above the check's budget means the early handoff
+// never fires and the check simply runs its full budget.
+func playbackStaticBudget() time.Duration {
+	if s := os.Getenv("PLAYBACK_STATIC_TIMEOUT"); s != "" && s != "0" {
 		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
 			return time.Duration(secs) * time.Second
 		}
-		logger("[PLAYBACK] PLAYBACK_TIMEOUT %q is not a positive number of seconds, using %v", s, playbackTimeout)
+		logger("[PLAYBACK] PLAYBACK_STATIC_TIMEOUT %q is not a positive number of seconds, using %v", s, playbackStaticFor)
 	}
-	return playbackTimeout
+	return playbackStaticFor
 }
 
-func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) {
+func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) bool {
 	t0 := time.Now()
-	budget := playbackBudget()
+	budget := playbackTimeout
+	staticFor := playbackStaticBudget()
 	deadline := t0.Add(budget)
 	held := map[string]int{}
 	last := map[string]bool{}
 	fails := 0
+	swapComing := false
 	var staticSince, sigAt time.Time
 	nowSig := sig
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
-			return
+			return swapComing
 		default:
 		}
 		out := adbAudio(tunerip)
 		if len(out) == 0 {
 			if fails++; fails >= adbGiveUp {
 				logger("[PLAYBACK] %s unreachable over adb, gating on motion alone", tunerip)
-				return
+				return swapComing
 			}
 			time.Sleep(playbackPoll)
 			continue
@@ -2233,22 +2300,23 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 		last = audioPiids(string(out))
 		if heldNewID(base, last, held) {
 			logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-			return
+			return swapComing
 		}
-		if sig != "" && time.Since(sigAt) >= playbackSessionEvery {
+		if sig != "" && !swapComing && time.Since(sigAt) >= playbackSessionEvery {
 			nowSig, sigAt = mediaSignature(tunerip), time.Now()
 			if nowSig != "" && nowSig != sig {
-				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-				return
+				swapComing = true
+				logger("[PLAYBACK] %s media session changed after %v, waiting for audio to start",
+					tunerip, time.Since(t0).Round(time.Millisecond))
 			}
 		}
 		if sig != "" && nowSig == sig && samePiids(base, last) {
 			if staticSince.IsZero() {
 				staticSince = time.Now()
-			} else if time.Since(staticSince) >= playbackStaticFor {
+			} else if time.Since(staticSince) >= staticFor {
 				logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
 					tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
-				return
+				return swapComing
 			}
 		} else {
 			staticSince = time.Time{}
@@ -2261,6 +2329,7 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 	}
 	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
 		tunerip, budget, piidList(base), piidList(last), session)
+	return swapComing
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
