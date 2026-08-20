@@ -33,12 +33,12 @@ var canaryFlash = captionModel{
 	// on and puts a badge on whichever model it picks. Saying it here as well
 	// put the word beside two different models at once.
 	Role: "Lightest of the accurate ones",
-	Desc: "Nearly the accuracy of the best one at a sixth of the cost, so an ordinary machine captions several tuners at once rather than four or five. English, German, Spanish and French. Start here.",
+	Desc: "Nearly the accuracy of the best one at a sixth of the cost. English, German, Spanish and French.",
 	// A phrase model: nothing is transcribed until the sentence is complete.
 	Latency:   "A couple of seconds behind",
 	Accuracy:  "Excellent",
 	Benchmark: "1.9% of words come out wrong",
-	Hardware:  "Shares one copy across every tuner being captioned, so the memory does not grow with the tuner count. The lightest of the accurate models on the graphics chip.",
+	Hardware:  "One copy serves every tuner. The lightest of the accurate models on the graphics chip.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/canary-180m-flash-gguf",
 	// Q8_0, and the accuracy is not what chose it.

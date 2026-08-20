@@ -26,12 +26,12 @@ var parakeetTDT = captionModel{
 	Key:  "parakeet-tdt-110m",
 	Name: "Parakeet TDT-CTC 110M",
 	Role: "Best for small systems",
-	Desc: "A hundred and thirty-five megabytes, English only, and accurate for its size. For machines too small to run the others.",
+	Desc: "135 MB, English only, and accurate for its size. For machines too small to run the others.",
 	// A phrase model, so it cannot answer before the phrase is complete.
 	Latency:   "A couple of seconds behind",
 	Accuracy:  "Very good",
 	Benchmark: "2.4% of words come out wrong",
-	Hardware:  "Runs on almost anything, and shares one copy of itself across every tuner being captioned.",
+	Hardware:  "Runs on almost anything. One copy serves every tuner.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/parakeet-tdt_ctc-110m-gguf",
 	// Q8_0, on a processor and on a graphics chip alike.

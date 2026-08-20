@@ -166,7 +166,12 @@ main() {
   checkM3Us allente.m3u channels.m3u coachella.m3u directv.m3u dtvdeeplinks.m3u dtvosprey.m3u dtvstream.m3u dtvstreamdeeplinks.m3u edc.m3u foo-fighters.m3u fubo.m3u hulu.m3u kodifaves-pbs-seatac.m3u livetv.m3u nbc.m3u npo.m3u pbs-seatac.m3u pbs-worcester.m3u silicondust.m3u sling.m3u spectrum.m3u xfinity.m3u youtubetv_shield.m3u youtubetv.m3u zinwell.m3u
   createM3Us $(expandVars TUNER)
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"
-  npm start --prefix ws-scrcpy &
+  # Labeled, because its output lands in the same container log as ah4c's and
+  # its startup banner reads as somebody else's claim: "Listening on:
+  # http://ah4c:8000/" is ws-scrcpy announcing the device-control UI on 8000,
+  # printed while ah4c is deliberately not answering on 7654 yet. Unlabeled,
+  # that is ah4c appearing to say it is up when it is not.
+  npm start --prefix ws-scrcpy 2>&1 | sed -u 's/^/[SCRCPY] /' &
   ./ah4c
 }
 

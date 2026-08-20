@@ -51,6 +51,12 @@ type captionModel struct {
 	// a wall of unpunctuated capitals is worth knowing about in advance.
 	Streaming   bool `json:"streaming"`
 	Punctuation bool `json:"punctuation"`
+	// EitherMode marks a model this program can run both ways: a phrase at a
+	// time from one shared copy, or transcribing as the audio arrives with a
+	// copy per tuner. Streaming above becomes the model's default rather than
+	// its only answer, and Mode in captionConfig is where a different choice
+	// is recorded. modelStreams is the one place the two are put together.
+	EitherMode bool `json:"eitherMode"`
 	// NoLanguage marks a single-language model that wants no language
 	// parameter: the engine treats none-given as that language, and passing
 	// nothing is the documented path.
@@ -72,6 +78,25 @@ var captionModelCatalog = []captionModel{
 	cohereTranscribe,
 	nemotronStreaming,
 	parakeetTDT,
+}
+
+// modelStreams is the single place that decides whether a stream on this model
+// transcribes continuously or a phrase at a time. A model that runs both ways
+// follows the saved choice; everything else does the one thing it does, and an
+// answer the page never offers means the default. Every path that forks on the
+// mode asks this — the recognizer that is loaded, the listener that feeds it,
+// the caption meter, the memory arithmetic on the page — because two of those
+// forks deciding differently would load one architecture and feed another.
+func modelStreams(m captionModel, cfg captionConfig) bool {
+	// Real time is opted into and never landed on. A model that runs both ways
+	// waits for sentences until somebody asks for the other mode, whichever way
+	// the model itself leans, so an unset configuration and an unrecognized one
+	// both come out as the mode that shares one copy of the weights across every
+	// tuner.
+	if m.EitherMode {
+		return cfg.Mode == "realtime"
+	}
+	return m.Streaming
 }
 
 // quirksFor is the single place a model's name is turned into its handling.
@@ -193,6 +218,12 @@ type captionConfig struct {
 	// PhraseSec is how long a phrase model may listen before it cuts, chosen on
 	// the page from what the model offers. Zero means the model's own figure.
 	PhraseSec float64 `json:"phraseSec"`
+	// Mode picks how a model that runs both ways transcribes. "realtime"
+	// writes words as they are spoken, with a copy of the model per captioned
+	// tuner; "sentence" waits for each sentence to finish and shares one copy
+	// between every tuner. Empty is the model's own default, and models that
+	// only run one way ignore it.
+	Mode string `json:"mode"`
 	// Engine selects which build of the recognizer to run: the processor, or a
 	// GPU through Vulkan or CUDA.
 	Engine string `json:"engine"`
@@ -269,6 +300,15 @@ func saveCaptionConfig(cfg captionConfig) error {
 		if !keep {
 			cfg.PhraseSec = 0
 		}
+		// The mode is a choice only on a model that runs both ways, and only
+		// the two answers the page offers mean anything. Anything else — a
+		// choice saved against a single-mode model, a word from some other
+		// build — is the model's own default, and recording it would leave it
+		// sitting in the file waiting to take effect the day the model is
+		// switched. Cleared the same way a foreign phrase length is.
+		if !m.EitherMode || (cfg.Mode != "realtime" && cfg.Mode != "sentence") {
+			cfg.Mode = ""
+		}
 	}
 	if err := os.MkdirAll(captionDir, 0o755); err != nil {
 		return err
@@ -325,7 +365,11 @@ func modelInstalled(m captionModel) bool {
 func recommendedModel() (key, why string) {
 	// Guidance, never a gate: every model runs anywhere, and the page only
 	// says where to start.
-	return parakeetUnified.Key, "The place to start: within half a point of the most accurate model here, sharing one copy across every tuner rather than loading one each. Canary is lighter again on the graphics chip; Cohere is more accurate and asks a great deal more of it."
+	// This sits directly above the model's own description on the page, so it
+	// says only what that line does not: how the alternatives compare. It used
+	// to repeat the accuracy and the shared copy word for word, and the two
+	// lines read as one paragraph stuttering.
+	return parakeetUnified.Key, "Start here. Canary is lighter again on the graphics chip; Cohere is more accurate and asks a great deal more of it."
 }
 
 // profiledFamilies is the engine families to ask for a timing breakdown,

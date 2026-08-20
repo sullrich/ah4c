@@ -611,6 +611,42 @@ table.table {
   font-size: 0.76rem;
 }
 
+/* The feed scrolls inside its card. The card itself never grows.
+
+   A DVR starting several recordings at once writes a line per tuner, and ten
+   tuners is a list far longer than the box it sits in. What must not happen is
+   the box getting longer to suit it: this card shares a row with the stats card
+   and stays level with it however much activity there is.
+
+   flex-basis 0 is what holds that line. It replaces the feed's content-based
+   size, so however many rows arrive they contribute nothing to the card's own
+   height — the row is measured from the stats card alone, this card is
+   stretched to match it, and the feed grows into whatever that leaves and
+   scrolls past it. flex-basis auto is what the browser would use otherwise, and
+   it lets the list push the card taller, which is the growth being avoided.
+
+   min-height: 0 is not enough on its own here and is not what this relies on.
+   It only permits shrinking; a basis of auto would still ask for the content's
+   full height first and win the row.
+
+   The floor is the old 260px cap doing the opposite job. Under 860px the two
+   cards stack, so there is no sibling left to take a height from and a basis of
+   zero would give the feed nothing to fill — it would collapse to the title
+   alone. This keeps a usable window of it there, the same height it has always
+   had on a phone, and min() keeps that from swallowing a short screen whole
+   (in the split Activity & Logs view the viewport is the pane, not the
+   window). */
+.activity-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-card > .activity-feed {
+  flex: 1 1 0;
+  min-height: min(260px, 50vh);
+  max-height: none;
+}
+
 .activity-feed table { width: 100%; border-collapse: collapse; }
 .activity-feed td { padding: 0.28rem 0.4rem; border-bottom: 1px solid var(--border-soft); word-break: break-all; color: var(--text-muted); }
 .activity-feed tr:last-child td { border-bottom: none; }

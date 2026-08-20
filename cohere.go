@@ -23,14 +23,14 @@ var cohereTranscribe = captionModel{
 	Key:  "cohere-transcribe",
 	Name: "Cohere Transcribe 03-2026",
 	Role: "Best accuracy, if the machine can carry it",
-	Desc: "The most accurate open speech model there is. It waits for a phrase to finish and then writes it whole, which reads like the captions on a broadcast channel. One copy is shared by every tuner.",
+	Desc: "The most accurate open speech model there is, and the heaviest. One copy serves every tuner.",
 	// It reads a whole phrase and then writes it, so the delay setting
 	// governs how far behind it runs; the batch service amortizes its
 	// per-call cost across every tuner.
 	Latency:   "Two to four seconds behind the picture, like live broadcast captioning",
 	Accuracy:  "Best available",
 	Benchmark: "1.3% of words come out wrong",
-	Hardware:  "Runs on the processor; a GPU takes the load off it, and integrated graphics are plenty. How many streams your machine carries is measured and shown on this page once captions are running.",
+	Hardware:  "Runs on the processor; a GPU takes the load off, and integrated graphics are plenty. The measured speed is shown above once captions are running.",
 	Runtime:   rtTranscribe,
 	Repo:      "handy-computer/cohere-transcribe-03-2026-gguf",
 	// Q4_K_M, after Q8_0 was tried on this machine and measured.

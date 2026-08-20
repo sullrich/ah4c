@@ -249,7 +249,7 @@ func (e *captionEngine) start(cfg captionConfig, m captionModel) {
 	e.model = model
 	e.mu.Unlock()
 
-	if m.Streaming {
+	if modelStreams(m, cfg) {
 		// The same spelling the weights were loaded with.
 		//
 		// loadRecognizer corrects the language onto whatever locale the model
@@ -303,7 +303,7 @@ func loadRecognizer(m captionModel, cfg captionConfig, alive func() bool, stop <
 	// Spell the language the way this model wants it before anything is loaded;
 	// cfg is a copy, so the correction lives exactly as long as this model.
 	cfg.Language = modelLanguage(m, cfg.Language)
-	if !m.Streaming {
+	if !modelStreams(m, cfg) {
 		// One shared copy serves every tuner; see txBatchService.
 		variant, err := captionVariantFor(m)
 		if err != nil {

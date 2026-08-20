@@ -305,7 +305,7 @@ func (c *cea608) setPictureRate(fps float64) {
 
 // captionLag is how much unread text the meter may hold for this model.
 func captionLag(m captionModel, cfg captionConfig) float64 {
-	if m.Streaming {
+	if modelStreams(m, cfg) {
 		return ccLagStreaming
 	}
 	if w := phraseWindowFor(quirksFor(m), cfg); w > 0 {

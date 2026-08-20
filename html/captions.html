@@ -159,15 +159,9 @@
             </p>
             <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
             <p class="small muted" style="margin:0 0 0.6rem;">
-                <b>Canary</b> is the one to start with: within a point of the most accurate model here at a
-                sixth of the cost, so an ordinary machine captions several tuners at once. <b>Cohere</b> is
-                more accurate again and asks a great deal more of the graphics chip, which is worth it on a
-                tuner or two. Both wait for each sentence to finish, so both run a couple of seconds behind.
-                <b>Nemotron</b> writes as it listens, about a second behind, and reads thirty-two languages.
-                <b>Parakeet</b> is the one to pick if the machine cannot manage the others.<br>
-                All of them share one copy across every tuner except Nemotron, which loads a copy per tuner
-                and wants the graphics chip continuously for each &mdash; so it is the one to watch when
-                captioning several tuners at once.
+                All of these wait for each sentence to finish and share one copy across every tuner.
+                <b>Parakeet Unified</b> and <b>Nemotron</b> will also run in real time, writing words as
+                they are spoken &mdash; that loads a copy per tuner. Pick under Caption settings.
             </p>
             <div id="memWarn"></div>
             <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
@@ -197,14 +191,16 @@
                 </select>
             </div>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
-                <b>Box</b> shows a whole caption at once and replaces it whole, the way captions on recorded
-                programs look. Nothing types and nothing scrolls. It waits for enough of a sentence to show
-                and for the caption before it to be read, so it runs a little further behind.<br>
-                <b>Roll-up</b> writes words as they are recognized and scrolls finished lines up. Nothing is
-                held back, so it is the closest to the sound &mdash; the one to fall back to if a box feels
-                too far behind on your machine.
+                <b>Box</b> shows a whole caption at once, the way recorded programs look, and runs a little
+                further behind for it. <b>Roll-up</b> writes words as they are recognized and scrolls
+                finished lines up &mdash; closest to the sound, and the one to try if a box feels too slow.
             </p>
             <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="styleHelp"></p>
+            <div class="field-row" id="modeRow" style="display:none;">
+                <label for="mode">Transcription</label>
+                <select id="mode"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="modeHelp"></p>
             <div class="field-row" id="phraseRow" style="display:none;">
                 <label for="phrase">Sentence length</label>
                 <select id="phrase"></select>
@@ -498,7 +494,7 @@ function render() {
                     </div>
                 </div>`}
                 <div class="model-tags">
-                    <span class="tag ${m.streaming ? 'tag-live' : ''}">${m.streaming ? 'Types as it hears' : 'Waits for each sentence'}</span>
+                    <span class="tag ${m.streaming || m.eitherMode ? 'tag-live' : ''}">${m.eitherMode ? 'Sentence at a time or real time' : (m.streaming ? 'Types as it hears' : 'Waits for each sentence')}</span>
                     <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
                     <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
                     <span class="tag ${m.memoryTotalMB >= 4000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
@@ -538,6 +534,28 @@ function render() {
         `<option value="${esc(l)}" ${l === cfg.language ? 'selected' : ''}>${esc(state.languageNames[l] || l)}</option>`).join('');
     if (!langs.includes(cfg.language)) sel.value = langs[0];
 
+    // Transcription mode, and only for a model that runs both ways. The
+    // options are built here rather than in the markup for the same reason the
+    // sentence lengths are: collect() reads this select whether or not the row
+    // is on screen, so a hidden row must not go on saving a choice that
+    // belongs to a model that has been switched away from.
+    const both = !!(model && model.eitherMode);
+    document.getElementById('modeRow').style.display = both ? '' : 'none';
+    const msel = document.getElementById('mode');
+    if (both) {
+        msel.innerHTML =
+            `<option value="sentence">A sentence at a time (default)</option>
+             <option value="realtime">Real time &mdash; words appear as spoken</option>`;
+        msel.value = cfg.mode === 'realtime' ? 'realtime' : 'sentence';
+        document.getElementById('modeHelp').innerHTML =
+            `<b>A sentence at a time</b> runs a couple of seconds behind and shares one copy across every
+             tuner. <b>Real time</b> writes words as they are spoken and loads a copy per tuner${
+                model.key === 'parakeet-unified' ? ', at roughly double the processing' : ''}.`;
+    } else {
+        msel.innerHTML = '';
+        document.getElementById('modeHelp').innerHTML = '';
+    }
+
     // Sentence length, and only for a model that has sentences. A streaming
     // model has no phrase to lengthen, so the row is not shown at all.
     const wins = (model && model.windows) || [];
@@ -547,8 +565,8 @@ function render() {
         sel.innerHTML = wins.map(w =>
             `<option value="${w}" ${w === model.window ? 'selected' : ''}>${w.toFixed(1)} seconds${w === 4 ? ' (default)' : ''}</option>`).join('');
         document.getElementById('phraseHelp').innerHTML =
-            `How long ${esc(model.name.split(' ')[0])} listens before it writes. Longer is more accurate and
-             further behind the picture; shorter is quicker and guesses more.`;
+            `How long it listens before writing. Longer is more accurate and further behind; shorter is
+             quicker and guesses more.`;
     } else {
         // Emptied, not just hidden. The options are the last model's, and
         // collect() reads this select whether or not the row is on screen — so
@@ -610,9 +628,9 @@ function spellingField(value) {
         return;
     }
     document.getElementById('spellingHelp').innerHTML =
-        `${esc((model && model.name.split(' ')[0]) || 'This model')} is not told which English to write, so it
-         writes whichever its training leaned toward &mdash; tyre or tire, colour or color. Pick one and the
-         words on the list are corrected; anything not on it is left exactly as recognized.`;
+        `${esc((model && model.name.split(' ')[0]) || 'This model')} cannot be told which English to write, so
+         it writes whichever its training leaned toward &mdash; tyre or tire. Pick one and the words on the
+         list are corrected; the rest are left as recognized.`;
 }
 
 function styleFields() {
@@ -621,19 +639,14 @@ function styleFields() {
         ? ''
         : `Set to Box, 2 lines for the broadcast look.`;
     document.getElementById('speedHelp').innerHTML = box
-        ? `How fast you read, which is what decides how long each caption stays: a short one clears quickly
-           and a full one is given the time it needs. Lower it if captions are replaced before you finish
-           them.`
-        : `How fast words appear on screen. Research finds slower is not easier &mdash; viewers re-read two
-           subtitles in three when they are slow, against one in five when they are quick &mdash; so the
-           default sits at the top of the published range. Lower it only if the captions outrun you.`;
+        ? `How fast you read, which decides how long each caption stays. Lower it if captions are replaced
+           before you finish them.`
+        : `How fast words appear on screen. Lower it only if the captions outrun you &mdash; slower is not
+           easier to read, and the default sits at the top of the published range.`;
     document.getElementById('onscreenHelp').innerHTML = box
-        ? `The longest any one caption may stay. Most are shown for the time they take to read, so this is
-           the ceiling rather than the wait &mdash; and a sentence too long for two lines becomes two
-           captions, each with its own.`
-        : `How long a line stays before it scrolls away. Longer is easier to read, but it is also a ceiling:
-           one line leaves per roll, so past about five seconds the display cannot keep up with fast speech
-           and starts catching up in jumps. Four suits news, five or six suit drama.`;
+        ? `The longest any one caption may stay. Most clear sooner, in the time they take to read.`
+        : `How long a line stays before it scrolls away. Past about 5 seconds the display cannot keep up
+           with fast speech. 4 suits news, 5 or 6 suit drama.`;
 }
 
 
@@ -647,6 +660,7 @@ function pickModel(key) {
 function collect() {
     return {
         enabled: document.getElementById('enabled').checked,
+        mode: document.getElementById('mode').value || '',
         phraseSec: parseFloat(document.getElementById('phrase').value) || 0,
         speedWPM: parseInt(document.getElementById('speed').value, 10) || 0,
         model: state.config.model,
