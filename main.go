@@ -1818,6 +1818,7 @@ const (
 	playbackSessionEvery = time.Second
 	playbackTimeout      = 12 * time.Second
 	keyframeWait         = 8 * time.Second
+	keyframeCeiling      = 2 * keyframeWait
 	riseWindow           = 250 * time.Millisecond
 	riseFactor           = 4
 	riseWait             = time.Second
@@ -1836,6 +1837,7 @@ type gateReader struct {
 	keep     []byte
 	t0       time.Time
 	armedAt  time.Time
+	armed0   time.Time
 	winBytes int
 	winStart time.Time
 	lastWin  int
@@ -1971,6 +1973,9 @@ func (g *gateReader) scan(b []byte) int {
 		}
 		if g.armedAt.IsZero() {
 			g.armedAt = time.Now()
+			if g.armed0.IsZero() {
+				g.armed0 = g.armedAt
+			}
 		}
 		if g.vid[pid] && afc >= 2 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
 			if kind := g.releaseKind(); kind != "" {
@@ -2006,6 +2011,12 @@ func (g *gateReader) Read(p []byte) (int, error) {
 				return 0, err
 			}
 			break
+		}
+		if !g.open && !g.armed0.IsZero() && time.Since(g.armed0) > keyframeCeiling {
+			logger("[PLAYBACK] the encoder kept replacing its stream for %v after playback, starting unaligned",
+				time.Since(g.armed0).Round(time.Second))
+			g.pend = append(append([]byte{}, g.pat...), g.pmt...)
+			g.open, g.carry = true, nil
 		}
 		if !g.open && !g.armedAt.IsZero() && time.Since(g.armedAt) > keyframeWait {
 			logger("[PLAYBACK] no keyframe within %v of playback, starting unaligned", keyframeWait)
