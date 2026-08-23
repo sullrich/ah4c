@@ -264,9 +264,9 @@ them back further.
 
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-17-02" src="https://github.com/user-attachments/assets/b84e6fb9-3e56-41c1-bb54-76bc70e69b27" />
+<img width="1666" height="836" alt="screenshot-docker6-2026-08-23-11-17-28" src="https://github.com/user-attachments/assets/f65ee365-7d42-4db0-aa91-79a254eaefb9" />
 
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-10-42" src="https://github.com/user-attachments/assets/a7e4ab65-1787-490f-a2a3-f02c6a2cc819" />
+<img width="1666" height="836" alt="screenshot-docker6-2026-08-23-11-18-21" src="https://github.com/user-attachments/assets/eb45beda-5c27-402b-bd23-e8913b362eaa" />
 
 #### Docker Instructions
 
