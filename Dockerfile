@@ -22,6 +22,7 @@ RUN npm install
 # Build ah4c application
 WORKDIR /go/src/github.com/sullrich
 RUN git clone --branch main --single-branch https://github.com/sullrich/ah4c . \
+    && sh bump-version.sh \
     && go build -o /opt/ah4c
 
 # Second Stage: Create the Runtime Environment

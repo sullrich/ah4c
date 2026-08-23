@@ -1295,7 +1295,7 @@ func loadenv() {
 
 // Almighty main function
 func main() {
-	logger("[START] ah4c is starting")
+	logger("[START] ah4c %s is starting", buildVersion())
 	loadenv()
 	loadCaptionConfig()
 	warnIfNotPersistent()
