@@ -42,6 +42,8 @@ ah4c WebUI:
 
 ### Closed Captions
 
+<img width="1666" height="2823" alt="screencapture-docker6-2026-08-23-11_15_39" src="https://github.com/user-attachments/assets/65fccf8a-9f85-4723-8e4b-c0e0b876cd6f" />
+
 Streaming apps hand the encoder a picture with the captions already stripped off, so
 everything downstream of ah4c has nothing to display. The **Closed Captions** page adds
 them back.
