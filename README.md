@@ -28,17 +28,17 @@
 
 ah4c WebUI:
 
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-05-29" src="https://github.com/user-attachments/assets/ca64d967-29dd-4a78-97b5-1018d3ce2647" />
+<img width="1666" height="844" alt="Screenshot 2026-08-23 at 11-03-06 ah4c - Organizr V2" src="https://github.com/user-attachments/assets/7859428d-6430-4025-8d2e-e5181f9dd970" />
 
-### Activity & logs:
+### Activity:
 
-<img width="1685" height="836" alt="screenshot-channels0-2025-08-31-09-13-54" src="https://github.com/user-attachments/assets/8a3043cc-063a-401c-b49b-68c94ce74195" />
+<img width="1920" height="2083" alt="screencapture-docker6-2026-08-19-19_09_55" src="https://github.com/user-attachments/assets/1e221fe5-cf23-48b6-81db-e733552ba4e7" />
 
 (built in stats gui)
 
 ### M3U Editor
 
-<img width="1685" height="836" alt="screenshot-htpc6-2025-08-31-08-01-57" src="https://github.com/user-attachments/assets/f2297fc1-a108-4790-a78a-26401211beee" />
+<img width="1666" height="844" alt="Screenshot 2026-08-23 at 11-13-34 ah4c - Organizr V2" src="https://github.com/user-attachments/assets/241ff599-2573-4281-8a61-b84519754503" />
 
 ### Closed Captions
 
