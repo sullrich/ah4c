@@ -23,6 +23,8 @@
 18. Use OCR if tesseract is installed looking for common questions such as Whos there? and Still watching?
 19. NULL packet insertion - fills encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR sees a continuous bitstream during HDMI source gaps
 20. Closed captions - live CPU speech-to-text written into the stream as CEA-608, the way an HDHomeRun carries them, with no re-encode and nothing added to the image
+21. Autocrop for Xfinity channels with black borders on all 4 sides, driven live through a LinkPi Encoder's web API
+22. Custom startup script - run your own script alongside ah4c at container start via USER_SCRIPT
 
 ah4c WebUI:
 
@@ -114,7 +116,7 @@ You also have to pass the graphics device through, which is off by default. Set 
 env file and recreate the container:
 
 ```
-GPU_DEVICE=/dev/dri:/dev/dri
+GPU_DEVICE=/dev/dri
 ```
 
 **CUDA** needs nothing installed: the download carries its own CUDA runtime, and the NVIDIA
@@ -287,18 +289,19 @@ them back further.
 
 ```yaml
 services:
-  # 2026.08.05
+  # 2026.08.20
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c:
-    image: bnhf/ah4c:${TAG}
+    image: bnhf/ah4c:${TAG:-latest}
     container_name: ah4c
     hostname: ah4c
-    dns_search: ${DOMAIN} # Specify the name of your LAN's domain, usually local or localdomain
+    dns_search: ${DOMAIN:-localdomain} # Specify the name of your LAN's domain, usually local or localdomain
+    runtime: ${DOCKER_RUNTIME:-runc} # Closed captions only. Set DOCKER_RUNTIME=nvidia for an NVIDIA GPU with the CUDA engine build. Requires the NVIDIA container toolkit
+    devices:
+      - ${GPU_DEVICE:-/dev/null} # Closed captions only. Set GPU_DEVICE=/dev/dri to let the Vulkan engine build use an Intel or AMD GPU. Left at the default it passes /dev/null, which always exists and does nothing
     ports:
-      - ${ADBS_PORT}:5037 # Port used by adb-server
-      - ${HOST_PORT}:7654 # Port used by this ah4c proxy
-      - ${WSCR_PORT}:8000 # Port used by ws-scrcpy
+      - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP and ENCODERn_URL line below for each beyond 9
@@ -321,26 +324,31 @@ services:
       - ENCODER8_URL=${ENCODER8_URL} # Full URL for tuner #8 in the form http://hostname/stream or http://ip/stream
       - ENCODER9_URL=${ENCODER9_URL} # Full URL for tuner #9 in the form http://hostname/stream or http://ip/stream
       - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
-      - PYATV=${PYATV} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
+      - PYATV=${PYATV:-false} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
       - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
       - ALERT_SMTP_SERVER=${ALERT_SMTP_SERVER} # The domainname:port of the SMTP server you'll be using like smtp.gmail.com:587. This is for sending ah4c alerts if tuning fails.
       - ALERT_AUTH_SERVER=${ALERT_AUTH_SERVER} # The auth server for the e-mail you'll be using like smtp.gmail.com
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM} # The e-mail address you'd like your ah4c failure alert e-mails to show as being from.
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS} # Gmail and Yahoo both support the creation of app-specific e-mail passwords, and this is the way to go! It's NOT recommended to use your everyday e-mail password.
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO} # The e-mail address you'd like your alert e-mails sent to.
-      #- ALERT_WEBHOOK_URL=""
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL} # URL to GET when an alert fires (same failures that trigger the e-mail); put $reason in the URL and it's replaced with the URL-encoded message. Blank disables it.
       - LIVETV_ATTEMPTS=${LIVETV_ATTEMPTS} # For FireTV Live Guide tuning only, set maximum number of attempts at finding the desired channel
-      - CREATE_M3US=${CREATE_M3US} # Set to true to create device-specific M3Us for use with Amazon Prime Premium channels -- requires a FireTV device
-      - UPDATE_SCRIPTS=${UPDATE_SCRIPTS} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist or not
-      - UPDATE_M3US=${UPDATE_M3US} # Set to true if you'd like the sample m3us updated whether they exist or not
+      - CREATE_M3US=${CREATE_M3US:-false} # Set to true to create device-specific M3Us for use with Amazon Prime Premium channels -- requires a FireTV device
+      - UPDATE_SCRIPTS=${UPDATE_SCRIPTS:-true} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist or not
+      - UPDATE_M3US=${UPDATE_M3US:-true} # Set to true if you'd like the sample m3us updated whether they exist or not
       - TZ=${TZ} # Your local timezone in Linux "tz" format
-      - SPEED_MODE=${SPEED_MODE} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
+      - SPEED_MODE=${SPEED_MODE:-false} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
-      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
-      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
+      - AUTOCROP_CHANNELS=${AUTOCROP_CHANNELS} # Space separated list of channels (by number) with black borders on 4 sides to autocrop while maintaining aspect ratio. Requires LinkPi Encoder!
+      - LINKPI_HOSTNAME=${LINKPI_HOSTNAME} # Hostname or IP of the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
+      - LINKPI_USERNAME=${LINKPI_USERNAME} # Username for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
+      - LINKPI_PASSWORD=${LINKPI_PASSWORD} # Password for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS; not currently read by the bundled scripts, which log in with the LinkPi default password instead.
+      - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
+      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
+      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Set to a whole number of seconds to skip the start of each tune, so a recording begins on the program rather than on the app's loading screen. Piped through the bundled ffmpeg with -ss and stream copy; no re-encoding, and the skip starts on the next keyframe so it can run slightly past the configured value. The value is the total tune time, scripts included. Supported range is 2 to 30, since the DVR allows a tune about 30 seconds; values outside the range are clamped and logged. Ignored when PLAYBACK_DETECTION is TRUE; network tuners only. 0 or unset leaves the feature off.
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. How many seconds the box may keep the exact player and media session it already had before the check stops watching adb and gates on motion alone. The default is 2, which suits Ospreys; apps that hold one player across channel changes, like the DirecTV app, need more. 0 or unset uses the default.
-      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default
       - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Closed captions only. Set to compute,utility when using an NVIDIA GPU, so the driver the CUDA engine build needs is passed in
     volumes:
@@ -348,64 +356,74 @@ services:
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
       - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
-    devices:
-      - ${GPU_DEVICE} # Closed captions only. Set GPU_DEVICE=/dev/dri:/dev/dri to let the Vulkan engine build use an Intel or AMD GPU. Left at the default it passes /dev/null, which always exists and does nothing
-    runtime: ${DOCKER_RUNTIME} # Closed captions only. Set DOCKER_RUNTIME=nvidia for an NVIDIA GPU with the CUDA engine build. Requires the NVIDIA container toolkit
     restart: unless-stopped
 ```
+
+adb-server and ws-scrcpy no longer need ports of their own: adb only talks to the tuners
+from inside the container, and ws-scrcpy is reverse-proxied through the main port at
+`/scrcpy`, so `HOST_PORT` (7654) is the only port to publish.
 
 #### And, here's a sample of the environment variables that you'll need to provide:
 ```yaml
 TAG=latest
+CONTAINER_NAME=ah4c
+HOSTNAME=ah4c
 DOMAIN=localdomain tailxxxxx.ts.net
-ADBS_PORT=5037
+DOCKER_RUNTIME=runc
+GPU_DEVICE=/dev/dri
 HOST_PORT=7654
-SCRC_PORT=7655
-IPADDRESS=htpc6:7654
+IPADDRESS=docker6:7654
 NUMBER_TUNERS=5
-TUNER1_IP=firestick-rack1:5555
-ENCODER1_URL=http://encoder_48007/0.ts
-TUNER2_IP=firestick-rack2:5555
-ENCODER2_URL=http://encoder_48007/4.ts
-TUNER3_IP=firestick-rack3:5555
-ENCODER3_URL=http://encoder_48007/8.ts
-TUNER4_IP=firestick-rack4:5555
-ENCODER4_URL=http://encoder_48007/12.ts
-TUNER5_IP=firestick-travel2:5555
-ENCODER5_URL=http://encoder_23393/0.ts
-STREAMER_APP=scripts/firetv/dtvdeeplinks
-PYATV=FALSE
-CHANNELSIP=media-server6
+TUNER1_IP=firestick-desk1:5555
+ENCODER1_URL=http://linkpi-encoder2:8090/stream0
+TUNER2_IP=firestick-desk2:5555
+ENCODER2_URL=http://linkpi-encoder2:8090/stream1
+TUNER3_IP=firestick-desk3:5555
+ENCODER3_URL=http://linkpi-encoder2:8090/stream2
+TUNER4_IP=firestick-desk4:5555
+ENCODER4_URL=http://linkpi-encoder2:8090/stream3
+TUNER5_IP=firestick-desk5:5555
+ENCODER5_URL=http://linkpi-encoder2:8090/stream4
+STREAMER_APP=scripts/firetv/dtvstreamdeeplinks
+PYATV=false
+CHANNELSIP=media-server10
 ALERT_SMTP_SERVER=smtp.gmail.com:587
 ALERT_AUTH_SERVER=smtp.gmail.com
 ALERT_EMAIL_FROM=xxxxxxxxxx@gmail.com
 ALERT_EMAIL_PASS=xxxxxxxxxxxxxxxx
 ALERT_EMAIL_TO=xxxxxxxxxx@gmail.com
+ALERT_WEBHOOK_URL=
+LIVETV_ATTEMPTS=
+CREATE_M3US=false
 UPDATE_SCRIPTS=true
 UPDATE_M3US=true
-TZ=US/Mountain
+TZ=America/Denver
 SPEED_MODE=false
-KEEP_WATCHING=4h
-NULL_FRAME_INSERTION=FALSE
-PLAYBACK_DETECTION=FALSE
-PLAYBACK_DELAY=0
-PLAYBACK_STATIC_TIMEOUT=0
-HEARTBEAT_INTERVAL=0
-HOST_DIR=/data
-GPU_DEVICE=/dev/null:/dev/null
-DOCKER_RUNTIME=runc
+KEEP_WATCHING=235m
+AUTOCROP_CHANNELS=
+LINKPI_HOSTNAME=
+LINKPI_USERNAME=
+LINKPI_PASSWORD=
+USER_SCRIPT=
+NULL_FRAME_INSERTION=false
+PLAYBACK_DETECTION=true
+PLAYBACK_STATIC_TIMEOUT=12
+PLAYBACK_DELAY=
+HEARTBEAT_INTERVAL=
 NVIDIA_VISIBLE_DEVICES=
 NVIDIA_DRIVER_CAPABILITIES=
+HOST_DIR=/data
 ```
 
-The last four are only used by closed captions, and the values above are the defaults that
-do nothing: leave them exactly as they are unless you want a GPU build of the speech engine.
-`GPU_DEVICE` passes `/dev/null` rather than being empty because a device mapping has to
-point at something that exists. To use a GPU:
+Four of these are only used by closed captions — `GPU_DEVICE`, `DOCKER_RUNTIME`,
+`NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES` — and leaving them at their
+defaults (`GPU_DEVICE=/dev/null`, `DOCKER_RUNTIME=runc`, the two NVIDIA variables empty)
+does nothing: captions run on the processor. `GPU_DEVICE` needs to point at something that
+exists, which is why the default is `/dev/null` rather than empty. To use a GPU:
 
 | Variable | Default | For an Intel or AMD GPU (Vulkan) | For an NVIDIA GPU (CUDA) |
 | --- | --- | --- | --- |
-| `GPU_DEVICE` | `/dev/null:/dev/null` | `/dev/dri:/dev/dri` | leave at the default |
+| `GPU_DEVICE` | `/dev/null` | `/dev/dri` | leave at the default |
 | `DOCKER_RUNTIME` | `runc` | leave at the default | `nvidia` |
 | `NVIDIA_VISIBLE_DEVICES` | empty | leave empty | `all` |
 | `NVIDIA_DRIVER_CAPABILITIES` | empty | leave empty | `compute,utility` |
