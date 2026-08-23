@@ -1,6 +1,6 @@
 #!/bin/bash
 # prebmitune.sh for firetv/dtvstreamdeeplinks
-# 2024.09.18
+# 2026.08.19
 
 #Debug on if uncommented
 set -x
@@ -8,6 +8,7 @@ set -x
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
 adbTarget="adb -s $streamerIP"
+packageName=com.att.tv
 
 mkdir -p $streamerNoPort
 
@@ -43,26 +44,16 @@ adbConnect() {
   done
 }
 
-adbWake() {
-  packageLaunch="com.clientapp.MainActivity"
-  packageName="com.att.tv"
-  packagePID=$($adbTarget shell pidof $packageName)
-  
-  if [ ! -z $packagePID ]; then
-    #$adbTarget shell input keyevent KEYCODE_WAKEUP
-    $adbTarget shell am start -n $packageName/$packageLaunch
-    echo "Confirming $packageName on $streamerIP"
-    touch $streamerNoPort/adbAppRunning
-  else
-    #$adbTarget shell input keyevent KEYCODE_WAKEUP
-    $adbTarget shell am start -n $packageName/$packageLaunch
-    echo "Starting $packageName on $streamerIP"
-  fi
+#The app has to be restarted before every tune to be reliable, so it starts
+#dead here rather than mid-tune -- bmitune.sh's am start brings it back up
+#fresh when it sends the deep link.
+forceStopApp() {
+  $adbTarget shell am force-stop $packageName
 }
 
 main() {
   adbConnect
-  adbWake
+  forceStopApp
 }
 
 main

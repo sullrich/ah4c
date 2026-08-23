@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Closed Captions — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
+    <script src="/static/js/theme.js"></script>
+    <style>
+        .cc-master { display: flex; align-items: center; gap: 0.8rem; }
+        .cc-master .cc-switch { flex-shrink: 0; }
+        .cc-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .cc-switch input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+        .model-list { display: grid; gap: 0.6rem; }
+        .model-row {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 0.75rem;
+            align-items: center;
+            padding: 0.7rem 0.8rem;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius-sm);
+        }
+        /* A grid item's automatic minimum size is the widest thing in it that
+           cannot be broken, so a single model URL with no spaces sets the
+           floor for the whole column — 507px of row inside a 393px phone,
+           with the card and every line in it dragged off the right edge.
+           Letting the column go narrower than its contents is what makes the
+           wrapping below take effect. */
+        .model-row > * { min-width: 0; }
+        .model-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+        .model-row input[type="radio"] { width: 15px; height: 15px; accent-color: var(--accent); }
+        .model-name { font-weight: 600; font-size: 0.88rem; }
+        .model-meta { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; }
+        .model-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+        .bar { height: 5px; background: var(--border-soft); border-radius: 3px; overflow: hidden; margin-top: 0.5rem; }
+        .bar span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.25s ease; }
+        .tuner-picks { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+        .model-src {
+            display: block;
+            margin-top: 0.35rem;
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--text-faint);
+            /* Break inside a word only when the word itself will not fit, which
+               is what this is for: a model URL with no spaces in it. break-all
+               takes that permission everywhere and hyphenates ordinary prose
+               mid-word — "as a fallback, an / d kept in the bind mount". */
+            overflow-wrap: break-word;
+            line-height: 1.4;
+        }
+        .model-src a { color: var(--text-faint); text-decoration: underline; }
+        .model-src a:hover { color: var(--accent); }
+        .model-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+        .tag {
+            font-size: 0.68rem;
+            padding: 0.1rem 0.4rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+        }
+        .tag-live { border-color: rgba(82,210,115,0.4); color: var(--live); }
+        /* Accuracy is the thing most people are choosing on, so it is the one
+           tag that carries color of its own rather than sitting in the row. */
+        .tag-acc { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .tag-warn { border-color: rgba(230,160,60,0.5); color: #e0a03c; }
+        /* Each engine gets its own box. They are two separate programs by two
+           separate projects, and only one of them is being downloaded. */
+        .engine-group {
+            border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+            padding: 0.7rem 0.8rem; margin-bottom: 0.7rem; background: var(--bg);
+        }
+        .engine-group.in-use { border-color: var(--accent); background: var(--accent-soft); }
+        .engine-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .engine-title { font-weight: 700; font-size: 0.92rem; }
+        .engine-note { font-size: 0.76rem; color: var(--text-muted); margin: 0.3rem 0 0.6rem; line-height: 1.45; }
+        .accel {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid var(--border-soft); background: var(--bg);
+            margin-bottom: 0.7rem;
+        }
+        .accel.on { border-color: rgba(82,210,115,0.4); background: var(--live-soft); }
+        .accel .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); margin-top: 0.35rem; flex-shrink: 0; }
+        .accel.on .dot { background: var(--live); }
+        .accel .h { font-weight: 600; font-size: 0.85rem; }
+        .accel .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.45; margin-top: 0.2rem; }
+        .warn {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            padding: 0.7rem 0.8rem; border-radius: var(--radius-sm);
+            border: 1px solid rgba(224,108,94,0.45); background: var(--danger-soft);
+            margin-bottom: 0.9rem;
+        }
+        .warn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-top: 0.35rem; flex-shrink: 0; }
+        .warn .h { font-weight: 600; font-size: 0.85rem; color: var(--danger); }
+        .warn .d { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.2rem; }
+        .warn code { font-family: var(--mono); font-size: 0.72rem; }
+        .drv-log { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); white-space: pre-wrap; margin-top: 0.5rem; max-height: 150px; overflow: auto; }
+        @media (max-width: 640px) {
+            .model-row { grid-template-columns: auto 1fr; }
+            .model-actions { grid-column: 1 / -1; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+	<div class="pagebar">
+		<a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
+		<strong>AH4C</strong>
+		<span>Closed Captions</span>
+		<button class="btn btn-sm btn-icon nav-toggle" onclick="toggleNav()" title="Menu" aria-label="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+		<nav class="nav push-right">
+			<a href="/">Home</a>
+			<a href="/device">Device Control</a>
+			<a href="/status">Activity</a>
+			<a href="/status/andlogs">Activity &amp; Logs</a>
+			<a href="/logs">Logs</a>
+			<a href="/captions" class="active">Closed Captions</a>
+			<a href="/m3us">Channel M3Us</a>
+			<a href="/routes">API Routes</a>
+		</nav>
+		<button class="btn btn-sm btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+			<svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="7" y2="7"/><line x1="17" y1="17" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="7" y2="17"/><line x1="17" y1="7" x2="19.1" y2="4.9"/></svg>
+			<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+		</button>
+	</div>
+
+    <div class="page">
+
+        <div id="persist"></div>
+
+        <div class="card">
+            <div class="card-title">Closed Captions <span class="hint" id="runtime"></span></div>
+            <div class="cc-master">
+                <label class="cc-switch">
+                    <input type="checkbox" id="enabled">
+                    <span>Add captions to every stream</span>
+                </label>
+                <span class="badge badge-idle" id="stateBadge">Off</span>
+            </div>
+            <div id="busyWarn"></div>
+            <div id="restartNote"></div>
+            <p class="footnote">
+                Transcribed on this machine and carried in the stream as ordinary CC1 captions —
+                no sidecar files, no re-encoding, no change to tune speed.
+            </p>
+            <p class="small muted" id="recogStat" style="margin:0.4rem 0 0;"></p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Speech engine <span class="hint" id="engineHint">nothing is bundled; fetch only what you want</span></div>
+            <div id="accel"></div>
+            <div class="model-list" id="runtimeRow"></div>
+            <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
+            <div id="drvState"></div>
+            <p class="footnote">
+                GPU choices appear only when this container can load them (for Vulkan: a driver and
+                <code>/dev/dri</code>). The log names the device actually doing the work.
+            </p>
+            <div class="card-title" style="margin-top:1rem;">Model <span class="hint">accuracy against delay</span></div>
+            <p class="small muted" style="margin:0 0 0.6rem;">
+                All of these wait for each sentence to finish and share one copy across every tuner.
+                <b>Parakeet Unified</b> and <b>Nemotron</b> will also run in real time, writing words as
+                they are spoken &mdash; that loads a copy per tuner. Pick under Caption settings.
+            </p>
+            <div id="memWarn"></div>
+            <div class="model-list" id="models" style="margin-top:0.6rem;"></div>
+            <div id="dl" class="hidden">
+                <p class="small muted" id="dlText" style="margin:0.7rem 0 0;"></p>
+                <div class="bar"><span id="dlBar"></span></div>
+            </div>
+            <p class="footnote">
+                Downloads land in <code>/opt/captions</code>, survive rebuilds, and can be removed here
+                any time.
+            </p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Caption settings</div>
+            <div class="field-row">
+                <label for="language">Language</label>
+                <select id="language" onchange="spellingField()"></select>
+            </div>
+            <div class="field-row">
+                <label for="style">Presentation</label>
+                <select id="style" onchange="styleFields()">
+                    <option value="box2">Box, 2 lines (recommended)</option>
+                    <option value="rollup2">Roll-up, 2 lines</option>
+                    <option value="rollup3">Roll-up, 3 lines</option>
+                    <option value="rollup4">Roll-up, 4 lines</option>
+                </select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;">
+                <b>Box</b> shows a whole caption at once, the way recorded programs look, and runs a little
+                further behind for it. <b>Roll-up</b> writes words as they are recognized and scrolls
+                finished lines up &mdash; closest to the sound, and the one to try if a box feels too slow.
+            </p>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="styleHelp"></p>
+            <div class="field-row" id="modeRow" style="display:none;">
+                <label for="mode">Transcription</label>
+                <select id="mode"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="modeHelp"></p>
+            <div class="field-row" id="phraseRow" style="display:none;">
+                <label for="phrase">Sentence length</label>
+                <select id="phrase"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="phraseHelp"></p>
+            <div class="field-row">
+                <label for="speed">Reading speed</label>
+                <select id="speed"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="speedHelp"></p>
+            <div class="field-row">
+                <label for="onscreen">Time on screen</label>
+                <select id="onscreen"></select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="onscreenHelp"></p>
+            <div class="field-row" id="spellingRow" style="display:none;">
+                <label for="spelling">Spelling</label>
+                <select id="spelling">
+                    <option value="">As recognized</option>
+                    <option value="us">American</option>
+                    <option value="gb">British</option>
+                </select>
+            </div>
+            <p class="small muted" style="margin:-0.2rem 0 0.6rem;" id="spellingHelp"></p>
+            <div class="field-row">
+                <label for="case">Letter case</label>
+                <select id="case">
+                    <option value="upper">Capitals (broadcast standard)</option>
+                    <option value="mixed">As recognized</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Tuners <span class="hint">numbered as they are on the Activity page; leave all unchecked to caption every tuner</span></div>
+            <div class="tuner-picks" id="tuners"></div>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-primary" onclick="save()">Save</button>
+            <span class="small muted" id="saved"></span>
+        </div>
+    </div>
+
+<script>
+let state = null;
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function mb(n) {
+    if (!n || n < 0) return '';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+
+// Switching captions on is what asks for the graphics driver, and that install
+// runs a package at a time against whatever is playing. Startup does it where
+// nothing can be tuning; doing it in the middle of a recording is the thing not
+// to make easy. Switching them off stays available at all times — that costs
+// nothing and may well be why you came.
+//
+// Polled rather than read once, so the switch locks when a recording starts and
+// unlocks when the last one stops, without anybody reloading the page. Only
+// these two elements are touched: a full re-render would throw away whatever
+// was half-chosen in the selects below.
+function applyBusy() {
+    const enabled = document.getElementById('enabled');
+    const busy = state.streaming || 0;
+    enabled.disabled = !state.config.enabled && busy > 0;
+    document.getElementById('busyWarn').innerHTML = enabled.disabled
+        ? `<div class="warn" style="margin:0.6rem 0 0;">
+             <span class="dot"></span>
+             <div>
+               <div class="h">${busy === 1 ? 'A tuner is streaming' : busy + ' tuners are streaming'}, so captions cannot be switched on yet</div>
+               <div class="d">Switching captions on installs the graphics driver, which is done while nothing
+               is playing. Stop the ${busy === 1 ? 'stream' : 'streams'} and this unlocks by itself. Switching
+               captions <em>off</em> is always available.</div>
+             </div>
+           </div>`
+        : '';
+}
+
+// Asked only when somebody is looking.
+//
+// This poll exists to grey out the enable switch while a tuner is streaming, so
+// it is worth nothing to a tab in the background — and a page left open in a
+// background tab asks forever, which is most of what the request log fills up
+// with. A hidden tab catches up the moment it is looked at again.
+async function busyPoll() {
+    if (document.hidden) return;
+    try {
+        const r = await fetch('/api/captions');
+        const s = await r.json();
+        state.streaming = s.streaming;
+        applyBusy();
+    } catch (e) {}
+}
+
+async function load() {
+    const r = await fetch('/api/captions');
+    state = await r.json();
+    render();
+}
+
+function render() {
+    const cfg = state.config;
+    document.getElementById('enabled').checked = cfg.enabled;
+    applyBusy();
+    // Said only when it is true: captions are on and a driver is saved but not
+    // loaded, which is the state switching them on has just created. Startup is
+    // the only stretch where nothing can be tuning, so a restart puts the whole
+    // thing in at once; without one it goes in a package at a time between
+    // tunes, which is slower and takes effect at the next start anyway, because
+    // the engine scans for backends once per process.
+    const pending = cfg.enabled && (state.drivers || []).some(d => d.downloaded && !d.active);
+    document.getElementById('restartNote').innerHTML = pending
+        ? `<div class="warn" style="margin:0.6rem 0 0;">
+             <span class="dot"></span>
+             <div>
+               <div class="h">Restart the container to finish setting up the graphics driver</div>
+               <div class="d">It will go in either way &mdash; slowly, in gaps between tunes &mdash; but it is
+               not used until the next start. A restart puts it in at once.</div>
+             </div>
+           </div>`
+        : '';
+    document.getElementById('runtime').textContent = state.runtime === 'ready' ? '' : state.runtime;
+
+    const badge = document.getElementById('stateBadge');
+    const model = state.models.find(m => m.key === cfg.model);
+    const ready = cfg.enabled && model && model.installed && state.runtimeReady && state.runtime === 'ready';
+    let need = 'On';
+    if (!cfg.enabled) need = 'Off';
+    else if (!state.runtimeReady) need = 'Needs ' + (state.runtimeName || 'the speech engine');
+    else if (!model || !model.installed) need = 'Needs a model';
+    else if (state.runtime !== 'ready') need = 'Not ready';
+    badge.textContent = need;
+    badge.className = 'badge ' + (ready ? 'badge-active' : 'badge-idle');
+
+    // Downloads are pointless if the directory does not outlive the container.
+    document.getElementById('persist').innerHTML = state.persistent === false ? `
+        <div class="warn">
+            <span class="dot"></span>
+            <div>
+                <div class="h">Downloads will not survive a restart</div>
+                <div class="d">The caption directory is inside the container rather than on your server, so
+                the model, the engine and any GPU driver are thrown away when the container is recreated.
+                Add this volume to your compose file and recreate it:<br>
+                <code>- \${HOST_DIR}/ah4c/captions:/opt/captions</code></div>
+            </div>
+        </div>` : '';
+
+    // Is acceleration actually working, and if not, which piece is missing.
+    const a = state.accel || {};
+    document.getElementById('accel').innerHTML = `
+        <div class="accel ${a.active ? 'on' : ''}">
+            <span class="dot"></span>
+            <div>
+                <div class="h">${esc(a.headline || '')}</div>
+                <div class="d">${esc(a.detail || '')}</div>
+            </div>
+        </div>`;
+
+    // Driver packages, kept in the bind mount so a rebuild does not lose them.
+    document.getElementById('driverRow').innerHTML = (state.drivers || []).map(d => `
+        <div class="model-row">
+            <span class="menu-icon" style="width:15px;"></span>
+            <div>
+                <div class="model-name">${esc(d.name)}</div>
+                <div class="model-meta">${esc(d.desc)}</div>
+                <div class="model-tags">
+                    <span class="tag ${d.active ? 'tag-live' : ''}">${d.active ? 'Loaded' : 'Not loaded'}</span>
+                    <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
+                </div>
+                <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from Debian backports, kept so a rebuild does not refetch them.</span>
+            </div>
+            <div class="model-actions">
+                <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
+            </div>
+        </div>`).join('');
+
+    const di = state.driverInstall || {};
+    const diPct = di.total > 0 ? Math.round((di.done / di.total) * 100) : 0;
+    document.getElementById('drvState').innerHTML =
+        (di.active || di.err || di.log)
+            ? (di.active
+                ? `<p class="small muted" style="margin:0.7rem 0 0.3rem;">${esc(di.step || 'Setting up the driver')}${di.total > 0 ? ` &mdash; ${di.done} of ${di.total}` : '&hellip;'}</p>
+                   <div class="bar"><span style="width:${diPct}%"></span></div>`
+                : `<p class="small muted" style="margin:0.7rem 0 0;">${di.err ? 'Driver setup failed: ' + esc(di.err) : 'Driver setup finished.'}</p>`)
+              + (di.log ? `<div class="drv-log">${esc(di.log)}</div>` : '')
+            : '';
+
+    // Both figures are measured rather than guessed, and the wait is the one
+    // that answers "will it keep up". The real-time factor beside it is seconds
+    // of audio per second of compute — how fast the hardware is, not how many
+    // streams it carries. This once claimed it was the second thing, and four
+    // streams measuring the same factor as one is what settled that.
+    // A model that transcribes as it listens has no queue, so it has no queue
+    // wait and no phrases per dispatch. It gets the speed, which means the same
+    // thing on both paths, and nothing invented around it.
+    const rec = state.recognizer || {};
+    const lag = rec.lagSec > 0 ? rec.lagSec : 0;
+    const speed = rec.measured
+        ? `Transcribing at <b>${rec.speed.toFixed(1)}\u00d7 real time</b> on ${esc(rec.backend)}`
+        : '';
+    const recLine = !rec.measured ? ''
+        : rec.streaming
+            ? `${speed}.
+               <span class="muted">This model transcribes as it listens, so words are never queued.
+               Above 1&times; is keeping up.</span>`
+            : `${speed},
+               ${rec.streams === 1 ? 'one stream captioned' : rec.streams + ' streams captioned'}.
+               Words wait <b>${lag.toFixed(2)}s</b> to be transcribed${rec.waiting > 0 ? `, ${rec.waiting} in the queue` : ''}.
+               <span class="muted">Under a second is keeping up.</span>`;
+    document.getElementById('recogStat').innerHTML = recLine || (cfg.enabled
+        ? 'Transcription speed appears here once a captioned stream has been running for a moment.'
+        : '');
+
+    const engineKey = model ? model.engine : 'transcribe';
+    const engineName = model ? model.engineName : '';
+    document.getElementById('engineHint').textContent = engineName
+        ? 'every model runs on ' + engineName
+        : 'nothing is bundled; fetch only what you want';
+
+    // Engine builds, grouped by engine, offered only where loadable.
+    document.getElementById('runtimeRow').innerHTML = (state.runtimeList || []).map(rt => {
+        const builds = (state.engines || {})[rt.key] || [];
+        if (!builds.length) return '';
+        const inUse = rt.key === engineKey;
+        const anyHere = builds.some(b => b.installed);
+        return `
+        <div class="engine-group ${inUse ? 'in-use' : ''}">
+            <div class="engine-head">
+                <span class="engine-title">${esc(rt.name)} ${esc(rt.version)}</span>
+                ${anyHere ? '<span class="tag tag-live">Downloaded</span>' : ''}
+            </div>
+            <div class="engine-note">Pick where it runs; one download covers every model.</div>
+            <div class="model-list">${builds.map(e => `
+                <div class="model-row ${inUse && e.key === cfg.engine ? 'selected' : ''}" ${e.usable ? '' : 'style="opacity:0.6;"'}>
+                    <input type="radio" name="engine" value="${esc(e.key)}" ${inUse && e.key === cfg.engine ? 'checked' : ''}
+                           ${e.usable && inUse ? '' : 'disabled'} onchange="pickEngine('${esc(e.key)}')">
+                    <div>
+                        <div class="model-name">${esc(e.name)}</div>
+                        <div class="model-meta">${esc(e.desc)}</div>
+                        <div class="model-tags">
+                            <span class="tag ${inUse ? 'tag-acc' : ''}">Download: ${e.sizeMB >= 1024 ? (e.sizeMB / 1024).toFixed(1) + ' GB' : e.sizeMB + ' MB'}</span>
+                            ${e.installed ? '<span class="tag tag-live">Already downloaded</span>' : ''}
+                            ${e.usable ? '' : '<span class="tag tag-warn">Not available in this container</span>'}
+                        </div>
+                        ${e.usable ? '' : (e.why ? `<div class="model-meta" style="margin-top:0.35rem;">${esc(e.why)}</div>` : '')}
+                        <span class="model-src">Fetches <strong>${esc(e.file)}</strong> from
+                            <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
+                    </div>
+                    <div class="model-actions">
+                        ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
+                                      : (e.usable && inUse ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
+                    </div>
+                </div>`).join('')}</div>
+        </div>`;
+    }).join('');
+
+    // Memory is the one setting here that can take the whole machine down, so
+    // when the numbers get large it is said loudly rather than in a footnote.
+    document.getElementById('memWarn').innerHTML = state.memoryWarning ? `
+        <div class="warn" style="margin:0.6rem 0;">
+            <span class="dot"></span>
+            <div>
+                <div class="h">This will use a lot of memory</div>
+                <div class="d">${esc(state.memoryWarning)}</div>
+            </div>
+        </div>` : '';
+
+    // Models. One that cannot run here is shown but not selectable, with the
+    // reason spelled out: hiding it entirely just raises the same question
+    // later, and the reason is something the reader can act on.
+    document.getElementById('models').innerHTML = state.models.map(m => `
+        <div class="model-row ${m.key === cfg.model ? 'selected' : ''}" ${m.runnable ? '' : 'style="opacity:0.6;"'}>
+            <input type="radio" name="model" value="${esc(m.key)}" ${m.key === cfg.model ? 'checked' : ''}
+                   ${m.runnable ? '' : 'disabled'} onchange="pickModel('${esc(m.key)}')">
+            <div>
+                <div class="model-name">${esc(m.name)}${m.recommended ? ' <span class="badge badge-active">Recommended</span>' : ''}
+                    ${m.role && !m.recommended ? `<span class="tag" style="margin-left:0.4rem;">${esc(m.role)}</span>` : ''}</div>
+                ${m.why ? `<div class="model-meta" style="margin-top:0.2rem;">${esc(m.why)}</div>` : ''}
+                <div class="model-meta">${esc(m.desc)}</div>
+                ${m.runnable ? '' : `<div class="warn" style="margin:0.5rem 0 0;">
+                    <span class="dot"></span>
+                    <div>
+                        <div class="h">Not available on this machine</div>
+                        <div class="d">${esc(m.blocked)}</div>
+                    </div>
+                </div>`}
+                <div class="model-tags">
+                    <span class="tag ${m.streaming || m.eitherMode ? 'tag-live' : ''}">${m.eitherMode ? 'Sentence at a time or real time' : (m.streaming ? 'Types as it hears' : 'Waits for each sentence')}</span>
+                    <span class="tag">${m.languages.length === 1 ? 'English only' : m.languages.filter(l => l !== 'auto').length + ' languages'}</span>
+                    <span class="tag">Download: ${m.sizeMB >= 1024 ? (m.sizeMB / 1024).toFixed(1) + ' GB' : m.sizeMB + ' MB'}</span>
+                    <span class="tag ${m.memoryTotalMB >= 4000 ? 'tag-warn' : ''}">RAM: ${esc(m.memoryTotal)}</span>
+                    ${m.engineReady ? '' : '<span class="tag tag-warn">Engine not downloaded yet</span>'}
+                </div>
+                <span class="model-src">Downloads from: <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)}</a></span>
+            </div>
+            <div class="model-actions">
+                ${m.installed
+                    ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeModel('${esc(m.key)}')">Remove</button>`
+                    : (m.runnable ? `<button class="btn btn-sm" onclick="download('${esc(m.key)}')">Download</button>` : '')}
+            </div>
+        </div>`).join('');
+
+    // Download progress
+    const d = state.download;
+    const dl = document.getElementById('dl');
+    if (d && (d.active || d.err)) {
+        dl.classList.remove('hidden');
+        if (d.err) {
+            document.getElementById('dlText').textContent = 'Download failed: ' + d.err;
+            document.getElementById('dlBar').style.width = '0%';
+        } else {
+            const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
+            document.getElementById('dlText').textContent =
+                `Downloading ${d.file} (${d.index} of ${d.count}) — ${mb(d.done)}${d.total > 0 ? ' of ' + mb(d.total) : ''}`;
+            document.getElementById('dlBar').style.width = pct + '%';
+        }
+    } else {
+        dl.classList.add('hidden');
+    }
+
+    // Languages come from whichever model is selected.
+    const langs = model ? model.languages : ['auto'];
+    const sel = document.getElementById('language');
+    sel.innerHTML = langs.map(l =>
+        `<option value="${esc(l)}" ${l === cfg.language ? 'selected' : ''}>${esc(state.languageNames[l] || l)}</option>`).join('');
+    if (!langs.includes(cfg.language)) sel.value = langs[0];
+
+    // Transcription mode, and only for a model that runs both ways. The
+    // options are built here rather than in the markup for the same reason the
+    // sentence lengths are: collect() reads this select whether or not the row
+    // is on screen, so a hidden row must not go on saving a choice that
+    // belongs to a model that has been switched away from.
+    const both = !!(model && model.eitherMode);
+    document.getElementById('modeRow').style.display = both ? '' : 'none';
+    const msel = document.getElementById('mode');
+    if (both) {
+        msel.innerHTML =
+            `<option value="sentence">A sentence at a time (default)</option>
+             <option value="realtime">Real time &mdash; words appear as spoken</option>`;
+        msel.value = cfg.mode === 'realtime' ? 'realtime' : 'sentence';
+        document.getElementById('modeHelp').innerHTML =
+            `<b>A sentence at a time</b> runs a couple of seconds behind and shares one copy across every
+             tuner. <b>Real time</b> writes words as they are spoken and loads a copy per tuner${
+                model.key === 'parakeet-unified' ? ', at roughly double the processing' : ''}.`;
+    } else {
+        msel.innerHTML = '';
+        document.getElementById('modeHelp').innerHTML = '';
+    }
+
+    // Sentence length, and only for a model that has sentences. A streaming
+    // model has no phrase to lengthen, so the row is not shown at all.
+    const wins = (model && model.windows) || [];
+    document.getElementById('phraseRow').style.display = wins.length ? '' : 'none';
+    if (wins.length) {
+        const sel = document.getElementById('phrase');
+        sel.innerHTML = wins.map(w =>
+            `<option value="${w}" ${w === model.window ? 'selected' : ''}>${w.toFixed(1)} seconds${w === 4 ? ' (default)' : ''}</option>`).join('');
+        document.getElementById('phraseHelp').innerHTML =
+            `How long it listens before writing. Longer is more accurate and further behind; shorter is
+             quicker and guesses more.`;
+    } else {
+        // Emptied, not just hidden. The options are the last model's, and
+        // collect() reads this select whether or not the row is on screen — so
+        // a hidden row was still saving a sentence length, belonging to a model
+        // that had been switched away from.
+        document.getElementById('phrase').innerHTML = '';
+        document.getElementById('phraseHelp').innerHTML = '';
+    }
+    document.getElementById('style').value = cfg.style || 'box2';
+    const speeds = state.speeds || [];
+    const spd = document.getElementById('speed');
+    spd.innerHTML = speeds.map(w =>
+        `<option value="${w}" ${w === (cfg.speedWPM || 160) ? 'selected' : ''}>${w} words a minute${w === 160 ? ' (default)' : ''}</option>`).join('');
+    const onscreens = state.onScreen || [];
+    const osel = document.getElementById('onscreen');
+    osel.innerHTML = onscreens.map(v =>
+        `<option value="${v}" ${v === (cfg.onScreenSec || 4) ? 'selected' : ''}>${v} seconds${v === 4 ? ' (default)' : ''}</option>`).join('');
+    document.getElementById('case').value = cfg.uppercase === false ? 'mixed' : 'upper';
+
+    spellingField(cfg.spelling || '');
+    styleFields();
+
+
+    // Tuners
+    const picked = cfg.tuners || [];
+    document.getElementById('tuners').innerHTML = state.tuners === 0
+        ? '<span class="small muted">No tuners are configured.</span>'
+        : Array.from({length: state.tuners}, (_, i) =>
+            `<label class="cc-switch"><input type="checkbox" class="tuner" value="${i}" ${picked.includes(i) ? 'checked' : ''}><span>Tuner ${i + 1}</span></label>`).join('');
+}
+// The two presentations use the same two settings for different jobs, so the
+// page says which job each one is doing rather than offering one explanation
+// that is only true of a roll-up.
+//
+// Reading speed paces words onto the screen for a roll-up, because that is what
+// a roll-up does with them. A box has nothing to pace — it writes the caption
+// where nobody can see it and shows the finished thing — so the same number
+// decides how long a caption needs to be up instead, which is the reading it
+// asks for rather than the writing.
+// Which English the captions are spelled in, offered only where it can matter:
+// the language has to be English, and the model has to be one that cannot be
+// told which English. A model listing en-US and en-GB is already being told, so
+// correcting it afterward would be two answers to the same question.
+//
+// Its own function rather than a re-render, because the language select calls
+// it — and render() puts every field back to what was last saved, so a change
+// that triggered one would undo itself.
+function spellingField(value) {
+    const model = (state.models || []).find(m => m.key === state.config.model);
+    const tellable = ((model && model.languages) || []).some(l => l.toLowerCase().startsWith('en-'));
+    const lang = document.getElementById('language').value || '';
+    const show = !tellable && (lang.toLowerCase().startsWith('en') || lang === 'auto');
+    const sel = document.getElementById('spelling');
+    document.getElementById('spellingRow').style.display = show ? '' : 'none';
+    if (value !== undefined) sel.value = value;
+    if (!show) {
+        sel.value = '';
+        document.getElementById('spellingHelp').innerHTML = '';
+        return;
+    }
+    document.getElementById('spellingHelp').innerHTML =
+        `${esc((model && model.name.split(' ')[0]) || 'This model')} cannot be told which English to write, so
+         it writes whichever its training leaned toward &mdash; tyre or tire. Pick one and the words on the
+         list are corrected; the rest are left as recognized.`;
+}
+
+function styleFields() {
+    const box = document.getElementById('style').value.startsWith('box');
+    document.getElementById('styleHelp').innerHTML = box
+        ? ''
+        : `Set to Box, 2 lines for the broadcast look.`;
+    document.getElementById('speedHelp').innerHTML = box
+        ? `How fast you read, which decides how long each caption stays. Lower it if captions are replaced
+           before you finish them.`
+        : `How fast words appear on screen. Lower it only if the captions outrun you &mdash; slower is not
+           easier to read, and the default sits at the top of the published range.`;
+    document.getElementById('onscreenHelp').innerHTML = box
+        ? `The longest any one caption may stay. Most clear sooner, in the time they take to read.`
+        : `How long a line stays before it scrolls away. Past about 5 seconds the display cannot keep up
+           with fast speech. 4 suits news, 5 or 6 suit drama.`;
+}
+
+
+function pickModel(key) {
+    state.config.model = key;
+    const m = state.models.find(x => x.key === key);
+    if (m && !m.languages.includes(state.config.language)) state.config.language = m.languages[0];
+    render();
+}
+
+function collect() {
+    return {
+        enabled: document.getElementById('enabled').checked,
+        mode: document.getElementById('mode').value || '',
+        phraseSec: parseFloat(document.getElementById('phrase').value) || 0,
+        speedWPM: parseInt(document.getElementById('speed').value, 10) || 0,
+        model: state.config.model,
+        language: document.getElementById('language').value,
+        style: document.getElementById('style').value,
+        onScreenSec: parseFloat(document.getElementById('onscreen').value) || 0,
+        uppercase: document.getElementById('case').value === 'upper',
+        spelling: document.getElementById('spelling').value,
+        engine: state.config.engine || 'cpu',
+        gpuRuntime: state.config.gpuRuntime || '',
+        tuners: Array.from(document.querySelectorAll('.tuner:checked')).map(c => parseInt(c.value, 10))
+    };
+}
+
+async function save() {
+    const note = document.getElementById('saved');
+    const r = await fetch('/api/captions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(collect())
+    });
+    const body = await r.json();
+    if (!r.ok) {
+        note.textContent = body.error || 'Could not save';
+        return;
+    }
+    state = body;
+    render();
+    note.textContent = 'Saved. New tunes pick this up right away.';
+    setTimeout(() => { note.textContent = ''; }, 4000);
+}
+
+async function download(key) {
+    await fetch('/api/captions/download/' + encodeURIComponent(key), {method: 'POST'});
+    poll();
+}
+
+function pickEngine(key) {
+    state.config.engine = key;
+    render();
+}
+
+async function getDriver(kind) {
+    const r = await fetch('/api/captions/driver/' + encodeURIComponent(kind), {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the driver download';
+        return;
+    }
+    pollDriver();
+}
+
+let drvPolling = false;
+async function pollDriver() {
+    if (drvPolling) return;
+    drvPolling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        next.config = Object.assign({}, next.config, collect(), {model: state.config.model, engine: state.config.engine});
+        state = next;
+        render();
+        if (state.driverInstall && state.driverInstall.active) setTimeout(tick, 1500);
+        else drvPolling = false;
+    };
+    tick();
+}
+
+async function getRuntime(key) {
+    // The model is sent along so the engine fetched is the one the model under
+    // the radio button needs, whether or not that choice has been saved yet.
+    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(key || state.config.engine || 'cpu') +
+        '?model=' + encodeURIComponent(state.config.model || ''), {method: 'POST'});
+    if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        document.getElementById('saved').textContent = b.error || 'Could not start the download';
+        return;
+    }
+    poll();
+}
+
+async function removeModel(key) {
+    if (!confirm('Delete this downloaded model?')) return;
+    const r = await fetch('/api/captions/model/' + encodeURIComponent(key), {method: 'DELETE'});
+    if (r.ok) { state = await r.json(); render(); }
+}
+
+let polling = false;
+async function poll() {
+    if (polling) return;
+    polling = true;
+    const tick = async () => {
+        const r = await fetch('/api/captions');
+        const next = await r.json();
+        // Keep whatever the user is editing; only refresh download and model state.
+        const edited = collect();
+        next.config = Object.assign({}, next.config, edited, {model: state.config.model});
+        state = next;
+        render();
+        if (state.download && state.download.active) {
+            setTimeout(tick, 1000);
+        } else {
+            polling = false;
+        }
+    };
+    tick();
+}
+
+load().then(() => { if (state.download && state.download.active) poll(); });
+setInterval(busyPoll, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) busyPoll(); });
+</script>
+</body>
+</html>

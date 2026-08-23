@@ -23,12 +23,14 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/smtp"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +95,10 @@ type reader struct {
 	gateReady     chan struct{}
 	gateDone      chan struct{}
 	gateStop      sync.Once
+	gateBase      map[string]bool
+	gateSig       string
+	gate          *gateReader
+	startedAt     time.Time
 }
 
 // Create a global file object to write logs to
@@ -109,7 +115,9 @@ type ExportedTuner struct {
 type ExportedReader struct {
 	T        int
 	Channel  string
+	Name     string
 	Started  string
+	Elapsed  int64
 	FileName string
 	Cmd      string
 }
@@ -201,10 +209,10 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	go func() {
 		cmd.Wait()
 		r.cmdMutex.Lock()
-		defer r.cmdMutex.Unlock()
 		r.teecmd = nil
 		r.teecmdIn = nil
 		r.teecmdRunning = false
+		r.cmdMutex.Unlock()
 		if err := r.startTeeCMD(); err != nil {
 			fmt.Printf("[ERR] Failed to restart TEECMD: %v\n", err)
 		}
@@ -218,10 +226,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		r.started = true
 		addReader(r)
 		go func() {
-			var base map[string]bool
-			if r.gateReady != nil {
-				base = audioBaseline(r.t.tunerip)
-			}
+			base := r.gateBase
 			if err := execute(r.t.start, r.channel, r.t.tunerip); err != nil {
 				logger("[ERR] Failed to run start script: %v", err)
 				if r.gateReady != nil {
@@ -231,7 +236,9 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 			if r.gateReady != nil {
 				if base != nil {
-					waitForPlayback(r.t.tunerip, base, r.gateDone)
+					if waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone) && r.gate != nil {
+						r.gate.expectNewStream()
+					}
 				} else {
 					logger("[PLAYBACK] %s no audio baseline, gating on motion alone", r.t.tunerip)
 				}
@@ -319,6 +326,7 @@ func (r *reader) Close() error {
 			logger("[ERR] Failed to remove video file: %v", err)
 		}
 	}
+	r.cmdMutex.Lock()
 	if r.teecmd != nil && r.teecmdRunning {
 		if err := r.teecmd.Process.Kill(); err != nil {
 			logger("Error killing ffmpeg process: %v", err)
@@ -335,6 +343,7 @@ func (r *reader) Close() error {
 		}
 		r.teecmdIn = nil
 	}
+	r.cmdMutex.Unlock()
 	removeReader(r)
 	return r.ReadCloser.Close()
 }
@@ -403,7 +412,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: pipeReader,
+					ReadCloser: maybeWrapCaptions(pipeReader, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -412,14 +421,18 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			// Network encoder
 			logger("Attempting network tune for device %s %s %v %v", t.url, t.tunerip, channel, idx)
 			tuneStart := time.Now()
+			var ready chan struct{}
+			var base map[string]bool
+			var sig string
+			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
+				ready = make(chan struct{})
+				base = audioBaseline(t.tunerip)
+				sig = mediaSignature(t.tunerip)
+			}
 			if err := execute(t.pre, t.tunerip, channel); err != nil {
 				logger("[ERR] Failed to run pre script: %v %s", err, t.tunerip)
 				t.active = false
 				continue
-			}
-			var ready chan struct{}
-			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
-				ready = make(chan struct{})
 			}
 			if secs, _ := strconv.Atoi(os.Getenv("PLAYBACK_DELAY")); secs > 0 && ready == nil {
 				if secs > 30 {
@@ -450,7 +463,7 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = true
 				t.index = i
 				return &reader{
-					ReadCloser: pipe,
+					ReadCloser: maybeWrapCaptions(pipe, i, fmt.Sprintf("tuner%d", i)),
 					channel:    channel,
 					t:          t,
 					cmd:        cmd,
@@ -482,9 +495,12 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 					return r.Body, nil
 				}, fmt.Sprintf("tuner=%s", t.tunerip))
 			}
+			var gate *gateReader
 			if ready != nil {
-				body = newGateReader(body, ready)
+				gate = newGateReader(body, ready)
+				body = gate
 			}
+			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
 			t.active = true
 			t.index = i
 			r := &reader{
@@ -493,6 +509,9 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t:          t,
 				gateReady:  ready,
 				gateDone:   make(chan struct{}),
+				gateBase:   base,
+				gateSig:    sig,
+				gate:       gate,
 			}
 			return r, nil
 		}
@@ -531,6 +550,10 @@ func CustomLogger() gin.HandlerFunc {
 		}
 		// Skip logging for the /status/channelsactivity route
 		if c.Request.URL.Path == "/status/channelsactivity" {
+			c.Next()
+			return
+		}
+		if c.Request.URL.Path == "/api/captions" {
 			c.Next()
 			return
 		}
@@ -627,6 +650,12 @@ func run() error {
 	r := gin.New()
 	r.SetTrustedProxies(nil)
 	r.Use(CustomLogger())
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static") {
+			c.Header("Cache-Control", "no-store")
+		}
+		c.Next()
+	})
 	r.StaticFile("/favicon.ico", "./static/favicon.ico")
 	//	r.Use(CustomRecovery())
 	r.LoadHTMLGlob("html/*")
@@ -635,6 +664,22 @@ func run() error {
 		r.LoadHTMLGlob("html/*")
 		routes := r.Routes()
 		c.HTML(http.StatusOK, "index.html", routes)
+	})
+	scrcpyProxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:8000"})
+	r.GET("/device", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "device.html", nil)
+	})
+	r.GET("/scrcpy", func(c *gin.Context) {
+		loc := "/scrcpy/"
+		if q := c.Request.URL.RawQuery; q != "" {
+			loc += "?" + q
+		}
+		c.Redirect(http.StatusMovedPermanently, loc)
+	})
+	r.Any("/scrcpy/*proxyPath", func(c *gin.Context) {
+		c.Request.URL.Path = c.Param("proxyPath")
+		c.Request.URL.RawPath = strings.TrimPrefix(c.Request.URL.RawPath, "/scrcpy")
+		scrcpyProxy.ServeHTTP(c.Writer, c.Request)
 	})
 	r.GET("/routes", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
@@ -704,6 +749,14 @@ func run() error {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if n, err := strconv.Atoi(c.Query("tail")); err == nil && n > 0 {
+			lines := strings.Split(strings.TrimRight(string(content), "\n"), "\n")
+			if len(lines) > n {
+				lines = lines[len(lines)-n:]
+			}
+			c.String(http.StatusOK, "%s", strings.Join(lines, "\n"))
+			return
+		}
 		c.String(http.StatusOK, "%s", content)
 	})
 	r.GET("/logs", func(c *gin.Context) {
@@ -764,6 +817,151 @@ func run() error {
 	})
 	r.GET("/status", statusPageHandler)
 	r.GET("/api/status", apiStatusHandler)
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"version": buildVersion()})
+	})
+	r.GET("/api/pyatv", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"pyatv": strings.EqualFold(os.Getenv("PYATV"), "TRUE")})
+	})
+	r.GET("/captions", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "captions.html", nil)
+	})
+	r.GET("/api/captions", func(c *gin.Context) {
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
+	r.POST("/api/captions", func(c *gin.Context) {
+		cfg := currentCaptionConfig()
+		if err := c.ShouldBindJSON(&cfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if _, ok := findCaptionModel(cfg.Model); !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if _, ok := findEngineVariant(cfg.Engine); !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown engine"})
+			return
+		}
+		if err := saveCaptionConfig(cfg); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		logger("[CC] Settings saved: enabled=%v model=%s language=%s", cfg.Enabled, cfg.Model, cfg.Language)
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
+	r.POST("/api/captions/driver/:kind", func(c *gin.Context) {
+		if err := startDriverDownload(c.Param("kind")); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
+		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.POST("/api/captions/download/:model", func(c *gin.Context) {
+		m, ok := findCaptionModel(c.Param("model"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if err := startModelDownload(m); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.DELETE("/api/captions/model/:model", func(c *gin.Context) {
+		m, ok := findCaptionModel(c.Param("model"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown model"})
+			return
+		}
+		if err := removeCaptionModel(m); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
+	r.POST("/api/tuner/:index/control/:action", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		if err := adbControl(tuners[index].tunerip, action); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/api/tuner/:index/preview", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		if tuners[index].url == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no encoder url for this tuner"})
+			return
+		}
+		req, err := http.NewRequestWithContext(c.Request.Context(), "GET", tuners[index].url, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("encoder returned %s", resp.Status)})
+			return
+		}
+		c.Header("Content-Type", "video/mp2t")
+		c.Writer.WriteHeaderNow()
+		io.Copy(c.Writer, resp.Body)
+	})
+	r.POST("/api/tuner/:index/release", func(c *gin.Context) {
+		index, err := strconv.Atoi(c.Param("index"))
+		if err != nil || index < 0 || index >= len(tuners) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": releaseTuner(index)})
+	})
+	r.POST("/api/tuners/control/:action", func(c *gin.Context) {
+		action := c.Param("action")
+		if _, ok := adbKeycodes[action]; !ok && action != "reboot" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown action"})
+			return
+		}
+		skipped := 0
+		for i := range tuners {
+			tunerLock.Lock()
+			busy := tuners[i].active
+			tunerLock.Unlock()
+			if busy {
+				logger("[CONTROL] skipping %s for tuner %d, it is streaming", action, i)
+				skipped++
+				continue
+			}
+			go adbControl(tuners[i].tunerip, action)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "skipped": skipped})
+	})
 	// Route for /stream - if video preview is enabled
 	r.GET("/stream", func(c *gin.Context) {
 		streamPageHandler(c)
@@ -1051,6 +1249,7 @@ func loadenv() {
 	logger("[ENV] NULL_FRAME_INSERTION       %s", os.Getenv("NULL_FRAME_INSERTION"))
 	logger("[ENV] PLAYBACK_DETECTION         %s", os.Getenv("PLAYBACK_DETECTION"))
 	logger("[ENV] PLAYBACK_DELAY             %s", os.Getenv("PLAYBACK_DELAY"))
+	logger("[ENV] PLAYBACK_STATIC_TIMEOUT    %s", os.Getenv("PLAYBACK_STATIC_TIMEOUT"))
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
@@ -1098,6 +1297,9 @@ func loadenv() {
 func main() {
 	logger("[START] ah4c is starting")
 	loadenv()
+	loadCaptionConfig()
+	warnIfNotPersistent()
+	restoreGPURuntime()
 	// Start GIN
 	errrun := run()
 	if errrun != nil {
@@ -1249,7 +1451,9 @@ func apiStatusHandler(c *gin.Context) {
 		exportedReaders[i] = ExportedReader{
 			T:        r.t.index,
 			Channel:  r.channel,
+			Name:     channelName(r.channel),
 			Started:  fmt.Sprintf("%v", r.started),
+			Elapsed:  int64(time.Since(r.startedAt).Seconds()),
 			FileName: fileName,
 			Cmd:      cmdString,
 		}
@@ -1298,6 +1502,18 @@ func apiStatusHandler(c *gin.Context) {
 
 		}
 	}
+	if gpuUtil == "" || memUsage == "" || GPUpowerUsagePercent == "" {
+		u, m, p := otherGPU()
+		if gpuUtil == "" {
+			gpuUtil = u
+		}
+		if memUsage == "" {
+			memUsage = m
+		}
+		if GPUpowerUsagePercent == "" {
+			GPUpowerUsagePercent = p
+		}
+	}
 	// Response with JSON
 	c.JSON(http.StatusOK, gin.H{
 		"CPU":           roundedCpu,
@@ -1321,6 +1537,7 @@ func apiStatusHandler(c *gin.Context) {
 func addReader(r *reader) {
 	readersLock.Lock()
 	defer readersLock.Unlock()
+	r.startedAt = time.Now()
 	activeReaders = append(activeReaders, r)
 }
 
@@ -1334,6 +1551,38 @@ func removeReader(r *reader) {
 			break
 		}
 	}
+}
+
+func channelName(channel string) string {
+	if channel == "" {
+		return ""
+	}
+	files, err := os.ReadDir("m3u")
+	if err != nil {
+		return ""
+	}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".m3u") {
+			continue
+		}
+		content, err := os.ReadFile("m3u/" + f.Name())
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(content), "\n")
+		for i := 0; i < len(lines)-1; i++ {
+			line := strings.TrimSpace(lines[i])
+			if !strings.HasPrefix(line, "#EXTINF:") {
+				continue
+			}
+			if strings.HasSuffix(strings.TrimSpace(lines[i+1]), "/"+channel) {
+				if idx := strings.LastIndex(line, ","); idx != -1 {
+					return strings.TrimSpace(line[idx+1:])
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func parseEnvFile(filePath string) ConfigData {
@@ -1428,7 +1677,12 @@ type stallTolerantReader struct {
 	reconnectFn   func() (io.ReadCloser, error)
 	label         string
 	hasFirstChunk atomic.Bool
+	reconnects    atomic.Int64
 }
+
+type sessionSource interface{ sessions() int64 }
+
+func (s *stallTolerantReader) sessions() int64 { return s.reconnects.Load() }
 
 const (
 	stallReadGap         = 500 * time.Millisecond
@@ -1494,6 +1748,7 @@ func (s *stallTolerantReader) producer() {
 				continue
 			}
 			logger("[%s] reconnected to encoder", s.label)
+			s.reconnects.Add(1)
 			s.bodyMu.Lock()
 			s.body = nb
 			s.bodyMu.Unlock()
@@ -1558,17 +1813,20 @@ func (s *stallTolerantReader) Close() error {
 }
 
 const (
-	adbTimeout      = 5 * time.Second
-	adbGiveUp       = 3
-	playbackPoll    = 250 * time.Millisecond
-	playbackConfirm = 2
-	playbackTimeout = 40 * time.Second
-	keyframeWait    = 8 * time.Second
-	riseWindow      = 250 * time.Millisecond
-	riseFactor      = 4
-	riseWait        = time.Second
-	minWindow       = 8 * 188
-	busyWindow      = 46875
+	adbTimeout           = 5 * time.Second
+	adbGiveUp            = 3
+	playbackPoll         = 250 * time.Millisecond
+	playbackConfirm      = 2
+	playbackStaticFor    = 2 * time.Second
+	playbackSessionEvery = time.Second
+	playbackTimeout      = 12 * time.Second
+	keyframeWait         = 8 * time.Second
+	keyframeCeiling      = 2 * keyframeWait
+	riseWindow           = 250 * time.Millisecond
+	riseFactor           = 4
+	riseWait             = time.Second
+	minWindow            = 8 * 188
+	busyWindow           = 46875
 )
 
 type gateReader struct {
@@ -1582,16 +1840,52 @@ type gateReader struct {
 	keep     []byte
 	t0       time.Time
 	armedAt  time.Time
+	armed0   time.Time
 	winBytes int
 	winStart time.Time
 	lastWin  int
 	floor    int
 	peak     int
 	vid      map[int]bool
+
+	sess       sessionSource
+	sessSeen   int64
+	sess0      int64
+	expectSwap atomic.Bool
 }
 
 func newGateReader(src io.ReadCloser, ready <-chan struct{}) *gateReader {
-	return &gateReader{src: src, ready: ready, t0: time.Now()}
+	g := &gateReader{src: src, ready: ready, t0: time.Now()}
+	if sc, ok := src.(sessionSource); ok {
+		g.sess = sc
+		g.sessSeen = sc.sessions()
+		g.sess0 = g.sessSeen
+	}
+	return g
+}
+
+func (g *gateReader) resync() {
+	g.pat, g.pmt, g.carry, g.keep = nil, nil, nil, nil
+	g.vid = nil
+	g.winBytes, g.lastWin, g.floor, g.peak = 0, 0, 0, 0
+	g.winStart = time.Time{}
+	if !g.armedAt.IsZero() {
+		g.armedAt = time.Now()
+	}
+}
+
+func (g *gateReader) expectNewStream() { g.expectSwap.Store(true) }
+
+func (g *gateReader) releaseKind() string {
+	if g.floor > 0 && g.lastWin >= g.floor*riseFactor {
+		return "moving"
+	}
+	if g.floor > 0 && g.peak < g.floor*riseFactor && g.lastWin >= busyWindow &&
+		time.Since(g.armedAt) >= riseWait &&
+		!(g.sess != nil && g.expectSwap.Load() && g.sessSeen == g.sess0) {
+		return "uniform"
+	}
+	return ""
 }
 
 func (g *gateReader) armed() bool {
@@ -1682,18 +1976,14 @@ func (g *gateReader) scan(b []byte) int {
 		}
 		if g.armedAt.IsZero() {
 			g.armedAt = time.Now()
+			if g.armed0.IsZero() {
+				g.armed0 = g.armedAt
+			}
 		}
 		if g.vid[pid] && afc >= 2 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
-			risen := g.floor > 0 && g.lastWin >= g.floor*riseFactor
-			uniform := g.floor > 0 && g.peak < g.floor*riseFactor && g.lastWin >= busyWindow &&
-				time.Since(g.armedAt) >= riseWait
-			if risen || uniform {
+			if kind := g.releaseKind(); kind != "" {
 				g.keep = append(g.keep[:0], b[i:]...)
-				if risen {
-					g.release("moving")
-				} else {
-					g.release("uniform")
-				}
+				g.release(kind)
 				return len(b)
 			}
 		}
@@ -1706,6 +1996,12 @@ func (g *gateReader) Read(p []byte) (int, error) {
 	for !g.open && len(g.pend) == 0 {
 		buf := make([]byte, 32*1024)
 		n, err := g.src.Read(buf)
+		if g.sess != nil {
+			if s := g.sess.sessions(); s != g.sessSeen {
+				g.sessSeen = s
+				g.resync()
+			}
+		}
 		if n > 0 {
 			b := append(g.carry, buf[:n]...)
 			used := g.scan(b)
@@ -1718,6 +2014,12 @@ func (g *gateReader) Read(p []byte) (int, error) {
 				return 0, err
 			}
 			break
+		}
+		if !g.open && !g.armed0.IsZero() && time.Since(g.armed0) > keyframeCeiling {
+			logger("[PLAYBACK] the encoder kept replacing its stream for %v after playback, starting unaligned",
+				time.Since(g.armed0).Round(time.Second))
+			g.pend = append(append([]byte{}, g.pat...), g.pmt...)
+			g.open, g.carry = true, nil
 		}
 		if !g.open && !g.armedAt.IsZero() && time.Since(g.armedAt) > keyframeWait {
 			logger("[PLAYBACK] no keyframe within %v of playback, starting unaligned", keyframeWait)
@@ -1786,6 +2088,163 @@ func adbAudio(tunerip string) []byte {
 	return out
 }
 
+var adbKeycodes = map[string]string{
+	"up":     "KEYCODE_DPAD_UP",
+	"down":   "KEYCODE_DPAD_DOWN",
+	"left":   "KEYCODE_DPAD_LEFT",
+	"right":  "KEYCODE_DPAD_RIGHT",
+	"select": "KEYCODE_DPAD_CENTER",
+	"back":   "KEYCODE_BACK",
+	"home":   "KEYCODE_HOME",
+	"play":   "KEYCODE_MEDIA_PLAY_PAUSE",
+	"wake":   "KEYCODE_WAKEUP",
+	"sleep":  "KEYCODE_SLEEP",
+}
+
+const stopScriptTimeout = 20 * time.Second
+
+func runStopScript(t *tuner, channel string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), stopScriptTimeout)
+	defer cancel()
+	logger("[CONTROL] stop script %s %s %s", t.stop, t.tunerip, channel)
+	out, err := exec.CommandContext(ctx, t.stop, t.tunerip, channel).CombinedOutput()
+	if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+		logger("[CONTROL] stop script output: %s", trimmed)
+	}
+	if err != nil {
+		logger("[ERR] stop script failed: %v", err)
+	}
+	return err
+}
+
+func readerGone(r *reader) bool {
+	readersLock.Lock()
+	defer readersLock.Unlock()
+	for _, ar := range activeReaders {
+		if ar == r {
+			return false
+		}
+	}
+	return true
+}
+
+func releaseTuner(index int) string {
+	var target *reader
+	readersLock.Lock()
+	for _, ar := range activeReaders {
+		if ar.t == &tuners[index] {
+			target = ar
+			break
+		}
+	}
+	readersLock.Unlock()
+	status := "stopped"
+	if target != nil {
+		if target.ReadCloser != nil {
+			target.ReadCloser.Close()
+		}
+		deadline := time.Now().Add(stopScriptTimeout)
+		for !readerGone(target) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if !readerGone(target) {
+			logger("[CONTROL] tuner %d source closed but teardown is still running, leaving the lock held", index)
+			return "stopping"
+		}
+	} else {
+		tunerLock.Lock()
+		locked := tuners[index].active
+		tunerLock.Unlock()
+		if !locked {
+			return "idle"
+		}
+		time.Sleep(time.Second)
+		readersLock.Lock()
+		for _, ar := range activeReaders {
+			if ar.t == &tuners[index] {
+				target = ar
+				break
+			}
+		}
+		readersLock.Unlock()
+		if target != nil {
+			logger("[CONTROL] tuner %d is starting a tune, leaving it alone", index)
+			return "busy"
+		}
+		runStopScript(&tuners[index], "")
+		status = "unstuck"
+	}
+	tunerLock.Lock()
+	tuners[index].active = false
+	tunerLock.Unlock()
+	logger("[CONTROL] tuner %d released (%s)", index, status)
+	return status
+}
+
+func adbControl(tunerip string, action string) error {
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), adbTimeout)
+	exec.CommandContext(connectCtx, "adb", "connect", tunerip).Run()
+	connectCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	if action == "reboot" {
+		logger("[CONTROL] reboot -> %s", tunerip)
+		return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "reboot").Run()
+	}
+	keycode, ok := adbKeycodes[action]
+	if !ok {
+		return fmt.Errorf("unknown action %q", action)
+	}
+	logger("[CONTROL] %s -> %s", action, tunerip)
+	return exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "input", "keyevent", keycode).Run()
+}
+
+func samePiids(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if !b[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func piidList(m map[string]bool) string {
+	if len(m) == 0 {
+		return "no started players"
+	}
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
+func mediaSignature(tunerip string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "adb", "-s", tunerip, "shell", "dumpsys media_session").Output()
+	if err != nil {
+		return ""
+	}
+	return parseMediaSignature(string(out))
+}
+
+func parseMediaSignature(dump string) string {
+	var parts []string
+	for _, line := range strings.Split(dump, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "description=") || strings.Contains(line, "metadata:") ||
+			strings.Contains(line, "PlaybackState {") {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, "|")
+}
+
 func audioBaseline(tunerip string) map[string]bool {
 	ctx, cancel := context.WithTimeout(context.Background(), adbTimeout)
 	exec.CommandContext(ctx, "adb", "connect", tunerip).Run()
@@ -1797,33 +2256,83 @@ func audioBaseline(tunerip string) map[string]bool {
 	return audioPiids(string(out))
 }
 
-func waitForPlayback(tunerip string, base map[string]bool, done <-chan struct{}) {
+// playbackStaticBudget is how long the box may keep the exact player and media
+// session it already had before the adb check concludes a tune cannot be seen
+// from here and hands off to motion gating. Two seconds suits an Osprey, which
+// tears into a tune at once; the DTV app holds one player across channel
+// changes for longer than that, so PLAYBACK_STATIC_TIMEOUT overrides it, in
+// seconds. A value at or above the check's budget means the early handoff
+// never fires and the check simply runs its full budget.
+func playbackStaticBudget() time.Duration {
+	if s := os.Getenv("PLAYBACK_STATIC_TIMEOUT"); s != "" && s != "0" {
+		if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		logger("[PLAYBACK] PLAYBACK_STATIC_TIMEOUT %q is not a positive number of seconds, using %v", s, playbackStaticFor)
+	}
+	return playbackStaticFor
+}
+
+func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) bool {
 	t0 := time.Now()
-	deadline := t0.Add(playbackTimeout)
+	budget := playbackTimeout
+	staticFor := playbackStaticBudget()
+	deadline := t0.Add(budget)
 	held := map[string]int{}
+	last := map[string]bool{}
 	fails := 0
+	swapComing := false
+	var staticSince, sigAt time.Time
+	nowSig := sig
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
-			return
+			return swapComing
 		default:
 		}
 		out := adbAudio(tunerip)
 		if len(out) == 0 {
 			if fails++; fails >= adbGiveUp {
 				logger("[PLAYBACK] %s unreachable over adb, gating on motion alone", tunerip)
-				return
+				return swapComing
+			}
+			time.Sleep(playbackPoll)
+			continue
+		}
+		fails = 0
+		last = audioPiids(string(out))
+		if heldNewID(base, last, held) {
+			logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
+			return swapComing
+		}
+		if sig != "" && !swapComing && time.Since(sigAt) >= playbackSessionEvery {
+			nowSig, sigAt = mediaSignature(tunerip), time.Now()
+			if nowSig != "" && nowSig != sig {
+				swapComing = true
+				logger("[PLAYBACK] %s media session changed after %v, waiting for audio to start",
+					tunerip, time.Since(t0).Round(time.Millisecond))
+			}
+		}
+		if sig != "" && nowSig == sig && samePiids(base, last) {
+			if staticSince.IsZero() {
+				staticSince = time.Now()
+			} else if time.Since(staticSince) >= staticFor {
+				logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
+					tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
+				return swapComing
 			}
 		} else {
-			fails = 0
-			if heldNewID(base, audioPiids(string(out)), held) {
-				logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-				return
-			}
+			staticSince = time.Time{}
 		}
 		time.Sleep(playbackPoll)
 	}
-	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone", tunerip, playbackTimeout)
+	session := "not readable"
+	if sig != "" {
+		session = map[bool]string{true: "unchanged", false: "changed"}[nowSig == sig]
+	}
+	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
+		tunerip, budget, piidList(base), piidList(last), session)
+	return swapComing
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,

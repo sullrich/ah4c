@@ -1,0 +1,173 @@
+package main
+
+// Cohere Transcribe 03-2026: the model, and everything it asks of the code
+// around it.
+//
+// This is a whole file for one model because this model has earned one. It is
+// the most accurate open recognizer there is and it has opinions — about how
+// much audio it wants at a time, about what happens when it is handed a
+// stretch that has no speech in it, about what it says when it would rather
+// say nothing. Each of those was found the hard way and each has its reason
+// written beside it.
+//
+// It is a separate file so that the day it is replaced, this file is deleted.
+// Two references break when it goes — its line in captionModelCatalog and its
+// case in quirksFor — and the compiler names both, which is a better guarantee
+// than a comment asking somebody to remember.
+//
+// Nothing here is imported by anything except through those two. The
+// recognizer, the caption encoders, the injector and the tune gate have no
+// idea which model they are serving, and that is the property worth keeping.
+
+var cohereTranscribe = captionModel{
+	Key:  "cohere-transcribe",
+	Name: "Cohere Transcribe 03-2026",
+	Role: "Best accuracy, if the machine can carry it",
+	Desc: "The most accurate open speech model there is, and the heaviest. One copy serves every tuner.",
+	// It reads a whole phrase and then writes it, so the delay setting
+	// governs how far behind it runs; the batch service amortizes its
+	// per-call cost across every tuner.
+	Latency:   "Two to four seconds behind the picture, like live broadcast captioning",
+	Accuracy:  "Best available",
+	Benchmark: "1.3% of words come out wrong",
+	Hardware:  "Runs on the processor; a GPU takes the load off, and integrated graphics are plenty. The measured speed is shown above once captions are running.",
+	Runtime:   rtTranscribe,
+	Repo:      "handy-computer/cohere-transcribe-03-2026-gguf",
+	// Q4_K_M, after Q8_0 was tried on this machine and measured.
+	//
+	// The published table says the quantization does not matter for accuracy:
+	// BF16 and F16 at 1.26% word error, Q8_0 and Q6_K at 1.27%, Q5_K_M and
+	// Q4_K_M at 1.25%. Four bit is tied for the best there and the whole spread
+	// is two hundredths of a point.
+	//
+	// It does matter, and the table cannot see it, because every one of those
+	// figures comes from a reference run rather than from Vulkan. Q8_0 was
+	// noticeably more accurate here — brand names and proper nouns that came
+	// back wrong at four bits came back right — which says the shaders differ
+	// in arithmetic as well as in speed, and that nobody has published a number
+	// for the backend most people will actually run this on.
+	//
+	// It is not shipped, because it cost more than it bought. Eight bits
+	// measured 4.2 times real time against 7.4 at four, which on a recognizer
+	// that carries about as many streams as its multiplier is the difference
+	// between four captioned tuners and seven. At five tuners the queue stopped
+	// draining, streams ran thirteen seconds behind and phrases were skipped to
+	// stay current — and words skipped for staleness are worse than words
+	// spelled wrong. Q6_K was tried in between and was not good.
+	//
+	// So: four bits for the throughput, extra recognizers for the streams
+	// beyond one recognizer's share, and the accuracy made up elsewhere. The
+	// full precision attention cache below is the first of that.
+	File:        "cohere-transcribe-03-2026-Q4_K_M.gguf",
+	SizeMB:      1550,
+	Punctuation: true,
+	Languages:   []string{"auto", "de", "en", "es", "fr", "it", "nl", "pl", "pt"},
+}
+
+// ---------------------------------------------------------------------------
+// Cohere Transcribe 03-2026
+// ---------------------------------------------------------------------------
+
+// Three things, and the model's own card asks for two of them.
+//
+// Delete this block and its entry in quirksFor and nothing else has to change:
+// the recognizer, the caption encoders, the injector and the tune gate have no
+// idea which model they are serving.
+var cohereQuirks = modelQuirks{
+	// Four seconds. Three was tried and the accuracy went with it, worst over
+	// advertisements — the thinnest speech on television, and so the least
+	// able to spare a second of context. The card points the same way: it
+	// gives no minimum duration and its only length guidance is about long
+	// audio, thirty-five second splits and chunks of twenty to sixty. This is
+	// a model built to be handed plenty at once.
+	PhraseWindow: 4.0,
+	// What the page may offer for the phrase length.
+	//
+	// This is the one setting that trades the two things this model is chosen
+	// for against each other, so it belongs to this model and to no other: a
+	// streaming model has no phrase to lengthen. Longer means more of the
+	// sentence in hand before it is transcribed, which is where the accuracy
+	// comes from, and a caption that cannot appear before the sentence has
+	// finished. Shorter means the words reach the screen sooner and the model
+	// guesses at anything that needed the end of the sentence to resolve.
+	//
+	// The short end is there for continuous speech — a news anchor reading copy
+	// never pauses, so every phrase runs to the full length and the display is
+	// handed a burst per phrase with no gap to drain in. Smaller phrases arrive
+	// more evenly and the display keeps up.
+	Windows: []float64{2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0},
+
+	// "Cohere Transcribe is eager to transcribe, even non-speech sounds. The
+	// model thus benefits from prepending a noise gate or VAD in order to
+	// prevent low-volume, floor noise from turning into hallucinations." Its
+	// words, and the reason the gate exists. There is nothing on the engine's
+	// side to use instead: its run parameters carry a task, a language,
+	// punctuation and inverse text normalization, and no threshold of any kind.
+	NoiseGate: true,
+
+	// And for what gets past the gate, because applause and a music bed vary
+	// enough to look like speech.
+	Suppress: stockHallucination,
+
+	// Full precision for the attention cache, which is the one accuracy knob
+	// the engine actually exposes and the only one it documents in those
+	// terms. Its header: F32 is "full-precision KV. Maximum accuracy, highest
+	// bandwidth", against the default of F16, "minimal precision loss (~3
+	// decimal digits). Best for bandwidth-bound backends (integrated GPUs,
+	// CPU)".
+	//
+	// The default is the right general advice and the wrong trade here. This
+	// model is chosen for being the most accurate there is, on a machine that
+	// runs it seven times faster than real time — so it is spending its
+	// precision to buy speed it already has. Three decimal digits is not
+	// nothing when a word turns on the difference between two vowels.
+	//
+	// It costs bandwidth on an integrated GPU, where bandwidth is the scarce
+	// thing, and the attention cache is only part of the work — the encoder
+	// dominates, a second against a fifth for the decode. If the real-time
+	// factor in the log falls somewhere it matters, this is the line to
+	// reconsider, and the streaming models do not use it at all.
+	KVType: txKVF32,
+
+	// Punctuation and inverse text normalization asked for, and this model does
+	// not take either.
+	//
+	// Both are documented as per-call toggles, and inverse text normalization
+	// is the one that would matter here: it turns spoken numbers, dates and
+	// currencies into their written form, and television is made of prices,
+	// years and numbers to call. It was worth asking for.
+	//
+	// The engine's answer is that cohere_asr exposes no runtime control over
+	// either, and its output already carries punctuation. So these are kept as
+	// the intent rather than removed — a later build of this family may expose
+	// them, and then it costs nothing to have said so — but they are now put
+	// through the capability probe the header names, which asks the loaded
+	// weights and drops anything they will not take. Without that the engine
+	// warned per call: two lines of log for every phrase of every stream, for
+	// ever.
+	PNC: txPNCOn,
+	ITN: txITNOn,
+
+	// As many recognizers as the page asks for, up to eight.
+	//
+	// This model saturates one. Measured on an integrated graphics chip with
+	// five streams captioning: four phrases to a dispatch, two and a fifth
+	// seconds of compute for nine seconds of audio, and streams reporting seven
+	// and eight seconds behind with nothing dropped — a queue that no longer
+	// drains as fast as it fills. Its encoder runs serially across a batch, so
+	// batching relieves the decode and not the encode, and the only way to have
+	// two encoder passes in flight is to have two copies of the weights.
+	//
+	// Eight is a ceiling rather than a recommendation, and it is set by what a
+	// machine can hold rather than by what is likely to help: each recognizer
+	// is another full copy of the weights, two and a half gigabytes at eight
+	// bits, so eight of them is twenty gigabytes of it. Whoever is running this
+	// knows their own machine better than a number in a file does, so the page
+	// offers every one of them and says what each costs.
+	//
+	// What is worth knowing rather than enforcing: the graphics gate admits two
+	// transcriptions at once and holds the rest, so past two on a GPU the extra
+	// copies mostly wait. On the processor they do not — threads are shared out
+	// there and it really does run things at the same time — which is where a
+	// larger number earns itself.
+}

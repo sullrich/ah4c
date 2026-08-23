@@ -1,89 +1,323 @@
-<strong></strong><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tuner Status</title>
-    <style>
-        td, th {
-            padding: 4px;
-            vertical-align: top;
-		}
-        .table-container {
-            height: 285px; /* Fixed height for container */
-            border: 1px solid black;
-        }
-        .table-container-a {
-            height: 285px; /* Fixed height for container */
-            border: 1px solid black;
-        }
-        .flot-tooltip {
-            position: absolute;
-            display: none;
-            border: 1px solid #fdd;
-            padding: 2px;
-            background-color: #fee;
-            opacity: 0.80;
-            z-index: 10000;
-        }
-	</style>
+    <title>Tuner Status — AH4C</title>
+    <link rel="stylesheet" href="/static/css/ah4c.css">
+    <script src="/static/js/theme.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.time.min.js"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.time.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.navigate.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.selection.min.js"></script> 
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.crosshair.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.selection.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.crosshair.min.js"></script>
+    <script src="https://unpkg.com/mpegts.js/dist/mpegts.js"></script>
 </head>
 <body>
     <div id="tooltip" class="flot-tooltip"></div>
 
-<table>
-	<tr>
-		<td>
-			<h2>System Stats</h2>
-			<div class="table-container-a">
-				<table id="systemStats" style="width:290px;">
-					<!-- Filled by JavaScript -->
-				</table>
-			</div>
-		</td>
-		<td valign="top">
-			<h2>DVR Activity <span id="activity"></span></h2>
-			<div class="table-container">
-				<table id="activityTable" style="width:290px;">
-					<!-- Filled by JavaScript -->
-				</table>
-			</div>
-		</td>
-	</tr>
-	</table>
+    <div class="pagebar" id="pageNav">
+        <a href="/"><img class="pagebar-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C"></a>
+        <strong>Activity</strong>
+        <button class="btn btn-sm btn-icon nav-toggle" onclick="toggleNav()" title="Menu" aria-label="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+        <nav class="nav push-right">
+            <a href="/">Home</a>
+            <a href="/device">Device Control</a>
+            <a href="/status" class="active">Activity</a>
+            <a href="/status/andlogs">Activity &amp; Logs</a>
+            <a href="/logs">Logs</a>
+            <a href="/captions">Closed Captions</a>
+            <a href="/m3us">Channel M3Us</a>
+            <a href="/routes">API Routes</a>
+        </nav>
+        <button class="btn btn-sm btn-icon theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        	<svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.9" y1="4.9" x2="7" y2="7"/><line x1="17" y1="17" x2="19.1" y2="19.1"/><line x1="4.9" y1="19.1" x2="7" y2="17"/><line x1="17" y1="7" x2="19.1" y2="4.9"/></svg>
+        	<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        </button>
+    </div>
 
-    <h2>Tuner Status</h2>
-    <table id="tunerStatus" width="600" style="border: 1px solid; border-collapse: collapse;">
-        <!-- Filled by JavaScript -->
-    </table>
+    <div class="page page--wide">
+        <div class="status-columns">
+            <div class="card">
+                <div class="card-title">System Stats</div>
+                <div class="stat-grid" id="systemStats"></div>
+            </div>
+            <div class="card activity-card">
+                <div class="card-title"><span class="live-dot"></span> DVR Activity <span id="activity" class="hint"></span></div>
+                <div class="activity-feed">
+                    <table id="activityTable"></table>
+                </div>
+            </div>
+        </div>
 
-    <h2>Reader Status</h2>
-    <table id="readerStatus" width="600" style="border: 1px solid; border-collapse: collapse;">
-        <!-- Filled by JavaScript -->
-    </table>
+        <div class="card">
+            <div class="card-title">
+                Tuners
+                <span class="topbar-actions">
+                    <button class="btn btn-sm" onclick="controlAll('wake')">Wake all</button>
+                    <button class="btn btn-sm" onclick="if(confirm('Sleep ALL tuner devices?'))controlAll('sleep')">Sleep all</button>
+                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot ALL tuner devices?'))controlAll('reboot')">Reboot all</button>
+                </span>
+            </div>
+            <div class="tuner-status-grid" id="tunerGrid"></div>
+        </div>
 
-    <h2>CPU & Memory Usage (%)</h2>
-    <div id="cpu-usage" style="width:605px;height:250px;"></div>
+        <div class="card">
+            <div class="card-title">Active Streams</div>
+            <div class="table-wrap">
+                <table class="table" id="readerStatus"></table>
+            </div>
+        </div>
 
-	<br/>
-	
-    <h2>Network In/Out (Megabit)</h2>
-    <div id="network-io" style="width:605px;height:250px;"></div>
+        <div class="card">
+            <div class="card-title">CPU &amp; Memory Usage (%)</div>
+            <div id="cpu-usage" class="chart"></div>
+        </div>
 
-	<br/>
-	
-    <h2>GPU Usage (%)</h2>
-    <div id="gpu-usage" style="width:605px;height:250px;"></div>
+        <div class="card">
+            <div class="card-title">Network In/Out (Megabit)</div>
+            <div id="network-io" class="chart"></div>
+        </div>
 
-	<br/>
-	
+        <div class="card">
+            <div class="card-title">GPU Usage (%)</div>
+            <div id="gpu-usage" class="chart"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="tunerModal">
+        <div class="modal">
+            <div class="modal-head">
+                <span class="tuner-number" id="modalTunerNumber"></span>
+                <h3 id="modalTitle">Tuner</h3>
+                <button class="btn btn-sm modal-close" onclick="closeTunerModal()">Close</button>
+            </div>
+            <video id="modalVideo" class="hidden" controls muted></video>
+            <div id="previewStart" class="preview-start hidden">
+                <button class="btn btn-primary" onclick="startPreviewClicked()">Retry preview</button>
+            </div>
+            <p class="modal-hint" id="modalHint"></p>
+            <div class="remote">
+                <div class="remote-dpad">
+                    <span></span>
+                    <button class="btn" onclick="sendKey('up')" title="Up"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg></button>
+                    <span></span>
+                    <button class="btn" onclick="sendKey('left')" title="Left"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 6 8 12 14 18"/></svg></button>
+                    <button class="btn dpad-center" onclick="sendKey('select')" title="Select">OK</button>
+                    <button class="btn" onclick="sendKey('right')" title="Right"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 6 16 12 10 18"/></svg></button>
+                    <span></span>
+                    <button class="btn" onclick="sendKey('down')" title="Down"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 10 12 16 18 10"/></svg></button>
+                    <span></span>
+                </div>
+                <div class="remote-keys">
+                    <button class="btn btn-sm" onclick="sendKey('back')">Back</button>
+                    <button class="btn btn-sm" onclick="sendKey('home')">Home</button>
+                    <button class="btn btn-sm" onclick="sendKey('play')">Play / Pause</button>
+                    <button class="btn btn-sm" onclick="sendKey('wake')">Wake</button>
+                    <button class="btn btn-sm" onclick="sendKey('sleep')">Sleep</button>
+                    <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot this device?'))sendKey('reboot')">Reboot</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        if (window.self !== window.top) document.getElementById('pageNav').classList.add('hidden');
+    </script>
+    <script>
+        var modalIndex = null;
+        var player = null;
+        var tunerIps = [];
+        var tunerActive = [];
+        var tunerLabels = [];
+
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+                return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+            });
+        }
+
+        function escUrl(s) {
+            return esc(s).replace(/(:\/\/|[:/])/g, '$1<wbr>');
+        }
+
+        function setModalHint() {
+            if (modalIndex === null) return;
+            $('#modalHint').text(tunerActive[modalIndex]
+                ? 'Streaming ' + (tunerLabels[modalIndex] || 'a channel') + '.'
+                : 'Tuner is idle. This is the device\'s current HDMI output, not an active tune.');
+        }
+
+        function openTunerModal(index) {
+            modalIndex = index;
+            $('#modalTunerNumber').text(index);
+            $('#modalTitle').text('Tuner ' + (index + 1) + ' — ' + (tunerIps[index] || ''));
+            setModalHint();
+            $('#tunerModal').addClass('open');
+            startPreviewClicked();
+        }
+
+        function startPreviewClicked() {
+            if (modalIndex === null) return;
+            previewDeadline = Date.now() + PREVIEW_GRACE;
+            $('#previewStart').addClass('hidden');
+            $('#modalVideo').removeClass('hidden');
+            startPreview(modalIndex);
+        }
+
+        function closeTunerModal() {
+            $('#tunerModal').removeClass('open');
+            stopPreview();
+            modalIndex = null;
+        }
+
+        var stallTimer = null;
+        var restartTimer = null;
+        var lastFrames = 0;
+        var stallTicks = 0;
+        var previewDeadline = 0;
+        var PREVIEW_GRACE = 90000;
+
+        function startPreview(index) {
+            stopPreview();
+            if (!window.mpegts || !mpegts.isSupported()) return;
+            var videoElement = document.getElementById('modalVideo');
+            player = mpegts.createPlayer({
+                type: 'mse',
+                isLive: true,
+                url: '/api/tuner/' + index + '/preview'
+            }, {
+                isLive: true
+            });
+            player.attachMediaElement(videoElement);
+            videoElement.addEventListener('loadedmetadata', function() {
+                videoElement.currentTime = videoElement.duration;
+            }, { once: true });
+            videoElement.addEventListener('ended', restartSoon, { once: true });
+            player.on(mpegts.Events.ERROR, restartSoon);
+            player.load();
+            player.play().catch(function() {});
+            startWatchdog();
+        }
+
+        function stopPreview() {
+            stopWatchdog();
+            if (player) {
+                player.destroy();
+                player = null;
+            }
+        }
+
+        function startWatchdog() {
+            lastFrames = 0;
+            stallTicks = 0;
+            stallTimer = setInterval(function() {
+                if (!player || modalIndex === null) return;
+                var video = document.getElementById('modalVideo');
+                if (video.paused && !video.ended) {
+                    stallTicks = 0;
+                    return;
+                }
+                var frames = (player.statisticsInfo || {}).decodedFrames || 0;
+                if (frames === lastFrames) {
+                    stallTicks++;
+                    if (stallTicks >= 3) {
+                        restartPreview();
+                        return;
+                    }
+                } else {
+                    stallTicks = 0;
+                    previewDeadline = Date.now() + PREVIEW_GRACE;
+                    setModalHint();
+                }
+                lastFrames = frames;
+            }, 2000);
+        }
+
+        function stopWatchdog() {
+            if (stallTimer) {
+                clearInterval(stallTimer);
+                stallTimer = null;
+            }
+            if (restartTimer) {
+                clearTimeout(restartTimer);
+                restartTimer = null;
+            }
+        }
+
+        function restartSoon() {
+            if (restartTimer) return;
+            restartTimer = setTimeout(function() {
+                restartTimer = null;
+                restartPreview();
+            }, 2000);
+        }
+
+        function restartPreview() {
+            if (modalIndex === null || document.hidden) return;
+            if (Date.now() > previewDeadline) {
+                stopPreview();
+                previewDeadline = 0;
+                $('#modalVideo').addClass('hidden');
+                $('#previewStart').removeClass('hidden');
+                $('#modalHint').text('No video from the encoder — if the device was asleep, give it a moment and retry.');
+                return;
+            }
+            $('#modalHint').text('Waiting for video from the encoder…');
+            startPreview(modalIndex);
+        }
+
+        function sendKey(action) {
+            if (modalIndex === null) return;
+            if (previewDeadline) previewDeadline = Date.now() + PREVIEW_GRACE;
+            $.post('/api/tuner/' + modalIndex + '/control/' + action).fail(function() {
+                $('#modalHint').text('Control failed — this device may not be reachable over adb.');
+                setTimeout(setModalHint, 4000);
+            });
+        }
+
+        function controlAll(action) {
+            $.post('/api/tuners/control/' + action);
+        }
+
+        var releasing = {};
+
+        function releaseTuner(index) {
+            if (releasing[index]) return;
+            if (tunerActive[index] && !confirm('Tuner ' + (index + 1) + ' is streaming. Run the stop script and release its lock?')) return;
+            releasing[index] = true;
+            $('.release-btn-' + index).prop('disabled', true).text('Releasing…');
+            $.ajax({ url: '/api/tuner/' + index + '/release', type: 'POST', timeout: 30000 })
+                .fail(function() { alert('Release failed for tuner ' + (index + 1) + ' — check the logs.'); })
+                .always(function() { releasing[index] = false; });
+        }
+
+        function fmtElapsed(s) {
+            var h = Math.floor(s / 3600);
+            var m = Math.floor((s % 3600) / 60);
+            var sec = s % 60;
+            return h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+        }
+
+        setInterval(function() {
+            var now = Math.floor(Date.now() / 1000);
+            $('.tune-clock').each(function() {
+                var started = parseInt(this.getAttribute('data-started'), 10);
+                if (started > 0) this.textContent = fmtElapsed(Math.max(0, now - started));
+            });
+        }, 1000);
+
+        window.addEventListener('pagehide', stopPreview);
+        window.addEventListener('beforeunload', stopPreview);
+
+        $('#tunerModal').on('click', function(e) {
+            if (e.target === this) closeTunerModal();
+        });
+        $(document).on('keydown', function(e) {
+            if (e.key === 'Escape') closeTunerModal();
+        });
+    </script>
     <script>
 		$(document).ready(function() {
             function showTooltip(x, y, contents) {
@@ -130,100 +364,95 @@
             var gpuCPUData = [];
             var gpuMemData = [];
             var gpuPowerData = [];
+
+            function statTile(label, value) {
+                return `<div class="stat-tile"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
+            }
+
 			// Function to fetch and update data
 		    function fetchDataAndUpdate() {
+		        if (document.hidden) return;
 		        // Fetch data from /api/status
 		        $.getJSON("/api/status", function(data) {
 		            var currentTimestamp = Date.now();
 
 		            // Populate System Stats
-		            var systemStatsHtml = `
-		                <tr>
-		                    <td align='right'>CPU Usage</td>
-		                    <td align='left'><b>%${data.CPU}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Memory Usage</td>
-		                    <td align='left'><b>%${data.Memory}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Disk Usage</td>
-		                    <td align='left'><b>%${data.Disk}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Network In (bytes)</td>
-		                    <td align='left'><b>${data.NetRecv}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Network Out (bytes)</td>
-		                    <td align='left'><b>${data.NetSent}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Network recv (Mbps)</td>
-		                    <td align='left'><b>${networkInMegabits}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>Network Out (Mbps)</td>
-		                    <td align='left'><b>${networkOutMegabits}</b></td>
-		                </tr>
-		            `;
+		            var systemStatsHtml =
+		                statTile('CPU', `${data.CPU}<small>%</small>`) +
+		                statTile('Memory', `${data.Memory}<small>%</small>`) +
+		                statTile('Disk', `${data.Disk}<small>%</small>`) +
+		                statTile('Net In (total)', `${data.NetRecv}<small> bytes</small>`) +
+		                statTile('Net Out (total)', `${data.NetSent}<small> bytes</small>`) +
+		                statTile('Net In (rate)', `${networkInMegabits}<small> Mbps</small>`) +
+		                statTile('Net Out (rate)', `${networkOutMegabits}<small> Mbps</small>`);
 
-					if(data.GPUCPUUsage) {
-						systemStatsHtml = systemStatsHtml + `
-		                <tr>
-		                    <td align='right'>GPU Usage</td>
-		                    <td align='left'><b>%${data.GPUCPUUsage}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>GPU Memory Usage</td>
-		                    <td align='left'><b>%${data.GPUMemUsage}</b></td>
-		                </tr>
-		                <tr>
-		                    <td align='right'>GPU Power Usage</td>
-		                    <td align='left'><b>%${data.GPUPowerUsage}</b></td>
-		                </tr>
-						`;
-					}
-					
+					if (data.GPUCPUUsage) systemStatsHtml += statTile('GPU', `${data.GPUCPUUsage}<small>%</small>`);
+					if (data.GPUMemUsage) systemStatsHtml += statTile('GPU Memory', `${data.GPUMemUsage}<small>%</small>`);
+					if (data.GPUPowerUsage) systemStatsHtml += statTile('GPU Power', `${data.GPUPowerUsage}<small>%</small>`);
+
 		            $('#systemStats').html(systemStatsHtml);
 
-		            // Populate Tuner Status
-		            var tunerStatusHtml = `
-		                <tr>
-		                    <th align='right'>Tuner Index</th>
-		                    <th align='right'>Tuner IP</th>
-		                    <th align='right'>URL</th>
-		                    <th align='right'>Active</th>
-		                </tr>`;
+		            // Populate Tuner cards
+		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
+		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
+		            tunerLabels = [];
+		            var readerByTuner = {};
+		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });
+		            var tunerHtml = '';
 		            $.each(data.Tuners, function(index, tuner) {
-		                tunerStatusHtml += `
-		                    <tr>
-		                        <td align='right'>${index}</td>
-		                        <td align='right'>${tuner.Tunerip}</td>
-		                        <td align='right'>${tuner.Url}</td>
-		                        <td align='right'>${tuner.Active}</td>
-		                    </tr>
+		                var badge = tuner.Active
+		                    ? `<span class="badge badge-active">Streaming</span>`
+		                    : `<span class="badge badge-idle">Idle</span>`;
+		                var reader = readerByTuner[index];
+		                if (tuner.Active && reader && reader.Elapsed >= 0) {
+		                    var label = reader.Name || reader.Channel || '';
+		                    tunerLabels[index] = label;
+		                    var labelHtml = label ? `<span class="tune-label">${esc(label)}</span>` : '';
+		                    badge = `<span class="tune-timer" title="${esc(label ? label + ' — streaming' : 'Streaming')}">${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
+		                }
+		                tunerHtml += `
+		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
+		                        <div class="tuner-status-head">
+		                            <span class="tuner-number">${index + 1}</span>
+		                            <strong>Tuner ${index + 1}</strong>
+		                            ${badge}
+		                        </div>
+		                        <div class="tuner-pairing">
+		                            <div class="endpoint-label lbl-device">Device</div>
+		                            <div class="endpoint-label lbl-encoder">Encoder</div>
+		                            <div class="endpoint-value val-device">${escUrl(tuner.Tunerip) || '—'}</div>
+		                            <div class="pair-link">⇄</div>
+		                            <div class="endpoint-value val-encoder">${escUrl(tuner.Url) || '—'}</div>
+		                        </div>
+		                        <div class="tuner-actions">
+		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
+		                            ${tuner.Active ? `<button class="btn btn-danger btn-sm release-btn-${index}" onclick="releaseTuner(${index})" ${releasing[index] ? 'disabled' : ''}>${releasing[index] ? 'Releasing…' : 'Release lock'}</button>` : ''}
+		                        </div>
+		                    </div>
 		                `;
 		            });
-		            $('#tunerStatus').html(tunerStatusHtml);
+		            $('#tunerGrid').html(tunerHtml);
 
 		            // Populate Reader Status
 		            var readerStatusHtml = `
 		                <tr>
-		                    <th align='right'>Tuner</th>
-		                    <th align='right'>Channel</th>
-		                    <th align='right'>Started</th>
-		                    <th align='right'>File</th>
-		                    <th align='right'>CMD</th>
+		                    <th>Tuner</th>
+		                    <th>Channel</th>
+		                    <th>Elapsed</th>
+		                    <th>File</th>
+		                    <th>CMD</th>
 		                </tr>`;
+		            if (!data.Readers || !data.Readers.length) {
+		                readerStatusHtml += `<tr><td colspan="5" class="muted">No active streams</td></tr>`;
+		            }
 		            $.each(data.Readers, function(index, reader) {
 		                readerStatusHtml += `
 		                    <tr>
-		                        <td align='right'>${reader.T}</td>
-		                        <td align='right'>${reader.Channel}</td>
-		                        <td align='right'>${reader.Started}</td>
-		                        <td align='right'>${reader.FileName}</td>
-		                        <td align='right'>${reader.Cmd}</td>
+		                        <td class="num">${reader.T + 1}</td>
+		                        <td title="${esc(reader.Channel)}">${esc(reader.Name || reader.Channel)}</td>
+		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
+		                        <td class="mono">${esc(reader.FileName)}</td>
+		                        <td class="mono">${esc(reader.Cmd)}</td>
 		                    </tr>
 		                `;
 		            });
@@ -237,22 +466,6 @@
 						// convert bytes per second to megabits per second
 						networkInMegabits = Math.round(((deltaNetRecv * 8) / timeInterval) / 1048576);
 						networkOutMegabits = Math.round(((deltaNetSent * 8) / timeInterval) / 1048576);
-
-						/*
-						console.log("---- Debugging Information ----");
-						console.log("prevNetRecv in bytes:", prevNetRecv);
-						console.log("data.NetRecv in bytes:", data.NetRecv);
-						console.log("prevNetSent in bytes:", prevNetSent);
-						console.log("data.NetSent in bytes:", data.NetSent);
-						console.log("prevTimestamp in ms:", prevTimestamp);
-						console.log("currentTimestamp in ms:", currentTimestamp);
-						console.log("TimeInterval in seconds:", timeInterval);
-						console.log("deltaNetRecv in bytes:", deltaNetRecv);
-						console.log("deltaNetSent in bytes:", deltaNetSent);
-						console.log("networkInMegabits (Mbps):", networkInMegabits);
-						console.log("networkOutMegabits (Mbps):", networkOutMegabits);
-						console.log("---- End of Debugging Information ----");
-						*/
 					}
 
 		            prevNetRecv = Math.round(data.NetRecv)
@@ -260,12 +473,12 @@
 		            prevTimestamp = currentTimestamp
 
 					var CPUoptions = {
-					    xaxis: { 
-					        mode: "time", 
+					    xaxis: {
+					        mode: "time",
 							timezone: "browser", // Using browser's local timezone
 					        timeformat: "%H:%M:%S", // Format of the time
 							ticks: 5,
-							labelMargin: 15 
+							labelMargin: 15
 					    },
 					    yaxis: {
 					        axisLabel: 'Percentage (%)', // Y-axis label
@@ -277,54 +490,56 @@
 					        hoverable: true,
 					        clickable: true,
 					        borderWidth: 1,
+					        borderColor: "#24304a",
 					        markings: function(axes) {
 					            var markings = [];
 					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
-					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "rgba(99, 102, 241, 0.04)" });
 					            }
 					            return markings;
 					        }
-					    },					    
-						selection: { mode: "xy" }, 
+					    },
+						selection: { mode: "xy" },
 						lines: { show: true, fill: true, lineWidth: 3 },
 						points: { show: showplotscpu },
-					    colors: ["#DA70D6", "#800080"]
+					    colors: ["#8b5cf6", "#6366f1"]
 					};
 
 					var NEToptions = {
-					    xaxis: { 
+					    xaxis: {
 					        mode: "time",
 							timezone: "browser", // Using browser's local timezone
 					        timeformat: "%H:%M:%S", // Format of the time
 							ticks: 5,
-							labelMargin: 15 
+							labelMargin: 15
 					    },
 						crosshair: { mode: "x" },
 					    grid: {
 					        hoverable: true,
 					        clickable: true,
 					        borderWidth: 1,
+					        borderColor: "#24304a",
 					        markings: function(axes) {
 					            var markings = [];
 					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
-					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "rgba(99, 102, 241, 0.04)" });
 					            }
 					            return markings;
 					        }
-					    },					    
+					    },
 						selection: { mode: "xy" },
 						lines: { show: true, fill: true, lineWidth: 3 },
 						points: { show: showplotsnet },
-					    colors: ["#7393B3", "#0047AB"],
+					    colors: ["#38bdf8", "#34d399"],
 					};
 
 					var GPUoptions = {
-					    xaxis: { 
+					    xaxis: {
 					        mode: "time",
 							timezone: "browser", // Using browser's local timezone
 					        timeformat: "%H:%M:%S", // Format of the time
 							ticks: 5,
-							labelMargin: 15 
+							labelMargin: 15
 					    },
 					    yaxis: {
 					        axisLabel: 'Percentage (%)', // Y-axis label
@@ -336,21 +551,20 @@
 					        hoverable: true,
 					        clickable: true,
 					        borderWidth: 1,
+					        borderColor: "#24304a",
 					        markings: function(axes) {
 					            var markings = [];
 					            for (var y = Math.floor(axes.ymin); y < axes.ymax; y += 10) {
-					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "#eee" });
+					                markings.push({ yaxis: { from: y, to: y + 5 }, color: "rgba(99, 102, 241, 0.04)" });
 					            }
 					            return markings;
 					        }
-					    },					    
+					    },
 						selection: { mode: "xy" },
 						lines: { show: true, fill: true, lineWidth: 3 },
 						points: { show: showplotsnet },
-					    colors: ["#1f77b4", "#ff7f0e", "#2ca02c"],
+					    colors: ["#6366f1", "#f59e0b", "#34d399"],
 					};
-
-			        $("<style type='text/css'> .flot-x-axis .flot-tick-label { transform: rotate(-35deg) translateY(15px); text-anchor: end; white-space: nowrap; } </style>").appendTo("head");
 
 					// Update the placeholder arrays
 					cpuData.push([currentTimestamp, data.CPU]); // Using currentTimestamp as the x-axis value
@@ -359,9 +573,10 @@
 					networkOutData.push([currentTimestamp, networkOutMegabits]); // Using currentTimestamp as the x-axis value
 
                     // GPU data
-                    gpuCPUData.push([currentTimestamp, data.GPUCPUUsage]); 
-                    gpuMemData.push([currentTimestamp, data.GPUMemUsage]);
-                    gpuPowerData.push([currentTimestamp, data.GPUPowerUsage]);
+                    const gpuNum = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+                    if (gpuNum(data.GPUCPUUsage) !== null) gpuCPUData.push([currentTimestamp, gpuNum(data.GPUCPUUsage)]);
+                    if (gpuNum(data.GPUMemUsage) !== null) gpuMemData.push([currentTimestamp, gpuNum(data.GPUMemUsage)]);
+                    if (gpuNum(data.GPUPowerUsage) !== null) gpuPowerData.push([currentTimestamp, gpuNum(data.GPUPowerUsage)]);
 
 					// Limit the size of the arrays to avoid memory issues
 					if (cpuData.length > 50) cpuData.shift();
@@ -370,14 +585,15 @@
 					if (networkOutData.length > 50) networkOutData.shift();
                     if (gpuCPUData.length > 50) gpuCPUData.shift();
                     if (gpuMemData.length > 50) gpuMemData.shift();
-                    if (gpuPowerData.length > 50) gpuPowerData.shift(); 
+                    if (gpuPowerData.length > 50) gpuPowerData.shift();
 
-                    // plot GPU graph
-                    $.plot("#gpu-usage", [
-                        { data: gpuCPUData, label: "GPU CPU %" }, 
+                    const gpuSeries = [
+                        { data: gpuCPUData, label: "GPU %" },
                         { data: gpuMemData, label: "GPU Mem %" },
                         { data: gpuPowerData, label: "GPU Power %" }
-                    ], GPUoptions);
+                    ].filter(x => x.data.length);
+                    $("#gpu-usage").closest(".card").toggle(gpuSeries.length > 0);
+                    if (gpuSeries.length) $.plot("#gpu-usage", gpuSeries, GPUoptions);
 
 					// Plot the data
 					$.plot("#cpu-usage", [
@@ -388,9 +604,9 @@
 						{ data: networkInData, label: "In" },
 						{ data: networkOutData, label: "Out" }
 					], NEToptions);
-					
+
 					// Toggle points on hover
-					$("#cpu-usage").on("mouseenter", function() {
+					$("#cpu-usage").off("mouseenter").on("mouseenter", function() {
 					    CPUoptions.points.show = true;
 						showplotscpu = true;
 					    plot = $.plot("#cpu-usage", [
@@ -399,7 +615,7 @@
 					    ], CPUoptions);
 					});
 
-					$("#cpu-usage").on("mouseleave", function() {
+					$("#cpu-usage").off("mouseleave").on("mouseleave", function() {
 					    CPUoptions.points.show = false;
 						showplotscpu = false;
 					    plot = $.plot("#cpu-usage", [
@@ -407,9 +623,9 @@
 					        { data: memoryData, label: "Mem %" }
 					    ], CPUoptions);
 					});
-					
+
 					// Toggle points on hover
-					$("#network-io").on("mouseenter", function() {
+					$("#network-io").off("mouseenter").on("mouseenter", function() {
 					    NEToptions.points.show = true;
 						showplotsnet = true;
 					    plot = $.plot("#network-io", [
@@ -418,7 +634,7 @@
 					    ], NEToptions);
 					});
 
-					$("#network-io").on("mouseleave", function() {
+					$("#network-io").off("mouseleave").on("mouseleave", function() {
 					    NEToptions.points.show = false;
 						showplotsnet = false;
 					    plot = $.plot("#network-io", [
@@ -426,7 +642,7 @@
 					        { data: networkOutData, label: "Out" }
 					    ], NEToptions);
 					});
-					
+
 		        });
 
 		    }
@@ -441,14 +657,14 @@
     <script>
         $(document).ready(function() {
             function fetchDataAndUpdateDVR() {
+                if (document.hidden) return;
                 // Fetch data from /dvr
                 $.getJSON("/status/channelsactivity", function(data) {
 					statusA = data.busy;
-					console.log(data.busy);
 					if(statusA == false) {
-						status = "- Idle";
+						status = "— Idle";
 					} else {
-						status = "- Active";
+						status = "— Active";
 					}
 					$('#activity').text(status);
 					// Populate Activity Table
@@ -457,7 +673,7 @@
                     $.each(data.activity, function(key, details) {
                         activityHtml += `
                             <tr>
-                                <td>${details}</td>
+                                <td>${esc(details)}</td>
                             </tr>
                         `;
 						isempty = false;
