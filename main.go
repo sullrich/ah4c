@@ -820,6 +820,9 @@ func run() error {
 	r.GET("/api/version", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"version": buildVersion()})
 	})
+	r.GET("/api/pyatv", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"pyatv": strings.EqualFold(os.Getenv("PYATV"), "TRUE")})
+	})
 	r.GET("/captions", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "captions.html", nil)
 	})

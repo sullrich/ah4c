@@ -71,9 +71,29 @@
 			}
 		}).catch(function () {});
 	}
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', showVersion);
-	} else {
+	// Apple TV tuners are driven by pyatv rather than adb, so with PYATV=TRUE
+	// ws-scrcpy has no device to show and Device Control is a door to an empty
+	// room. Every link to it goes, the menu tile on the home page included —
+	// the tile is the same <a href="/device"> the other pages carry in their
+	// bars. Fetched for the same reason the build stamp is: thirteen static
+	// pages share this script, and one answer beats thirteen edits.
+	function hideDeviceControl() {
+		fetch('/api/pyatv').then(function (r) {
+			return r.json();
+		}).then(function (d) {
+			if (!d || !d.pyatv) return;
+			document.querySelectorAll('a[href="/device"]').forEach(function (a) {
+				a.remove();
+			});
+		}).catch(function () {});
+	}
+	function onReady() {
 		showVersion();
+		hideDeviceControl();
+	}
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', onReady);
+	} else {
+		onReady();
 	}
 })();
