@@ -10,7 +10,7 @@
 # the same minute, or a clock that went backwards — the last field is
 # incremented instead, so the version never repeats and never goes down.
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 now="v$(date -u +%Y.%m.%d.%H%M)"
 cur="$(cat VERSION 2>/dev/null || echo)"
 if [ -n "$cur" ] && [ "$now" != "$(printf '%s\n%s\n' "$now" "$cur" | sort | tail -1)" ]; then

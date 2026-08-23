@@ -9,7 +9,7 @@ import (
 //
 // Embedding means a binary always knows its own version however it was built —
 // go build on a laptop, the Dockerfile, or the workflow — with nothing to
-// remember to pass. scripts/bump-version.sh writes it, in UTC, and the build
+// remember to pass. bump-version.sh writes it, in UTC, and the build
 // runs that before compiling.
 //
 //go:embed VERSION
