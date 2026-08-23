@@ -1,12 +1,9 @@
 #!/bin/bash
 # docker-start.sh
-# 2026.05.22
+# 2026.08.16
 
 # Ensure render group can access GPU device
 [[ -c /dev/dri/renderD128 ]] && chgrp render /dev/dri/renderD128
-
-#androids=( $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP )
-#[[ "$STREAMER_APP" == *"/atv/"* ]] && appleTV=true
 
 # Make tuner hostnames without local domain name resolvable in Alpine containers by adding each to /etc/hosts
 fixTunerDNS() {
@@ -17,11 +14,11 @@ fixTunerDNS() {
   local localDomain=$(awk '/search/ {print $2}' $resolvFile)
   local ipv4Pattern='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
   local hostnamePattern='^[a-zA-Z0-9_-]+$'
-    
+
   for android in "${androids[@]}"
     do
       local tunerNoPort="${android%%:*}"
-      
+
       if [[ -n $$android ]]; then
         if [[ $tunerNoPort =~ $ipv4Pattern ]]; then
           break
@@ -42,17 +39,17 @@ fixEncoderDNS() {
   local localDomain=$(awk '/search/ {print $2}' $resolvFile)
   local ipv4Pattern='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
   local hostnamePattern='^[a-zA-Z0-9_-]+$'
-      
+
   for encoder in "${encoders[@]}"
     do
       local encoderNoURL=$(echo "$encoder" | sed -n 's|^.*://\([^/]*\)/.*|\1|p')
-            
+
       if [[ -n $encoder ]]; then
         if [[ $encoderNoURL =~ $ipv4Pattern ]]; then
           break
         elif [[ $encoderNoURL =~ $hostnamePattern ]]; then
           encoderIP=$(dig +short $encoderNoURL.$localDomain)
-          echo "$encoderIP $encoderNoURL" >> $hostsFile          
+          echo "$encoderIP $encoderNoURL" >> $hostsFile
         fi
       fi
   done
@@ -60,7 +57,7 @@ fixEncoderDNS() {
   awk '!a[$0]++' $hostsFile
 }
 
-# List currently connected adb devices and then connect to each indivdually
+# List currently connected adb devices and then connect to each individually
 adbConnections() {
 
   local androids=($@)
@@ -74,11 +71,11 @@ adbConnections() {
   done
 }
 
-# List currently connected atv devices and then connect to each indivdually
+# List currently connected atv devices and then connect to each individually
 atvConnections() {
 
   local atvs=($@)
-  
+
   for atv in "${atvs[@]}"
     do
       if [[ -n $atv ]]; then
@@ -95,8 +92,7 @@ checkScripts() {
 
   local scripts=($@)
   mkdir -p ./scripts/firetv/directv ./$STREAMER_APP
-  #scripts=( prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh )
-  
+
   for script in "${scripts[@]}"
     do
       if [ ! -f /opt/scripts/firetv/directv/$script ] && [ -f /tmp/scripts/firetv/directv/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
@@ -126,7 +122,6 @@ checkM3Us() {
 
   local m3us=($@)
   mkdir -p ./m3u
-  #m3us=( directv.m3u foo-fighters.m3u hulu.m3u youtubetv.m3u )
 
   for m3u in "${m3us[@]}"
     do
@@ -139,7 +134,7 @@ checkM3Us() {
   done
 }
 
-# Create device specific M3Us for use with firetv/livetv channels
+# Create device specific M3Us for use with firetv/livetv channels (adb-based tuners only)
 createM3Us() {
   local androids=($@)
 
@@ -156,15 +151,19 @@ createM3Us() {
 # Echo the value of every set variable whose name begins with $1
 expandVars() { local v; for v in $(compgen -v "$1"); do echo "${!v}"; done; }
 
-# Fix hostanme resolution, connect adb devices, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
+# Fix hostname resolution, connect tuners, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
   fixTunerDNS $(expandVars TUNER)
   fixEncoderDNS $(expandVars ENCODER)
-  adbConnections $(expandVars TUNER)
-  checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh common.sh
+
+  if [[ "${PYATV,,}" == "true" ]]; then atvConnections $(expandVars TUNER); else adbConnections $(expandVars TUNER); fi
+
+  checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh common.sh atvpair.sh
   checkM3Us allente.m3u channels.m3u coachella.m3u directv.m3u dtvdeeplinks.m3u dtvosprey.m3u dtvstream.m3u dtvstreamdeeplinks.m3u edc.m3u foo-fighters.m3u fubo.m3u hulu.m3u kodifaves-pbs-seatac.m3u livetv.m3u nbc.m3u npo.m3u pbs-seatac.m3u pbs-worcester.m3u silicondust.m3u sling.m3u spectrum.m3u xfinity.m3u youtubetv_shield.m3u youtubetv.m3u zinwell.m3u
-  createM3Us $(expandVars TUNER)
+
+  if [[ "${PYATV,,}" != "true" ]]; then createM3Us $(expandVars TUNER); fi
+
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"
   # Labeled, because its output lands in the same container log as ah4c's and
   # its startup banner reads as somebody else's claim: "Listening on:
