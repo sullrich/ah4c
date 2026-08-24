@@ -36,7 +36,7 @@
 		</div>
 	</div>
 	<script>
-		if (window.self !== window.top || new URLSearchParams(window.location.search).has('notime')) {
+		if (new URLSearchParams(window.location.search).has('notime')) {
 			document.getElementById('time-header').classList.add('hidden');
 		}
 	</script>
