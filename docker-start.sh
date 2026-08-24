@@ -1,6 +1,6 @@
 #!/bin/bash
 # docker-start.sh
-# 2026.08.16
+# 2026.08.24
 
 # Ensure render group can access GPU device
 [[ -c /dev/dri/renderD128 ]] && chgrp render /dev/dri/renderD128
@@ -57,7 +57,8 @@ fixEncoderDNS() {
   awk '!a[$0]++' $hostsFile
 }
 
-# List currently connected adb devices and then connect to each individually
+# List currently connected adb devices, connect to each individually, and make
+# wireless debugging persistent on Android 11+ (adb_allowed_connection_time)
 adbConnections() {
 
   local androids=($@)
@@ -67,6 +68,16 @@ adbConnections() {
     do
       if [[ -n $android ]]; then
         adb connect $android
+
+        local androidVersion=$(adb -s $android shell getprop ro.build.version.release | tr -d '\r')
+        if [[ -n $androidVersion ]] && (( ${androidVersion%%.*} >= 11 )); then
+          local adbAllowedTime=$(adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
+          if [[ "$adbAllowedTime" == "null" ]]; then
+            adb -s $android shell settings put global adb_allowed_connection_time 0
+            adbAllowedTime=$(adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
+            echo "adb_allowed_connection_time for $android set to $adbAllowedTime"
+          fi
+        fi
       fi
   done
 }
