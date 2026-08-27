@@ -122,17 +122,18 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	} else {
 		args = append(args, "-map", "0:a:0")
 	}
-	// Always encoded, never copied, and always with fillerEncodeArgs — the
-	// same recipe the black is made with. A copied stream carries whatever
-	// SPS the file had, and a differently-encoded one carries a different SPS
-	// from the black; either way the decoder has to reconfigure where the
-	// pre-roll meets the black, and then again where the black meets the
-	// program. Two reconfigurations on one PID, and the picture flickers
-	// through both. With one recipe the pre-roll's SPS and PPS are the
-	// black's, byte for byte, and there is one reconfiguration — black to
-	// program — which is the one the NULL-packet path has always had and
-	// which has been watched working.
-	{
+	// H.265 encoder (ENCODER_CODEC=h265): the pre-roll must be H.265 too, or the
+	// player freezes at the hand-off — it will not switch its decoder. This image
+	// has no H.265 encoder to convert one, so an already-H.265 pre-roll is copied
+	// and anything else — an H.264 clip, a still — is refused; the hold then
+	// shows the built-in H.265 black instead of a pre-roll.
+	if wantHEVC() {
+		if video != "hevc" {
+			return prerollPlan{}, fmt.Errorf("is %s, and ENCODER_CODEC=h265 needs an H.265 pre-roll (this image has no H.265 encoder to convert one); the hold will show H.265 black instead", video)
+		}
+		args = append(args, "-c:v", "copy")
+		kind = append(kind, "H.265 video copied to match the encoder")
+	} else {
 		// -c:v h264 picks whichever H.264 encoder this ffmpeg was built with.
 		// Even dimensions and yuv420p are what every H.264 encoder accepts;
 		vf := "scale=trunc(iw/2)*2:trunc(ih/2)*2"

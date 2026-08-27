@@ -382,6 +382,22 @@ dropped frames stay at zero, and audio and video stay in sync. Measured on a rea
 program ran 1076 coded frames across 17.9 seconds, 60.00 fps, every frame exactly 1/60th of
 a second apart on the transport clock, while the overlay still said 29.970 specified.
 
+**An H.265 encoder** needs one setting: `ENCODER_CODEC=h265`, and the **hold** — `PLAYBACK_DELAY`
+or `PLAYBACK_DETECTION` — is fully supported. The player will not switch its video decoder
+mid-recording, so the black played inside the hand-off has to be the program's own codec, or
+the picture freezes on it instead of crossing to the program. This image's ffmpeg has no
+software H.265 encoder, so ah4c cannot make an H.265 black at startup; a half-second clip is
+built once, offline, and shipped inside the binary, and `ENCODER_CODEC=h265` selects it.
+
+The **pre-roll** is the exception. It is the first coded video the player sees, so it must
+itself be H.265 — an H.264 pre-roll would lock the player onto an H.264 decoder that then
+cannot cross into the H.265 program (nothing bridges that: not a NULL gap, not a black seam,
+not a relabel; all were tried and froze). Since this image cannot convert one, an H.265
+pre-roll is played as-is, and an H.264 pre-roll on an H.265 encoder is **refused** — the hold
+simply shows H.265 black for the wait, exactly as it does with no pre-roll at all. So to show
+a pre-roll on an H.265 encoder, supply it already encoded as H.265. Left at its `h264`
+default, nothing changes.
+
 Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
 took over along with how much filler was sent.
 
@@ -469,6 +485,7 @@ services:
       - LINKPI_USERNAME=${LINKPI_USERNAME} # Username for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
       - LINKPI_PASSWORD=${LINKPI_PASSWORD} # Password for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS; not currently read by the bundled scripts, which log in with the LinkPi default password instead.
       - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
+      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. The black played inside a PLAYBACK_DELAY / PLAYBACK_DETECTION hold must be that same codec — a player will not switch its video decoder at the hand-off, so a filler in the wrong codec freezes instead of crossing to the program. This image has no software H.265 encoder, so the H.265 black is a clip shipped in the binary; H.264 is generated at startup as before. A pre-roll on an H.265 encoder must itself be H.265: an H.265 pre-roll is played as-is, and an H.264 pre-roll cannot be converted so it is refused and the hold shows H.265 black instead. Leave at h264 unless your encoder is set to H.265. Case-insensitive; h265 and hevc both work.
       - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long from the request before handing the DVR the program, so an app that takes longer than the DVR's 30 seconds to reach its video still records. The DVR is answered the moment it asks. About a second of generated black is played inside the wait, so the player is given real frames and a real time base rather than nothing but stuffing, and MPEG-TS NULL packets carry the rest of it; a pre-roll, when one is mounted, fills the whole wait instead. Nothing of the box tuning in is ever passed on. The encoder is opened at the start of the tune and read and thrown away for the whole wait, and when the delay is up the gate hands over the first keyframe off that connection, so the program starts on a whole picture at the encoder's live edge. Any bare number is seconds, decimals included; otherwise a duration like 30s or 1m. Anything above 10m is held for 10m, with a line in the log saying so; that ceiling is a guard against a typo, not a measured limit — forty-five seconds is the longest hold that has been watched land at the live edge, and longer ones are still being tested. The value is the total tune time, scripts included. Replaces the ffmpeg-based skip this variable ran in earlier builds, along with its 30 second ceiling. Network tuners only. Empty or 0 leaves the feature off.
