@@ -129,7 +129,7 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	// shows the built-in H.265 black instead of a pre-roll.
 	if wantHEVC() {
 		if video != "hevc" {
-			return prerollPlan{}, fmt.Errorf("is %s, and ENCODER_CODEC=h265 needs an H.265 pre-roll (this image has no H.265 encoder to convert one); the hold will show H.265 black instead", video)
+			return prerollPlan{}, fmt.Errorf("is %s, but ENCODER_CODEC=h265 requires an H.265 pre-roll, which this build cannot create", video)
 		}
 		args = append(args, "-c:v", "copy")
 		kind = append(kind, "H.265 video copied to match the encoder")

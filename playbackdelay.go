@@ -1230,7 +1230,7 @@ func blackStartup() {
 		// H.265 encoder: the black has to be H.265 too, and this image cannot
 		// make one, so the clip shipped in the binary is used as-is.
 		blackPool = blackHEVCAsset[:len(blackHEVCAsset)/tsPacketSize*tsPacketSize]
-		logger("[BLACKFRAMES] using the built-in %s of H.265 black (ENCODER_CODEC=h265), %s, to go in front of the picture at the hand-off",
+		logger("[BLACKFRAMES] using the built-in %s of H.265 black, %s, to go in front of the picture at the hand-off",
 			blackWords(blackSeamFor), byteCount(int64(len(blackPool))))
 		return
 	}
