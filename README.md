@@ -25,6 +25,8 @@
 20. Closed captions - live CPU speech-to-text written into the stream as CEA-608, the way an HDHomeRun carries them, with no re-encode and nothing added to the image
 21. Autocrop for Xfinity channels with black borders on all 4 sides, driven live through a LinkPi Encoder's web API
 22. Custom startup script - run your own script alongside ah4c at container start via USER_SCRIPT
+23. Tune hold - PLAYBACK_DELAY holds every tune from the request while a slow app reaches its video, opening the wait with a moment of black and carrying the rest of it on packets the DVR cannot put on a timeline, so a tune longer than the DVR's 30 seconds still records
+24. Pre-roll - bind-mount a video or still image of your choice and it is shown instead of NULL packets while a tune is held or an encoder stalls
 
 ah4c WebUI:
 
@@ -262,6 +264,116 @@ lag live broadcast captioning has. An optional extra delay is available if you w
 them back further.
 
 
+### Tune hold and pre-roll
+
+Channels DVR gives a tune about thirty seconds to deliver its first bytes. An app that
+takes longer to reach its video — some cable apps do — loses the recording to the next
+tuner, or fails outright. A variable and a bind mount deal with that; both apply to
+network encoder tuners only, and neither changes a tune that has nothing holding it.
+
+**`PLAYBACK_DELAY`** holds every tune for a set time from the request, then starts the
+program. Any bare number is seconds — `15`, `30`, `0.5` — otherwise a duration like `30s`
+or `1m`. **Ten minutes is the ceiling**, and anything longer is held for ten minutes with a
+line in the log saying so. That ceiling is a guard against a typo rather than a measured
+limit: forty-five seconds is the longest hold that has been watched land the viewer at the
+live edge, and longer ones are still being tested, so treat anything much past it as
+untried. The value is the whole tune, scripts included:
+the DVR is answered the moment it asks, before the pre script has woken the box, so the
+seconds the scripts take belong to the hold instead of piling up in front of the program.
+Set it to a little more than the app needs from the moment the DVR asks to the moment its
+picture is up.
+
+A hold has to cost the viewer as little as it can, and that is the hard part. Nothing of
+the box tuning in may pass — no app screens, no half-drawn menus, no sound — because
+anything sent during the wait becomes part of the recording and stands in front of the
+program.
+
+Most of the wait is MPEG-TS NULL packets — PID 0x1FFF, the stuffing a transport stream
+already carries to fill spare bandwidth. They hold no picture, no sound and no clock, so a
+DVR that stores every byte of them still has nothing it can put on a timeline. They go out
+on a diet: enough while the DVR is deciding the body really is a stream, a keepalive once
+it has decided, because every byte sent during a hold is a byte the DVR is holding ahead of
+the show. The filler stops altogether for the last second before the hand-off, so the
+stretch directly in front of the program is not filler at all.
+
+Not all of it, though. A player given nothing but stuffing has no time base to anchor on
+and a playhead cannot get past it, where the same stretch of NULL packets alongside a
+stream that has shown a picture is carried across without trouble. So a two second clip of
+black video and silence is generated with ffmpeg once at container start, before the
+listener is even bound, and looped for about a second of the wait — long enough for the
+player to take a picture and a time base from it, short enough that the recording is not
+carrying tens of megabytes of black. NULL packets carry the rest. If ffmpeg cannot make
+the clip the log says so under `[BLACK]` and the whole wait is NULL packets, exactly as it
+was before. Where in the wait that second of black sits is still being worked on, so read
+the `[BLACK]` lines rather than this paragraph for what a given build does.
+
+The encoder is opened at the start of the tune and read for the whole wait, and everything
+it produces before the delay is up is thrown away. That is what the rest of this program
+already does — the stall-tolerant reader fills gaps in a stream it is still reading, and
+playback detection drains the encoder until the app is seen playing — and it is the one
+thing this hold used to do differently: it left the encoder shut and opened it cold at the
+end. When the delay passes, the gate takes the first keyframe out of a connection that has
+been up and flowing the whole time, so the program starts on a whole picture at the
+encoder's live edge rather than at the top of a session that still has to be established.
+Anything the encoder had queued from before is read off and thrown away first, and any
+stuffing left in the gate's first release is stripped out, so the picture is the first
+thing the DVR sees after the wait.
+
+With a pre-roll mounted the hold works the older way: the pre-roll plays, the encoder is
+opened when the wait ends, and the first packet of each stream is then marked with the
+transport stream's own discontinuity indicator, so the DVR is told the clock it is about to
+see is a new one. The drained path deliberately does not mark. Marking there splits the
+streams apart — the player is told the video's time base is new and flushes it — and fast
+forward, which navigates by video keyframes, finds none in the stretch while the video
+re-anchors and stops instead of moving.
+
+In earlier builds this variable skipped the start of the tune through ffmpeg and was
+capped below the DVR's 30 seconds. That cap went with the mechanism: nothing sits between
+the encoder and the DVR while a recording runs, and ffmpeg is asked for nothing at tune
+time — the black clip is made once, at container start. The log prints all of it under
+`[HOLD]` and `[BLACK]`.
+
+**The pre-roll** is a video or still image shown to the DVR instead of NULL packets,
+anywhere they would otherwise go: a tune held by `PLAYBACK_DELAY` or `PLAYBACK_DETECTION`,
+and an encoder stall covered by `NULL_FRAME_INSERTION`. Anything ffmpeg reads works. It is
+not a setting inside the container but a bind mount at `/opt/preroll`. Either drop the file
+into `${HOST_DIR}/ah4c/preroll` on the host, which sits beside the `scripts`, `m3u`, `adb`
+and `captions` directories ah4c already keeps there and is mounted by default, or set
+`PREROLL_FILE` to the file's path anywhere on the host and that file is mounted instead:
+
+```
+PREROLL_FILE=/data/preroll.mp4
+```
+
+```yaml
+      - ${PREROLL_FILE:-${HOST_DIR}/ah4c/preroll}:/opt/preroll
+```
+
+With more than one file in the directory, one named `preroll.*` is used; otherwise the
+first by name, and the log says which.
+
+The file is prepared once, at container start, into a transport stream: a video whose
+codecs already suit one (H.264, HEVC or MPEG-2 with AAC, AC3, MP2 or MP3) is remuxed as it
+is, anything else is encoded to H.264 and AAC, a still image becomes a ten second clip with
+silent audio, and a silent video gains silent audio. It loops for as long as the wait lasts
+and stops the moment the real stream is ready. It is the first thing the DVR gets: the
+request is answered with the pre-roll already playing, before the pre script has woken the
+box, and the tune runs underneath. With nothing holding the tune, the encoder takes over
+the instant its stream is up and the pre-roll simply stops, wherever it was; with
+`PLAYBACK_DELAY` or `PLAYBACK_DETECTION`, the same pre-roll carries on under the hold. A
+new file needs a container restart, or recreating it when `PREROLL_FILE` names the file,
+since then the mount is of the file itself. The splice is cleanest when the pre-roll matches the encoder's resolution and codecs. If the
+file cannot be prepared the log says why under `[PREROLL]` and the tune falls back to NULL
+packets, so a pre-roll can never cost a recording.
+
+The wait is always as long as the hold, never as long as the pre-roll happens to be. A
+clip shorter than the hold repeats until the hold is over — a still image simply stays up
+— and a clip longer than the hold is cut off when the hold ends. The hold is
+`PLAYBACK_DELAY`, or ten minutes if that asks for more.
+
+Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
+took over along with how much filler was sent.
+
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 
 <img width="1666" height="836" alt="screenshot-docker6-2026-08-23-11-17-28" src="https://github.com/user-attachments/assets/f65ee365-7d42-4db0-aa91-79a254eaefb9" />
@@ -291,7 +403,7 @@ them back further.
 
 ```yaml
 services:
-  # 2026.08.20
+  # 2026.08.25
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c:
@@ -348,7 +460,7 @@ services:
       - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
       - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
-      - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Set to a whole number of seconds to skip the start of each tune, so a recording begins on the program rather than on the app's loading screen. Piped through the bundled ffmpeg with -ss and stream copy; no re-encoding, and the skip starts on the next keyframe so it can run slightly past the configured value. The value is the total tune time, scripts included. Supported range is 2 to 30, since the DVR allows a tune about 30 seconds; values outside the range are clamped and logged. Ignored when PLAYBACK_DETECTION is TRUE; network tuners only. 0 or unset leaves the feature off.
+      - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long from the request before handing the DVR the program, so an app that takes longer than the DVR's 30 seconds to reach its video still records. The DVR is answered the moment it asks. About a second of generated black is played inside the wait, so the player is given real frames and a real time base rather than nothing but stuffing, and MPEG-TS NULL packets carry the rest of it; a pre-roll, when one is mounted, fills the whole wait instead. Nothing of the box tuning in is ever passed on. The encoder is opened at the start of the tune and read and thrown away for the whole wait, and when the delay is up the gate hands over the first keyframe off that connection, so the program starts on a whole picture at the encoder's live edge. Any bare number is seconds, decimals included; otherwise a duration like 30s or 1m. Anything above 10m is held for 10m, with a line in the log saying so; that ceiling is a guard against a typo, not a measured limit — forty-five seconds is the longest hold that has been watched land at the live edge, and longer ones are still being tested. The value is the total tune time, scripts included. Replaces the ffmpeg-based skip this variable ran in earlier builds, along with its 30 second ceiling. Network tuners only. Empty or 0 leaves the feature off.
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. How many seconds the box may keep the exact player and media session it already had before the check stops watching adb and gates on motion alone. The default is 2, which suits Ospreys; apps that hold one player across channel changes, like the DirecTV app, need more. 0 or unset uses the default.
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default
@@ -358,6 +470,7 @@ services:
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
       - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
+      - ${PREROLL_FILE:-${HOST_DIR}/ah4c/preroll}:/opt/preroll # A video or still image to show the DVR wherever it would otherwise be sent NULL packets: a tune held by PLAYBACK_DELAY or PLAYBACK_DETECTION, and an encoder stall covered by NULL_FRAME_INSERTION. Set PREROLL_FILE to the file's path on the host, or leave it blank and drop the file into this bound host directory, which stays empty unless you use one. Anything ffmpeg reads. It is prepared once at container start (remuxed when its codecs already suit a transport stream, encoded to H.264/AAC otherwise; a still becomes a 10 second clip with silent audio), starts the instant the DVR asks, before the box is even woken, loops for as long as the tune takes, and stops the moment the real stream is ready
     restart: unless-stopped
 ```
 
@@ -408,6 +521,7 @@ LINKPI_USERNAME=
 LINKPI_PASSWORD=
 USER_SCRIPT=
 NULL_FRAME_INSERTION=false
+PREROLL_FILE=
 PLAYBACK_DETECTION=true
 PLAYBACK_STATIC_TIMEOUT=12
 PLAYBACK_DELAY=
