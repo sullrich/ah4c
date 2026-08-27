@@ -118,14 +118,14 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 			// 6, past what most decoders will touch, and it never appears at
 			// all; a portrait picture becomes a portrait channel; and a
 			// picture of any odd size makes a pre-roll whose resolution
-			// differs from the programme's, so the stream changes resolution
+			// differs from the program's, so the stream changes resolution
 			// part way through. Video pre-rolls never had this because a video
 			// is already a sensible size.
 			//
 			// So every still becomes the same thing: scaled up until it covers
-			// a broadcast frame, then cropped to it from the centre. It fills
+			// a broadcast frame, then cropped to it from the center. It fills
 			// the screen, it is never stretched, and it is the resolution the
-			// programme arrives at, so nothing changes at the hand-off.
+			// program arrives at, so nothing changes at the hand-off.
 			// No setsar: the ffmpeg bundled here does not have that filter,
 			// and a still's pixels are square already.
 			vf = "scale=" + prerollFrame + ":force_original_aspect_ratio=increase," +
@@ -809,4 +809,172 @@ func stillToJPEG(src string) (string, error) {
 	logger("[PREROLL] read %s as a %dx%d %s and handed it over as a JPEG, which is the one still format ffmpeg here decodes",
 		filepath.Base(src), b.Dx(), b.Dy(), kind)
 	return out, nil
+}
+
+// --- One clock to the DVR ---
+//
+// A pre-roll is real video and carries its own PCR and PTS, running from zero
+// and restarting every time the clip loops. The program that follows carries
+// the encoder's clock, which is an unrelated number tens of hours away. So the
+// DVR is handed two timelines with a cliff between them, and a player has only
+// bad options at that cliff: told the time base is new it flushes video and
+// goes blind while it re-anchors, which is a spinning circle; not told, it
+// reads the jump as being far behind live and races to catch up, dropping
+// frames until it settles. Both were watched. They are the same fault seen
+// from two sides.
+//
+// The NULL-packet wait never had this problem because NULL packets carry no
+// timestamps at all — there is no first timeline to conflict with the second.
+// A pre-roll cannot do that and still be a picture.
+//
+// So the cliff is removed instead of being announced. Every timestamp going to
+// the DVR is mapped onto one clock that only ever moves forward: the pre-roll's
+// loops are flattened into a continuous run, and when the program arrives its
+// clock is offset to carry straight on from where the pre-roll stopped. After
+// the first packet of the program the offset is a constant, so this is a few
+// integer adds per packet and nothing else.
+//
+// Only where there is a pre-roll. The delay's own wait is NULL packets and half
+// a second of black and has been watched landing at the live edge; it has no
+// two timelines to reconcile and is not touched.
+
+// ptsMod is the 33-bit wrap of a 90 kHz timestamp; pcrMod the 27 MHz one.
+const (
+	ptsMod = uint64(1) << 33
+	pcrMod = ptsMod * 300
+	// splicePickup is the gap left between the last filler timestamp and the
+	// first program one — one frame at 30fps. Zero would put two pictures at
+	// the same instant; a large value would put a gap in the timeline that a
+	// player waits out.
+	splicePickup = uint64(3000) // 90 kHz
+	// spliceJump is how far a timestamp must move for it to be a new source
+	// rather than the stream running on. A clip loop and a hand-off both land
+	// far outside this; ordinary jitter and B-frame reordering do not.
+	spliceJump = uint64(10 * 90000)
+)
+
+// clockSplice maps every timestamp it passes onto a single forward-only clock.
+type clockSplice struct {
+	io.ReadCloser
+	label string
+	// out is the last timestamp written, in 90 kHz. delta is what is added to
+	// an input timestamp to get an output one, and in is the last input seen.
+	out, delta, in uint64
+	started, said  bool
+	rest           []byte
+}
+
+// spliceClock gives the DVR one clock whatever filled the wait.
+func spliceClock(src io.ReadCloser, label string) io.ReadCloser {
+	return &clockSplice{ReadCloser: src, label: label}
+}
+
+func (c *clockSplice) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if n > 0 {
+		c.rewrite(p[:n])
+	}
+	return n, err
+}
+
+// rewrite maps the timestamps in b, in place. Bytes that are not whole packets
+// are left alone: a torn packet cannot be parsed safely and skipping it costs
+// one packet's timestamps, where guessing at it would corrupt the payload.
+func (c *clockSplice) rewrite(b []byte) {
+	for i := 0; i+tsPacketSize <= len(b); i += tsPacketSize {
+		pkt := b[i : i+tsPacketSize]
+		if pkt[0] != 0x47 {
+			return // lost alignment; leave the rest untouched
+		}
+		pid := int(pkt[1]&0x1F)<<8 | int(pkt[2])
+		if pid == 0x1FFF {
+			continue // NULL packets carry nothing to map
+		}
+		c.mapPCR(pkt)
+		c.mapPES(pkt)
+	}
+}
+
+// pick decides where an input timestamp lands on the output clock, and moves
+// the clock forward. A step outside spliceJump is a new source — a clip that
+// has looped, or the program arriving — and picks up from where the last one
+// stopped rather than following the input's own number.
+func (c *clockSplice) pick(in uint64) uint64 {
+	switch {
+	case !c.started:
+		c.started, c.delta, c.out, c.in = true, 0, in, in
+		return in
+	case (in-c.in)&(ptsMod-1) < spliceJump:
+		// Running on, including a small step backwards for B-frame order.
+	default:
+		c.delta = (c.out + splicePickup - in) & (ptsMod - 1)
+		if !c.said {
+			c.said = true
+			logger("[HOLD] %s the program's clock was carried on from the pre-roll's rather than left as a jump", c.label)
+		}
+	}
+	c.in = in
+	out := (in + c.delta) & (ptsMod - 1)
+	if (out-c.out)&(ptsMod-1) < spliceJump {
+		c.out = out
+	}
+	return out
+}
+
+func (c *clockSplice) mapPCR(pkt []byte) {
+	if pkt[3]&0x20 == 0 || pkt[4] < 7 || pkt[5]&0x10 == 0 {
+		return
+	}
+	base := uint64(pkt[6])<<25 | uint64(pkt[7])<<17 | uint64(pkt[8])<<9 |
+		uint64(pkt[9])<<1 | uint64(pkt[10])>>7
+	out := c.pick(base)
+	pkt[6] = byte(out >> 25)
+	pkt[7] = byte(out >> 17)
+	pkt[8] = byte(out >> 9)
+	pkt[9] = byte(out >> 1)
+	pkt[10] = byte(out&1)<<7 | pkt[10]&0x7F
+}
+
+func (c *clockSplice) mapPES(pkt []byte) {
+	if pkt[1]&0x40 == 0 { // not the start of a PES packet
+		return
+	}
+	off := 4
+	if pkt[3]&0x20 != 0 {
+		off += 1 + int(pkt[4])
+	}
+	if off+13 > tsPacketSize {
+		return
+	}
+	es := pkt[off:]
+	if es[0] != 0 || es[1] != 0 || es[2] != 1 {
+		return
+	}
+	flags := es[7] >> 6
+	if flags < 2 || int(es[8]) < 5 {
+		return // no PTS
+	}
+	writeTS(es[9:14], c.pick(readTS(es[9:14])))
+	if flags == 3 && int(es[8]) >= 10 && off+19 <= tsPacketSize {
+		writeTS(es[14:19], c.pick(readTS(es[14:19])))
+	}
+}
+
+// readTS and writeTS are the five-byte PTS/DTS field, marker bits and all. The
+// top four bits are the prefix that says which of PTS and DTS this is, and are
+// left exactly as they were found.
+func readTS(f []byte) uint64 {
+	return uint64(f[0]>>1&0x07)<<30 |
+		uint64(f[1])<<22 |
+		uint64(f[2]>>1&0x7F)<<15 |
+		uint64(f[3])<<7 |
+		uint64(f[4]>>1&0x7F)
+}
+
+func writeTS(f []byte, ts uint64) {
+	f[0] = f[0]&0xF0 | byte(ts>>30&0x07)<<1 | 1
+	f[1] = byte(ts >> 22)
+	f[2] = byte(ts>>15&0x7F)<<1 | 1
+	f[3] = byte(ts >> 7)
+	f[4] = byte(ts&0x7F)<<1 | 1
 }

@@ -81,13 +81,13 @@ const (
 	// silent stream is worse than an unplayable one at that point.
 	keyframeQuiet = 3 * time.Second
 	// markWindow is how long the discontinuity marker keeps marking the first
-	// packet of each new programme PID after the hand-off. Long enough for the
-	// audio to arrive, short enough to touch nothing mid-programme.
+	// packet of each new program PID after the hand-off. Long enough for the
+	// audio to arrive, short enough to touch nothing mid-program.
 	markWindow = 2 * time.Second
 	// quietBeforeMark is how long before the mark the filler stops, so the
 	// seconds directly in front of the picture are not NULL packets. Measured
 	// against what is reported in front of the playhead: two to three seconds.
-	// quietBeforeMark drains the filler out of the pipe before the programme
+	// quietBeforeMark drains the filler out of the pipe before the program
 	// goes in behind it. NULL packets already written are still in flight in
 	// the socket when the video follows them, so they arrive ahead of the
 	// picture — which is what "it is ahead of the playhead, it goes in before
@@ -343,15 +343,15 @@ func newLateEncoder(url, label string, t0 time.Time, early *prerollPlayer, tuner
 	// pipe, on a client switching, on its own retry — so each reconnect wrote
 	// another ninety seconds of NULL packets into the same recording. That is
 	// what "there is real video and there is null, and it pauses when I fast
-	// forward into the null zone" is: the timeline is programme, NULL zone,
-	// programme, NULL zone, and fast forward runs into the next one and stops,
+	// forward into the null zone" is: the timeline is program, NULL zone,
+	// program, NULL zone, and fast forward runs into the next one and stops,
 	// because NULL packets carry no frames for it to land on.
 	//
 	// So a channel that has already been held keeps the benefit of it. The
 	// box is tuned and playing; there is nothing left to cover up.
 	if v, ok := heldRecently.Load(name); ok {
 		if since := time.Since(v.(time.Time)); since < holdAgainAfter {
-			logger("[HOLD] %s %s was held %v ago and is already playing; starting the programme at once rather than holding again",
+			logger("[HOLD] %s %s was held %v ago and is already playing; starting the program at once rather than holding again",
 				label, name, since.Round(time.Second))
 			until = t0
 		}
@@ -726,10 +726,10 @@ func (l *lateEncoder) takeHandoff(p []byte, r *handoffResult) (int, error) {
 	// worst place in the stream for it. Strip it and say what was found.
 	// One black frame, immediately before the picture and nothing in between.
 	//
-	// Whatever sits directly in front of the programme is what a playhead must
+	// Whatever sits directly in front of the program is what a playhead must
 	// cross to reach it, and NULL packets carry no frame to land on. A frame
 	// here gives the player something to decode and a time base to keep, and
-	// the programme then follows video with video. It does not need to be a
+	// the program then follows video with video. It does not need to be a
 	// second of black, or five, or the whole wait: one frame is all it takes,
 	// and one frame is all that lands in a recording.
 	first, _ := stripNulls(r.first)
@@ -819,7 +819,7 @@ func (l *lateEncoder) nullPace(d time.Duration) (time.Duration, int) {
 //
 // The filler carries no tables. A version of this sent the encoder's real PAT
 // and PMT alongside the NULL packets, on the theory that a wait inside a
-// declared programme is padding rather than unidentifiable stream. It never
+// declared program is padding rather than unidentifiable stream. It never
 // once ran: the tables come from l.gate, and l.gate is set by drainEarly one
 // line past the Lock that deadlocked, so l.gate was nil on every tune this
 // code has ever seen. It is removed rather than finally let loose, because
@@ -871,7 +871,7 @@ func (l *lateEncoder) open(p []byte) (int, error) {
 	// been convicted on the drained path, and neither had been taken off this
 	// one — so a pre-roll got the version of the hand-off that does not work.
 	// The maintainer's log is what showed it: pre-roll fine, "program starts",
-	// twenty-three megabytes of programme flowing at six and a half megabits,
+	// twenty-three megabytes of program flowing at six and a half megabits,
 	// and a spinning circle until Channels gave up and tried the other tuner.
 	// Never starved; it simply never got a picture it could show.
 	//
@@ -1165,9 +1165,9 @@ func (l *lateEncoder) stallTolerant(body io.ReadCloser) *stallTolerantReader {
 // place: directly in front of the picture. Everything earlier is behind the
 // viewer.
 //
-// So black goes out immediately before the programme, with nothing between the
+// So black goes out immediately before the program, with nothing between the
 // two, and it is real video: frames with timestamps, keyframes a scrubber can
-// land on, and a time base the player carries into the programme.
+// land on, and a time base the player carries into the program.
 //
 // blackSeamFor is the magic number and it has been found. Half a second of
 // black immediately in front of the picture put a ninety second hold at the
@@ -1234,7 +1234,7 @@ func blackStartup() {
 		return
 	}
 	// Whole TS packets only. A part packet at the seam is a torn packet
-	// immediately in front of the programme, which is the one place in the
+	// immediately in front of the program, which is the one place in the
 	// stream that cannot afford one.
 	blackPool = b[:len(b)/tsPacketSize*tsPacketSize]
 	logger("[BLACK] made %s of black, %s, to go in front of the picture at the hand-off",

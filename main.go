@@ -483,6 +483,19 @@ func tune(idx, channel string, early *earlyTune) (io.ReadCloser, error) {
 				}
 				body = hold.wrap(maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i)))
 			}
+			// One clock to the DVR — but only where a pre-roll has put a
+			// second one in front of the program. See spliceClock in
+			// preroll.go: a pre-roll carries its own PCR and PTS, restarts
+			// them every loop, and is then followed by the encoder's, which
+			// is an unrelated number. The player either flushes at that cliff
+			// and goes blind, or reads it as being far behind live and races.
+			//
+			// The delay's own wait is NULL packets, which carry no timestamps
+			// at all, and half a second of black. It has one clock already and
+			// has been watched landing at the live edge, so it is left alone.
+			if prerollTS != "" {
+				body = spliceClock(body, label)
+			}
 			t.active = true
 			t.index = i
 			r := &reader{
