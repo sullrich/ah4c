@@ -4,6 +4,7 @@ package main
 // wherever the DVR would otherwise get NULL packets and looping until the real
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,8 +49,9 @@ var prerollTS string
 // needs to know.
 type prerollProbe struct {
 	Streams []struct {
-		CodecType string `json:"codec_type"`
-		CodecName string `json:"codec_name"`
+		CodecType  string `json:"codec_type"`
+		CodecName  string `json:"codec_name"`
+		RFrameRate string `json:"r_frame_rate"`
 	} `json:"streams"`
 	Format struct {
 		FormatName string `json:"format_name"`
@@ -58,6 +61,10 @@ type prerollProbe struct {
 // prerollPlan is how the file becomes a transport stream: the ffmpeg arguments
 // between the program name and the output path, and a word for the log.
 type prerollPlan struct {
+	// rate is what the clip runs at once prepared: a video's own rate, kept,
+	// or stillRate for a picture, which has none. The black is made to match
+	// it so the two share one parameter set.
+	rate int
 	args []string
 	kind string
 }
@@ -73,11 +80,12 @@ var (
 // decision can be tested without ffmpeg.
 func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	video, audio := "", ""
+	rateText := ""
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case "video":
 			if video == "" {
-				video = s.CodecName
+				video, rateText = s.CodecName, s.RFrameRate
 			}
 		case "audio":
 			if audio == "" {
@@ -89,10 +97,19 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 		return prerollPlan{}, fmt.Errorf("has no video stream")
 	}
 	still := stillFormat(info)
+	// A picture has no rate and gets stillRate; a video keeps its own. If the
+	// probe could not say, stillRate stands in rather than a guess at the
+	// program's — the program never sees this stream.
+	rate := stillRate
+	if !still {
+		if r := parseRate(rateText); r > 0 {
+			rate = r
+		}
+	}
 	var args []string
 	var kind []string
 	if still {
-		args = append(args, "-loop", "1", "-framerate", "30", "-t", fmt.Sprint(prerollStillSeconds))
+		args = append(args, "-loop", "1", "-framerate", fmt.Sprint(stillRate), "-t", fmt.Sprint(prerollStillSeconds))
 		kind = append(kind, fmt.Sprintf("%s still cropped to %s as a %d second clip", video, prerollFrame, prerollStillSeconds))
 	}
 	args = append(args, "-i", src)
@@ -105,10 +122,17 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	} else {
 		args = append(args, "-map", "0:a:0")
 	}
-	if !still && tsVideoCodecs[video] {
-		args = append(args, "-c:v", "copy")
-		kind = append(kind, video+" video copied")
-	} else {
+	// Always encoded, never copied, and always with fillerEncodeArgs — the
+	// same recipe the black is made with. A copied stream carries whatever
+	// SPS the file had, and a differently-encoded one carries a different SPS
+	// from the black; either way the decoder has to reconfigure where the
+	// pre-roll meets the black, and then again where the black meets the
+	// program. Two reconfigurations on one PID, and the picture flickers
+	// through both. With one recipe the pre-roll's SPS and PPS are the
+	// black's, byte for byte, and there is one reconfiguration — black to
+	// program — which is the one the NULL-packet path has always had and
+	// which has been watched working.
+	{
 		// -c:v h264 picks whichever H.264 encoder this ffmpeg was built with.
 		// Even dimensions and yuv420p are what every H.264 encoder accepts;
 		vf := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
@@ -131,9 +155,13 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 			vf = "scale=" + prerollFrame + ":force_original_aspect_ratio=increase," +
 				"crop=" + prerollFrame
 		}
-		args = append(args, "-vf", vf, "-c:v", "h264", "-pix_fmt", "yuv420p", "-g", "30")
+		// The clip's own rate is kept. Nothing forces it: a twenty-four frame
+		// film stays twenty-four, and a fifty frame clip stays fifty. The
+		// program is a separate stream on its own decoder and never sees it.
+		args = append(args, "-vf", vf)
+		args = append(args, fillerEncodeArgs(rate)...)
 		if !still {
-			kind = append(kind, video+" video encoded to h264")
+			kind = append(kind, video+" video encoded to match the black")
 		}
 	}
 	switch {
@@ -148,7 +176,7 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 		kind = append(kind, audio+" audio encoded to aac")
 	}
 	args = append(args, "-f", "mpegts")
-	return prerollPlan{args: args, kind: strings.Join(kind, ", ")}, nil
+	return prerollPlan{rate: rate, args: args, kind: strings.Join(kind, ", ")}, nil
 }
 
 // prerollStartup prepares whatever is mounted at prerollMount into
@@ -211,7 +239,7 @@ func preparePreroll(src string) {
 	defer cancel()
 	t0 := time.Now()
 	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error",
-		"-show_entries", "stream=codec_type,codec_name:format=format_name",
+		"-show_entries", "stream=codec_type,codec_name,r_frame_rate:format=format_name",
 		"-of", "json", src).Output()
 	if err != nil {
 		logger("[PREROLL] ffprobe could not read %s: %v; holds will use NULL packets", src, probeError(err))
@@ -229,7 +257,7 @@ func preparePreroll(src string) {
 		if jpg, jerr := stillToJPEG(src); jerr != nil {
 			logger("[PREROLL] %s could not be read as a picture (%v); letting ffmpeg try it as it is", src, jerr)
 		} else if out, perr := exec.CommandContext(ctx, "ffprobe", "-v", "error",
-			"-show_entries", "stream=codec_type,codec_name:format=format_name",
+			"-show_entries", "stream=codec_type,codec_name,r_frame_rate:format=format_name",
 			"-of", "json", jpg).Output(); perr == nil {
 			var reread prerollProbe
 			if json.Unmarshal(out, &reread) == nil {
@@ -262,8 +290,9 @@ func preparePreroll(src string) {
 		return
 	}
 	prerollTS = prerollCache
-	logger("[PREROLL] prepared %s in %v: %s, %s at %s", src,
-		time.Since(t0).Round(time.Millisecond), plan.kind, byteCount(st.Size()), prerollCache)
+	prerollRate = plan.rate
+	logger("[PREROLL] prepared %s in %v: %s at %d pictures a second, %s at %s", src,
+		time.Since(t0).Round(time.Millisecond), plan.kind, plan.rate, byteCount(st.Size()), prerollCache)
 }
 
 // probeError adds ffprobe's own words to an exec error, which otherwise only
@@ -306,8 +335,14 @@ func startPreroll(label string) *prerollPlayer {
 	if prerollTS == "" {
 		return nil
 	}
+	// -muxdelay 0 -muxpreload 0 so the clip's PTS does not run ahead of its own
+	// PCR. ffmpeg's default mux delay put it 0.733s ahead, where the encoder
+	// that follows sends PTS equal to PCR, and the seam then has to open a gap
+	// the size of that lead to keep the program from landing under frames the
+	// pre-roll has already scheduled. With no lead the gap closes to a single
+	// frame, and the pre-roll can never again be the side with the longer one.
 	return startPlayer(label, "PREROLL", "-re", "-stream_loop", "-1", "-i", prerollTS,
-		"-c", "copy", "-f", "mpegts", "pipe:1")
+		"-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts", "pipe:1")
 }
 
 // startPlayer runs one ffmpeg writing MPEG-TS to a channel, or nil if it will
@@ -414,6 +449,9 @@ type holdReader struct {
 	pend    []byte
 	open    bool
 	nulls   int64
+	// sent is every byte handed downstream, so the hand-off can tell whether
+	// the filler stopped on a packet boundary.
+	sent int64
 }
 
 type holdFirst struct {
@@ -464,10 +502,13 @@ func (h *holdReader) Read(p []byte) (int, error) {
 	if len(h.pend) > 0 {
 		n := copy(p, h.pend)
 		h.pend = h.pend[n:]
+		h.sent += int64(n)
 		return n, nil
 	}
 	if h.open {
-		return h.src.Read(p)
+		n, err := h.src.Read(p)
+		h.sent += int64(n)
+		return n, err
 	}
 	select {
 	case f := <-h.first:
@@ -492,6 +533,7 @@ func (h *holdReader) Read(p []byte) (int, error) {
 func (h *holdReader) serveNulls(p []byte) int {
 	n := nullPackets(p)
 	h.nulls += int64(n)
+	h.sent += int64(n)
 	return n
 }
 
@@ -513,6 +555,36 @@ func (h *holdReader) handoff(p []byte, f holdFirst) (int, error) {
 		what = "pre-roll"
 	}
 	logger("[HOLD] %s hand-off at %v; sent %s of %s", h.hold.label, since.Round(time.Millisecond), byteCount(preroll+h.nulls), what)
+	// Start the program on a packet boundary.
+	//
+	// ffmpeg's pre-roll is read from a pipe in whatever sizes the pipe gives,
+	// and stopping it cuts wherever it had got to — measured at 132 bytes into
+	// a packet on a real tune. Appending the program to that fragment glues
+	// half a filler packet to the front of the program's first one, and every
+	// packet after it is 56 bytes out of step for the rest of the stream.
+	//
+	// It has always done this. It became visible when the clock rewriter
+	// arrived downstream, because that carves packets at fixed offsets and so
+	// began writing timestamps into arbitrary payload from the seam onward —
+	// which is what flickered. A demuxer on its own resyncs and loses a frame;
+	// this made it lose all of them.
+	//
+	// So the filler is finished off first: trim the part packet when it is
+	// still in hand, and complete it when it has already gone out.
+	if k := (h.sent + int64(len(h.pend))) % tsPacketSize; k != 0 {
+		if int64(len(h.pend)) >= k {
+			h.pend = h.pend[:int64(len(h.pend))-k]
+		} else {
+			h.pend = append(h.pend, bytes.Repeat([]byte{0xFF}, int(tsPacketSize-k))...)
+		}
+	}
+	// Half a second of black between the pre-roll and the program, the same as
+	// the delay's own wait gets. The trim above has just put the stream on a
+	// packet boundary, so this lands whole.
+	if len(blackPool) > 0 {
+		h.pend = append(h.pend, blackPool...)
+		logger("[BLACK] %s %s of black went out between the pre-roll and the picture", h.hold.label, byteCount(int64(len(blackPool))))
+	}
 	// The encoder's clock goes out untouched.
 	h.pend = append(h.pend, f.data...)
 	n := copy(p, h.pend)
@@ -524,6 +596,7 @@ func (h *holdReader) serve(p, data []byte) int {
 	h.pend = append(h.pend, data...)
 	n := copy(p, h.pend)
 	h.pend = h.pend[n:]
+	h.sent += int64(n)
 	return n
 }
 
@@ -538,6 +611,12 @@ func (h *holdReader) Close() error {
 // nullPackets fills p with whole NULL packets, so filler always lands on a
 // packet boundary.
 func nullPackets(p []byte) int {
+	// A caller with less than a packet of room gets a part packet, and that is
+	// the least bad of the options. Returning nothing would be (0, nil) from
+	// every reader above this, which is the shape that has broken two callers
+	// here already and spun a third. Nothing reads this small — copyFlush uses
+	// thirty-two kilobytes — and if anything ever does, the fragment is one
+	// packet of damage where a spin is a dead tune.
 	if len(p) < tsPacketSize {
 		return copy(p, nullTSPacket[:])
 	}
@@ -859,9 +938,30 @@ type clockSplice struct {
 	label string
 	// out is the last timestamp written, in 90 kHz. delta is what is added to
 	// an input timestamp to get an output one, and in is the last input seen.
-	out, delta, in uint64
-	started, said  bool
-	rest           []byte
+	out, high, delta, in uint64
+	// psiVer is the version to declare on each table PID, and psiSeen is the
+	// content it was last declared for. pmtPID is learned from the PAT of
+	// whichever source is current.
+	psiVer  map[int]byte
+	psiSeen map[int]uint32
+	pmtPID  int
+	// pending is set when a presentation time announced a new source before
+	// any of its clock had arrived; the next PCR is then adopted rather than
+	// treated as a second new source.
+	pending bool
+	// marking is whether the first packet of each PID after a source change
+	// is still to be flagged as a discontinuity; marked is which have been,
+	// and markFrom is when the first was.
+	marking       bool
+	marked        map[int]bool
+	markFrom      time.Time
+	started, said bool
+	// pend is rewritten and ready to go out; tail is what has been read but
+	// does not yet make a whole packet. synced is whether the packet boundary
+	// has been found, and err is kept until pend has drained.
+	pend, tail, scratch []byte
+	synced              bool
+	err                 error
 }
 
 // spliceClock gives the DVR one clock whatever filled the wait.
@@ -869,12 +969,90 @@ func spliceClock(src io.ReadCloser, label string) io.ReadCloser {
 	return &clockSplice{ReadCloser: src, label: label}
 }
 
+// Read hands back only whole packets that have been rewritten.
+//
+// The first version rewrote whatever the underlying reader returned, starting
+// at byte zero and assuming that was a packet boundary. It is not: a chunk is
+// thirty-two kilobytes and 32768 is not a multiple of 188, so every chunk ends
+// part way through a packet and the next one starts part way through. The scan
+// then read rubbish as packets, bailed at the first byte that was not 0x47,
+// and left most of the chunk untouched — so the DVR was handed one stream with
+// some timestamps offset and some not. That is what stuttered.
+//
+// So the boundary is held across reads: bytes accumulate in tail, whole
+// packets are rewritten and moved to pend, and the part packet at the end
+// waits for the rest of itself.
 func (c *clockSplice) Read(p []byte) (int, error) {
-	n, err := c.ReadCloser.Read(p)
-	if n > 0 {
-		c.rewrite(p[:n])
+	for len(c.pend) == 0 {
+		if c.err != nil {
+			// Nothing left to align; hand back whatever is stranded so the
+			// stream ends where it ended rather than a packet short.
+			if len(c.tail) > 0 {
+				c.pend, c.tail = c.tail, nil
+				break
+			}
+			return 0, c.err
+		}
+		if c.scratch == nil {
+			c.scratch = make([]byte, 32*1024)
+		}
+		n, err := c.ReadCloser.Read(c.scratch)
+		if n > 0 {
+			c.tail = append(c.tail, c.scratch[:n]...)
+			c.fill()
+		}
+		if err != nil {
+			c.err = err
+		}
 	}
-	return n, err
+	n := copy(p, c.pend)
+	c.pend = c.pend[n:]
+	return n, nil
+}
+
+// fill moves every whole packet in tail through the rewriter and on to pend.
+func (c *clockSplice) fill() {
+	if !c.synced {
+		c.sync()
+		if !c.synced {
+			return
+		}
+	}
+	// Alignment is checked every time, not assumed once. A source that ends
+	// mid-packet shifts everything after it, and carving fixed offsets through
+	// that writes timestamps into payload — which is worse than the misaligned
+	// stream it started from.
+	if c.tail[0] != 0x47 {
+		c.synced = false
+		c.sync()
+		if !c.synced {
+			return
+		}
+	}
+	whole := len(c.tail) / tsPacketSize * tsPacketSize
+	if whole == 0 {
+		return
+	}
+	c.rewrite(c.tail[:whole])
+	c.pend = append(c.pend, c.tail[:whole]...)
+	c.tail = append(c.tail[:0], c.tail[whole:]...)
+}
+
+// sync finds the packet boundary: a sync byte with another one exactly a
+// packet later. One 0x47 on its own is a coincidence often enough to matter in
+// a stream that is mostly video payload.
+func (c *clockSplice) sync() {
+	for i := 0; i+2*tsPacketSize <= len(c.tail); i++ {
+		if c.tail[i] == 0x47 && c.tail[i+tsPacketSize] == 0x47 {
+			c.tail = append(c.tail[:0], c.tail[i:]...)
+			c.synced = true
+			return
+		}
+	}
+	// Keep only what could still be the start of a pair.
+	if drop := len(c.tail) - 2*tsPacketSize; drop > 0 {
+		c.tail = append(c.tail[:0], c.tail[drop:]...)
+	}
 }
 
 // rewrite maps the timestamps in b, in place. Bytes that are not whole packets
@@ -884,42 +1062,158 @@ func (c *clockSplice) rewrite(b []byte) {
 	for i := 0; i+tsPacketSize <= len(b); i += tsPacketSize {
 		pkt := b[i : i+tsPacketSize]
 		if pkt[0] != 0x47 {
-			return // lost alignment; leave the rest untouched
+			// Skip the one packet, do not abandon the buffer. Giving up here
+			// left the rest of a thirty-two kilobyte read — about a hundred
+			// and seventy packets — carrying the encoder's raw timestamps,
+			// hours away from the clock either side of them. One torn packet
+			// is a frame; a hundred and seventy unmapped ones is the seam
+			// breaking all over again, in the middle of the program.
+			continue
 		}
 		pid := int(pkt[1]&0x1F)<<8 | int(pkt[2])
 		if pid == 0x1FFF {
 			continue // NULL packets carry nothing to map
 		}
+		if pid == 0 {
+			c.notePMTPID(pkt)
+			c.bumpPSI(pkt)
+			continue
+		}
+		if pid == c.pmtPID {
+			c.bumpPSI(pkt)
+			continue
+		}
+		// Clocks first, then the flag: it is mapPCR or mapPES that notices a
+		// new source, and the very packet that carries the news is the one
+		// that has to be marked.
 		c.mapPCR(pkt)
 		c.mapPES(pkt)
+		c.markPacket(pkt, pid)
 	}
 }
 
-// pick decides where an input timestamp lands on the output clock, and moves
-// the clock forward. A step outside spliceJump is a new source — a clip that
-// has looped, or the program arriving — and picks up from where the last one
-// stopped rather than following the input's own number.
-func (c *clockSplice) pick(in uint64) uint64 {
-	switch {
-	case !c.started:
-		c.started, c.delta, c.out, c.in = true, 0, in, in
-		return in
-	case (in-c.in)&(ptsMod-1) < spliceJump:
-		// Running on, including a small step backwards for B-frame order.
-	default:
-		c.delta = (c.out + splicePickup - in) & (ptsMod - 1)
-		if !c.said {
-			c.said = true
-			logger("[HOLD] %s the program's clock was carried on from the pre-roll's rather than left as a jump", c.label)
-		}
+// The clock is carried by two high-water marks, not one.
+//
+// out is the furthest PCR sent and high is the furthest presentation time. The
+// pickup has to be measured from whichever is later, and it is high that
+// matters: a pre-roll's PTS runs ahead of its own PCR — measured at 0.73s on a
+// real tune, where the encoder that follows sends PTS equal to PCR. Picking up
+// from the PCR alone therefore started the program 0.8 seconds underneath
+// frames the pre-roll had already scheduled, and a decoder handed presentation
+// times that go backwards shows them in the wrong order. That is what
+// flickered.
+//
+// newSource is the pickup: whatever timestamp announced the new source is
+// mapped to just past everything already sent, and the offset that achieves it
+// becomes the offset for every timestamp after — so PCR, PTS and DTS all keep
+// their spacing.
+func (c *clockSplice) newSource(ts uint64, fromPCR bool) {
+	ref := c.out
+	if forward(c.high, ref) {
+		ref = c.high
 	}
-	c.in = in
-	out := (in + c.delta) & (ptsMod - 1)
-	if (out-c.out)&(ptsMod-1) < spliceJump {
-		c.out = out
+	c.delta = (ref + splicePickup - ts) & (ptsMod - 1)
+	// c.in is the transmission clock's last reading and only a PCR may set it.
+	// A source announced by a presentation time — an audio PES ahead of the
+	// first PCR, which a real tune produced — used to write that PTS into c.in,
+	// so the source's own first PCR then looked like a third source and the
+	// offset was picked twice, after some of the new source's timestamps had
+	// already gone out on the first one. Measured at half a second of timeline
+	// running backwards inside one GOP. Now the next PCR is adopted instead.
+	if fromPCR {
+		c.in = ts
+	} else {
+		c.pending = true
 	}
-	return out
+	// Every PID of the new source gets its first packet flagged as a
+	// discontinuity. The clocks are continuous, so it is not one — but the flag
+	// is what a player acts on when a source changes underneath it: it re-reads
+	// the tables and re-selects its tracks, which is the difference between the
+	// build that switched to the program and the one that sat on the pre-roll's
+	// last frame for ever. Rule 11: the marker looked inert and was removed as
+	// dead; it was the thing that worked.
+	c.marking, c.marked, c.markFrom = true, map[int]bool{}, time.Time{}
+	if !c.said {
+		c.said = true
+		logger("[HOLD] %s the program's clock was carried on from the pre-roll's rather than left as a jump", c.label)
+	}
 }
+
+// markPacket flags the first packet of each elementary PID after a source
+// change, for markWindow after the first one so audio arriving a read or two
+// behind the video is told as well. Only a packet with an adaptation field can
+// carry the flag; the next one that has one is marked instead.
+func (c *clockSplice) markPacket(pkt []byte, pid int) {
+	if !c.marking || c.marked[pid] {
+		return
+	}
+	if pkt[3]&0x20 == 0 || pkt[4] == 0 {
+		return
+	}
+	pkt[5] |= 0x80
+	c.marked[pid] = true
+	if c.markFrom.IsZero() {
+		c.markFrom = time.Now()
+	} else if time.Since(c.markFrom) > markWindow {
+		c.marking = false
+	}
+}
+
+// advance follows the transmission clock. PCR never steps back within one
+// continuity, so any backward step is a new source however small it looks — a
+// clip shorter than spliceJump looping would otherwise read as the stream
+// running on and be handed to the DVR going backwards.
+func (c *clockSplice) advance(pcr uint64) {
+	if !c.started {
+		c.started, c.delta, c.out, c.high, c.in = true, 0, pcr, pcr, pcr
+		return
+	}
+	switch {
+	case c.pending:
+		// A presentation time already announced this source and set the
+		// offset; this is its clock arriving. Adopt it.
+		c.pending, c.in = false, pcr
+	case !forward(pcr, c.in):
+		c.newSource(pcr, true)
+	default:
+		c.in = pcr
+	}
+	if o := (pcr + c.delta) & (ptsMod - 1); forward(o, c.out) {
+		c.out = o
+	}
+}
+
+// at maps a presentation or decode time.
+//
+// It can be the first thing seen from a new source: the gate releases on a
+// random access indicator, which is a different bit from the PCR flag, so the
+// program's first PES can reach here before any program PCR does. Measured on
+// a real tune — an audio PTS arrived one packet ahead of the first PCR and was
+// given the pre-roll's offset, landing six seconds adrift. So a timestamp far
+// from the clock in either direction announces a new source too.
+//
+// Either direction, because DTS sits below PTS on every reordered frame and
+// audio interleaves below video. Comparing unsigned distances instead made
+// every one of those look like a new source, and the picture crawled.
+func (c *clockSplice) at(ts uint64) uint64 {
+	if !c.started {
+		return ts
+	}
+	if !near(ts, c.in) {
+		c.newSource(ts, false)
+	}
+	o := (ts + c.delta) & (ptsMod - 1)
+	if forward(o, c.high) {
+		c.high = o
+	}
+	return o
+}
+
+// near is whether two timestamps are within spliceJump of one another, either
+// way round. forward is whether a is ahead of b by less than that.
+func near(a, b uint64) bool { return forward(a, b) || forward(b, a) }
+
+func forward(a, b uint64) bool { return (a-b)&(ptsMod-1) < spliceJump }
 
 func (c *clockSplice) mapPCR(pkt []byte) {
 	if pkt[3]&0x20 == 0 || pkt[4] < 7 || pkt[5]&0x10 == 0 {
@@ -927,7 +1221,8 @@ func (c *clockSplice) mapPCR(pkt []byte) {
 	}
 	base := uint64(pkt[6])<<25 | uint64(pkt[7])<<17 | uint64(pkt[8])<<9 |
 		uint64(pkt[9])<<1 | uint64(pkt[10])>>7
-	out := c.pick(base)
+	c.advance(base)
+	out := c.at(base)
 	pkt[6] = byte(out >> 25)
 	pkt[7] = byte(out >> 17)
 	pkt[8] = byte(out >> 9)
@@ -943,21 +1238,60 @@ func (c *clockSplice) mapPES(pkt []byte) {
 	if pkt[3]&0x20 != 0 {
 		off += 1 + int(pkt[4])
 	}
-	if off+13 > tsPacketSize {
+	// off+14, not off+13: es[9:14] needs fourteen bytes from off. At off 175
+	// the short slice is still legal Go — the packet's capacity runs past its
+	// length — so writeTS clobbered the next packet's sync byte instead of
+	// failing, measured as 0x97 and 0xf1 where 0x47 belonged. The DTS guard
+	// below has always used the right figure.
+	if off+14 > tsPacketSize {
 		return
 	}
 	es := pkt[off:]
 	if es[0] != 0 || es[1] != 0 || es[2] != 1 {
 		return
 	}
+	// Only the stream kinds that actually carry the optional PES header. A
+	// padding or private_stream_2 packet has payload where that header would
+	// be, so reading es[7] as flags there and writing five bytes back is not a
+	// wrong timestamp, it is corrupt payload. Nothing in this stream sends one
+	// today; the guard is here because "nothing sends one today" is how the
+	// last several faults in this file started.
+	//
+	// This layer is the same for H.264 and HEVC. PCR lives in the adaptation
+	// field and PTS/DTS in the PES header, and neither knows what codec is
+	// inside — so an HEVC encoder is mapped by exactly this code, and the
+	// only thing HEVC changes is how expensive it is to get this wrong.
+	if !pesHasHeader(es[3]) {
+		return
+	}
+	if es[6]&0xC0 != 0x80 { // not an MPEG-2 PES optional header
+		return
+	}
 	flags := es[7] >> 6
 	if flags < 2 || int(es[8]) < 5 {
 		return // no PTS
 	}
-	writeTS(es[9:14], c.pick(readTS(es[9:14])))
+	writeTS(es[9:14], c.at(readTS(es[9:14])))
 	if flags == 3 && int(es[8]) >= 10 && off+19 <= tsPacketSize {
-		writeTS(es[14:19], c.pick(readTS(es[14:19])))
+		writeTS(es[14:19], c.at(readTS(es[14:19])))
 	}
+}
+
+// pesHasHeader says whether a stream_id carries the optional PES header that
+// holds PTS and DTS. Everything does except these, per ISO 13818-1 2.4.3.7.
+func pesHasHeader(streamID byte) bool {
+	switch streamID {
+	case 0xBC, // program_stream_map
+		0xBE, // padding_stream
+		0xBF, // private_stream_2
+		0xF0, // ECM
+		0xF1, // EMM
+		0xF2, // DSMCC
+		0xF8, // H.222.1 type E
+		0xFF: // program_stream_directory
+		return false
+	}
+	return true
 }
 
 // readTS and writeTS are the five-byte PTS/DTS field, marker bits and all. The
@@ -977,4 +1311,182 @@ func writeTS(f []byte, ts uint64) {
 	f[2] = byte(ts>>15&0x7F)<<1 | 1
 	f[3] = byte(ts >> 7)
 	f[4] = byte(ts&0x7F)<<1 | 1
+}
+
+// --- Telling the player the tables changed ---
+//
+// Every source here declares program 1 with version_number 0: the pre-roll's
+// tables, the black's, and the encoder's. A demuxer caches a table and only
+// re-reads it when the version moves, so after the filler it kept demuxing the
+// PIDs the first table named — 256 and 257 from ffmpeg — while the program
+// arrived on 100 and 101. Those PIDs had stopped, so the picture stopped.
+//
+// Measured before it was understood: two distinct tables in one capture, both
+// reading ver=0, one change between them. It was in the notes as an oddity and
+// walked past.
+//
+// So the version is stepped at every source change. That is the whole purpose
+// of the field, and it costs one byte plus a checksum.
+
+// crcMPEG is the CRC-32/MPEG-2 that closes a PSI section: polynomial
+// 0x04C11DB7, all ones in, no reflection, no final xor.
+func crcMPEG(b []byte) uint32 {
+	crc := uint32(0xFFFFFFFF)
+	for _, x := range b {
+		crc ^= uint32(x) << 24
+		for i := 0; i < 8; i++ {
+			if crc&0x80000000 != 0 {
+				crc = crc<<1 ^ 0x04C11DB7
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// bumpPSI gives a table a version that moves when, and only when, the table's
+// own contents move — then fixes the checksum to match.
+//
+// Content, not sources. The first attempt stepped one counter per source
+// change, and three sources need three versions where that counter managed
+// two: the pre-roll declared programme 1 version 0 on PIDs 256 and 257, the
+// black declared version 1 on PID 256, and the programme declared version 1 on
+// PIDs 100 and 101 — the same version as the black. A demuxer had already
+// cached version 1 and ignored the programme's table, so it went on demuxing
+// 256 for ever. That is the infinite pre-roll, and it was measured: four
+// distinct tables in one capture, two pairs sharing a version.
+//
+// Keyed off the content, miscounting cannot happen. A table that repeats keeps
+// its version, which is exactly what the field promises a demuxer; a table
+// that differs in any way at all gets the next one and is re-read.
+//
+// Sections spanning packets are left alone: rewriting half a section is worse
+// than an unstepped version, and nothing here splits them.
+func (c *clockSplice) bumpPSI(pkt []byte) {
+	if pkt[1]&0x40 == 0 {
+		return
+	}
+	pid := int(pkt[1]&0x1F)<<8 | int(pkt[2])
+	off := 4
+	if pkt[3]&0x20 != 0 {
+		off += 1 + int(pkt[4])
+	}
+	if off >= tsPacketSize {
+		return
+	}
+	off += 1 + int(pkt[off])
+	if off+8 > tsPacketSize {
+		return
+	}
+	sec := pkt[off:]
+	if sec[0] != 0x00 && sec[0] != 0x02 {
+		return
+	}
+	slen := int(sec[1]&0x0F)<<8 | int(sec[2])
+	end := 3 + slen
+	if slen < 9 || end > len(sec) {
+		return
+	}
+	// What the table says, with the version taken out, so a repeat of the same
+	// table hashes the same however it has been stamped on the way past.
+	was := sec[5]
+	sec[5] = was & 0xC1
+	sum := crcMPEG(sec[:end-4])
+	sec[5] = was
+	if c.psiVer == nil {
+		c.psiVer, c.psiSeen = map[int]byte{}, map[int]uint32{}
+	}
+	if seen, ok := c.psiSeen[pid]; !ok {
+		c.psiSeen[pid], c.psiVer[pid] = sum, was>>1&0x1F
+	} else if seen != sum {
+		c.psiSeen[pid] = sum
+		c.psiVer[pid] = (c.psiVer[pid] + 1) & 0x1F
+	}
+	sec[5] = was&0xC0 | c.psiVer[pid]<<1 | was&0x01
+	crc := crcMPEG(sec[:end-4])
+	sec[end-4] = byte(crc >> 24)
+	sec[end-3] = byte(crc >> 16)
+	sec[end-2] = byte(crc >> 8)
+	sec[end-1] = byte(crc)
+}
+
+// notePMTPID learns which PID carries the program table from the PAT, so the
+// table can be found however the source numbers it. ffmpeg says 0x1000 and an
+// encoder may say anything.
+func (c *clockSplice) notePMTPID(pkt []byte) {
+	off := 4
+	if pkt[3]&0x20 != 0 {
+		off += 1 + int(pkt[4])
+	}
+	if pkt[1]&0x40 == 0 || off >= tsPacketSize {
+		return
+	}
+	off += 1 + int(pkt[off])
+	if off+12 > tsPacketSize {
+		return
+	}
+	sec := pkt[off:]
+	if sec[0] != 0x00 {
+		return
+	}
+	if pid := int(sec[10]&0x1F)<<8 | int(sec[11]); pid > 0 && pid < 0x1FFF {
+		c.pmtPID = pid
+	}
+}
+
+// --- One recipe for everything that fills a wait ---
+//
+// The pre-roll and the black share one stream and one decoder, and every
+// distinct SPS on that stream is a reconfiguration a viewer can see. Made with
+// exactly this and nothing else, their parameter sets come out identical, so
+// the black follows the pre-roll with no reconfiguration at all. The program
+// is a separate stream on its own PIDs and its own decoder; nothing about the
+// filler — rate, level, profile — crosses over to it.
+//
+// No B-frames, because a stream with B-frames cut anywhere but a GOP boundary
+// leaves the decoder holding pictures whose references never arrive. One
+// reference frame and a keyframe every half second, so any cut is close to
+// clean. Colour signalled explicitly, so a photograph's metadata and a lavfi
+// source do not produce different VUI.
+//
+// stillRate is what a picture is played at, since a picture has none of its
+// own, and what the black is made at when there is no pre-roll. Thirty, the
+// value the NULL-packet path was watched landing at the live edge with.
+const stillRate = 30
+
+// prerollRate is what the prepared pre-roll runs at — its own rate, never
+// forced — so the black can be made to match it. Zero when there is none.
+var prerollRate int
+
+// parseRate reads ffprobe's r_frame_rate, "60000/1001" or "25/1", to the
+// nearest whole picture a second. Zero when it cannot.
+func parseRate(s string) int {
+	num, den, ok := strings.Cut(strings.TrimSpace(s), "/")
+	if !ok {
+		den = "1"
+	}
+	n, err1 := strconv.Atoi(num)
+	d, err2 := strconv.Atoi(den)
+	if err1 != nil || err2 != nil || n <= 0 || d <= 0 {
+		return 0
+	}
+	r := (n + d/2) / d
+	if r < 1 || r > 240 {
+		return 0
+	}
+	return r
+}
+
+func fillerEncodeArgs(rate int) []string {
+	if rate < 2 {
+		rate = stillRate
+	}
+	return []string{
+		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+		"-profile:v", "high",
+		"-x264-params", fmt.Sprintf("keyint=%d:min-keyint=%d:scenecut=0:bframes=0:ref=1:aud=1", rate/2, rate/2),
+		"-pix_fmt", "yuv420p",
+		"-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+	}
 }

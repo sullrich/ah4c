@@ -375,13 +375,28 @@ func (ci *captionInjector) packet(p []byte) error {
 		ci.pmtDone = true
 	}
 	if pid == ci.pmtPID && ci.pmtPatch != nil {
+		// The patch is built once and then sent in place of every programme
+		// table after it, so it has to take the live packet's continuity
+		// counter with it. Without that the counter is frozen at whatever it
+		// happened to be when the patch was made — measured on a real capture
+		// as three hundred and twenty-four consecutive tables all reading 4,
+		// while the PAT and the SDT beside them counted normally.
+		//
+		// A table arriving ten times a second whose counter never moves reads
+		// to a demuxer as a duplicate or an error on every repeat, and a
+		// demuxer that responds by re-acquiring the programme tears the video
+		// pipeline down and builds it again. Playback stays perfectly smooth
+		// and the picture flashes, which is exactly what was reported —
+		// alignment, PCR, and the video's own presentation times all measured
+		// clean at the same time.
+		var t tsPacket
+		copy(t.buf[:], ci.pmtPatch)
+		t.buf[3] = t.buf[3]&0xF0 | p[3]&0x0F
 		if ci.inPES {
-			var t tsPacket
-			copy(t.buf[:], ci.pmtPatch)
 			ci.window = append(ci.window, t)
 			return nil
 		}
-		_, err := ci.out.Write(ci.pmtPatch)
+		_, err := ci.out.Write(t.buf[:])
 		return err
 	}
 
@@ -521,6 +536,22 @@ func addCaptionDescriptor(p []byte, videoPID int) []byte {
 
 	il := int(body[10]&0x0F)<<8 | int(body[11])
 	i := 12 + il
+	// program_info_length comes off the wire and is not to be trusted. It can
+	// name more bytes than the section holds, and body[:i] then panics —
+	// measured at "slice bounds out of range [:4107] with capacity 183" for
+	// lengths of 176, 1000 and 4095. Garbage tables are not hypothetical here:
+	// psiSection's own comment records that an encoder losing HDMI sends them.
+	//
+	// The identical walk in parsePMT ten lines away is bounded by its loop
+	// condition and does not panic, which is this file's recurring shape — the
+	// same code in two places and only one of them guarded.
+	//
+	// captionStream.run recovers from the panic and passes the stream through
+	// untouched, so this cost captions for the tune rather than the tune. It
+	// was still a panic, and it was silent.
+	if i > len(body) {
+		return nil
+	}
 	out := append([]byte(nil), body[:i]...)
 	found := false
 	for i+4 < len(body) {

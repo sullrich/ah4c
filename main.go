@@ -446,7 +446,13 @@ func tune(idx, channel string, early *earlyTune) (io.ReadCloser, error) {
 				// wait is the pre-roll or NULL packets, and the encoder is
 				// opened when the delay is up, so the program starts at the
 				// top of its own session rather than joined in progress.
-				body = newLateEncoder(t.url, label, early.from(tuneStart), early.player(), i, fmt.Sprintf("tuner%d", i))
+				// Keyed by channel, not by tuner. heldRecently exists so a DVR
+				// that reconnects mid-hold does not write a second wait into
+				// the same recording — but keyed by tuner it also skipped the
+				// hold when the viewer changed channel within holdAgainAfter,
+				// and then the recording opens on the app's loading screen,
+				// which is the whole thing the feature is for.
+				body = newLateEncoder(t.url, label, early.from(tuneStart), early.player(), i, fmt.Sprintf("tuner%d", i), channel)
 			} else {
 				resp, err := http.Get(t.url)
 				if err != nil {
@@ -1696,6 +1702,10 @@ type stallTolerantReader struct {
 	// the next Read. Only the reading goroutine touches it.
 	rest    []byte
 	dropped atomic.Int64
+	// out is how many bytes have gone downstream, so NULL fill can finish a
+	// torn packet before it starts whole ones. Only the reading goroutine
+	// touches it.
+	out int64
 	// filled counts NULL bytes put into a live program to cover an encoder
 	// stall. saidFill keeps that to one line a tune.
 	filled   atomic.Int64
@@ -1795,7 +1805,28 @@ func (s *stallTolerantReader) producer() {
 			s.reconnects.Add(1)
 			s.bodyMu.Lock()
 			s.body = nb
+			// Re-check closed under the same lock, as drainEarly does when it
+			// publishes its body. For the whole round trip of the reconnect
+			// s.body was nil, so a Close that landed then closed nothing; if
+			// it did, this new body would be published, the loop would see
+			// closed and return, and nb would be held open by nobody for the
+			// life of the process. The encoder will not hand the same stream
+			// to a second reader, so the next tune on this tuner would get no
+			// video from a tuner that reported itself idle.
+			var gone bool
+			select {
+			case <-s.closed:
+				gone = true
+			default:
+			}
+			if gone {
+				s.body = nil
+			}
 			s.bodyMu.Unlock()
+			if gone {
+				nb.Close()
+				return
+			}
 			continue
 		}
 		n, err := readWithDeadline(body, chunk, srcStallReconnect)
@@ -1892,6 +1923,7 @@ func (s *stallTolerantReader) Read(p []byte) (int, error) {
 	if len(s.rest) > 0 {
 		n := copy(p, s.rest)
 		s.rest = s.rest[n:]
+		s.out += int64(n)
 		return n, nil
 	}
 	select {
@@ -1903,6 +1935,7 @@ func (s *stallTolerantReader) Read(p []byte) (int, error) {
 		if n < len(data) {
 			s.rest = append(s.rest[:0], data[n:]...)
 		}
+		s.out += int64(n)
 		return n, nil
 	case <-stall:
 		// This reader once had its filling switched off during a hold, on the
@@ -1927,15 +1960,35 @@ func (s *stallTolerantReader) Read(p []byte) (int, error) {
 		// So it counts and it speaks. If a tune shows seconds of this, the
 		// encoder is stalling and the filler is turning those stalls into
 		// unplayable time in the recording.
+		// Finish the torn packet before starting whole ones. An encoder can
+		// stall part way through a packet, and filling from there put the
+		// whole rest of the stream out of step — which a demuxer resyncs
+		// from, but which anything downstream carving packets at fixed
+		// offsets does not. One damaged packet is a frame; a stream out of
+		// step is every frame after it.
+		if k := s.out % 188; k != 0 {
+			n := min(len(p), int(188-k))
+			for i := 0; i < n; i++ {
+				p[i] = 0xFF
+			}
+			s.filled.Add(int64(n))
+			s.out += int64(n)
+			s.sayFilled()
+			return n, nil
+		}
 		if len(p) < 188 {
 			s.filled.Add(188)
 			s.sayFilled()
-			return copy(p, nullTSPacket[:]), nil
+			n := copy(p, nullTSPacket[:])
+			s.out += int64(n)
+			return n, nil
 		}
 		n := min(len(p)/188*188, len(nullFill))
 		s.filled.Add(int64(n))
 		s.sayFilled()
-		return copy(p, nullFill[:n]), nil
+		n = copy(p, nullFill[:n])
+		s.out += int64(n)
+		return n, nil
 	}
 }
 
@@ -2000,9 +2053,6 @@ const (
 )
 
 type gateReader struct {
-	// tables holds the encoder's real PAT and PMT once seen, for the hold in
-	// front of the gate to send with its filler.
-	tables   atomic.Value
 	src      io.ReadCloser
 	ready    <-chan struct{}
 	open     bool
@@ -2045,30 +2095,6 @@ func newGateReader(src io.ReadCloser, ready <-chan struct{}, timed bool, target 
 		g.sess0 = g.sessSeen
 	}
 	return g
-}
-
-// publishTables snapshots the encoder's real PAT and PMT the moment the gate
-// has both, so the hold in front of it can send them with its filler. They are
-// the encoder's own tables, read off the connection that is draining — not
-// tables invented here, which is the thing that failed before: invented tables
-// name PIDs nothing will ever send on, and a DVR locks onto them and waits for
-// ever. These name exactly what is about to arrive.
-func (g *gateReader) publishTables() {
-	if len(g.pat) == 0 || len(g.pmt) == 0 {
-		return
-	}
-	b := make([]byte, 0, len(g.pat)+len(g.pmt))
-	b = append(b, g.pat...)
-	b = append(b, g.pmt...)
-	g.tables.Store(&b)
-}
-
-// realTables is the encoder's PAT and PMT, or nil until the gate has seen both.
-func (g *gateReader) realTables() []byte {
-	if v, ok := g.tables.Load().(*[]byte); ok && v != nil {
-		return *v
-	}
-	return nil
 }
 
 func (g *gateReader) resync() {
@@ -2193,14 +2219,12 @@ func (g *gateReader) scan(b []byte) int {
 		if pid == 0 {
 			if sec := gatePSI(pkt, pusi, afc); len(sec) > 0 && sec[0] == 0x00 {
 				g.pat = append(g.pat[:0], pkt...)
-				g.publishTables()
 			}
 			i += 188
 			continue
 		}
 		if sec := gatePSI(pkt, pusi, afc); len(sec) > 0 && sec[0] == 0x02 {
 			g.pmt = append(g.pmt[:0], pkt...)
-			g.publishTables()
 			if v := videoPIDs(sec); len(v) > 0 {
 				g.vid = v
 			}

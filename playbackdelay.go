@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -134,6 +135,14 @@ func liveEdge(body io.ReadCloser, label string) (uint64, bool) {
 	var have bool
 	var dropped int64
 	var ahead float64
+	// carry holds the part packet at the end of one read for the start of
+	// the next. Every read used to be scanned from byte zero as if it were a
+	// packet boundary, and only the first one is: after that the PCR fields
+	// were read from the wrong bytes, the "ahead" figure was wrong exactly
+	// when the backlog was large, and the drain stopped early. Measured on a
+	// synthetic body: 23.8s reported at one chunk size, 0.2s at another, for
+	// the same bytes.
+	var carry []byte
 	t0, settled := time.Now(), time.Now()
 	for time.Since(t0) < liveEdgeBudget && dropped < liveEdgeMost {
 		n, err := body.Read(buf)
@@ -141,8 +150,13 @@ func liveEdge(body io.ReadCloser, label string) (uint64, bool) {
 			return last, have
 		}
 		dropped += int64(n)
-		for i := 0; i+tsPacketSize <= n; i += tsPacketSize {
-			p := buf[i : i+tsPacketSize]
+		data := append(carry, buf[:n]...)
+		i := 0
+		for i+tsPacketSize <= len(data) && data[i] != 0x47 {
+			i++
+		}
+		for ; i+tsPacketSize <= len(data); i += tsPacketSize {
+			p := data[i : i+tsPacketSize]
 			if p[0] != 0x47 || p[3]>>4&2 == 0 || p[4] < 7 || p[5]&0x10 == 0 {
 				continue
 			}
@@ -154,6 +168,7 @@ func liveEdge(body io.ReadCloser, label string) (uint64, bool) {
 				settled = time.Now()
 			}
 		}
+		carry = append(carry[:0], data[i:]...)
 		if have {
 			if by := float64(last-start)/90000 - time.Since(t0).Seconds(); by > ahead+0.05 {
 				ahead, settled = by, time.Now()
@@ -279,6 +294,19 @@ type lateEncoder struct {
 	// encoder's own stream rather than to the hold in front of it.
 	tuner int
 	name  string
+	// prerollDead is set when the pre-roll's ffmpeg stopped during the wait.
+	// l.preroll is deliberately NOT cleared then: Read reaches open() only
+	// through l.preroll != nil, and this lateEncoder has no drain and no
+	// hand-off channel, so clearing it stranded the tune on NULL packets for
+	// ever — the encoder never contacted, the DVR kept alive on three kilobits
+	// of nothing, the tuner never released. Two reviewers reproduced it. The
+	// guard that was meant to catch it was unreachable: showPreroll only runs
+	// while the mark is ahead and sleeps at most that long, so the mark could
+	// never have passed inside it.
+	prerollDead bool
+	// channel is what heldRecently is keyed by. name is the caption engine's
+	// label and is per tuner, which is not the same thing at all.
+	channel string
 
 	// handoff carries the gated encoder from the goroutine that has been
 	// draining it through the wait to the read that is serving the DVR.
@@ -286,19 +314,10 @@ type lateEncoder struct {
 	// drain is the gated chain drainEarly is reading, kept so Close can shut
 	// the encoder even when the hand-off has not happened yet.
 	drain io.ReadCloser
-	// gate is the drained gate, kept so the wait can send the encoder's own
-	// tables with its filler. lastTables is when they last went out.
-	// primer is real picture sent before the filler, so the player has a time
-	// base to carry across the wait.
-	primer []byte
 	// black fills the wait with real frames; pendBlack is what is left of the
 	// last chunk it handed over.
-	black     *prerollPlayer
-	pendBlack []byte
-	// blackFrom is when black first went out, which is when its clock starts.
-	blackFrom  time.Time
-	gate       *gateReader
-	lastTables time.Time
+	black *prerollPlayer
+	gate  *gateReader
 	// quietSaid keeps the "no keyframe" note to once a tune.
 	quietSaid atomic.Bool
 
@@ -306,6 +325,9 @@ type lateEncoder struct {
 	body   io.ReadCloser
 	closed bool
 	nulls  int64
+	// sent is every byte handed to the DVR, so a hand-off can tell whether the
+	// filler stopped on a packet boundary. See finishFiller.
+	sent int64
 	// stall is the drained path's stall reader, kept so the hand-off and the
 	// pace watcher can say how deep its queue stands instead of leaving the
 	// depth to be inferred from drop events. nil on the pre-roll path, which
@@ -336,7 +358,7 @@ var heldRecently sync.Map // name -> time.Time of the last hand-off
 // that needs. Seconds, not minutes.
 const holdAgainAfter = 20 * time.Second
 
-func newLateEncoder(url, label string, t0 time.Time, early *prerollPlayer, tuner int, name string) *lateEncoder {
+func newLateEncoder(url, label string, t0 time.Time, early *prerollPlayer, tuner int, name, channel string) *lateEncoder {
 	until := t0.Add(holdDelay)
 	// The hold exists to cover the box tuning in, and that happens once. But a
 	// hold was started on every request, and the DVR reconnects — on a broken
@@ -349,14 +371,14 @@ func newLateEncoder(url, label string, t0 time.Time, early *prerollPlayer, tuner
 	//
 	// So a channel that has already been held keeps the benefit of it. The
 	// box is tuned and playing; there is nothing left to cover up.
-	if v, ok := heldRecently.Load(name); ok {
+	if v, ok := heldRecently.Load(channel); ok {
 		if since := time.Since(v.(time.Time)); since < holdAgainAfter {
 			logger("[HOLD] %s %s was held %v ago and is already playing; starting the program at once rather than holding again",
-				label, name, since.Round(time.Second))
+				label, channel, since.Round(time.Second))
 			until = t0
 		}
 	}
-	l := &lateEncoder{url: url, label: label, t0: t0, until: until, preroll: early, tuner: tuner, name: name}
+	l := &lateEncoder{url: url, label: label, t0: t0, until: until, preroll: early, tuner: tuner, name: name, channel: channel}
 	if l.preroll != nil {
 		l.preroll.adopted.Store(true)
 	} else {
@@ -389,6 +411,14 @@ func newLateEncoder(url, label string, t0 time.Time, early *prerollPlayer, tuner
 // the features that work.
 func (l *lateEncoder) drainEarly() {
 	var body io.ReadCloser
+	// The bound covers the open as well as the drain. It used to be set after
+	// the open succeeded, so an encoder that would not open — off, rebooting,
+	// wrong URL — was retried every second for ever, nothing ever reached the
+	// hand-off, and the filler's keepalive kept the DVR from concluding the
+	// stream had died. A failed tune was withheld the ending that would have
+	// let the DVR fail over. Retrying is right while the scripts are still
+	// driving the box; retrying without end is not.
+	giveUp := l.until.Add(drainGiveUp)
 	for {
 		l.mu.Lock()
 		closed := l.closed
@@ -491,6 +521,14 @@ func (l *lateEncoder) drainEarly() {
 			logger("[HOLD] %s encoder open and draining for the wait", l.label)
 			break
 		}
+		if time.Now().After(giveUp) {
+			logger("[HOLD] %s encoder would not open within %v of the mark (%v); ending the stream so the DVR can try again", l.label, drainGiveUp, err)
+			select {
+			case l.handoff <- nil:
+			default:
+			}
+			return
+		}
 		logger("[HOLD] %s encoder would not open for the wait (%v); trying again", l.label, err)
 		time.Sleep(time.Second)
 	}
@@ -508,7 +546,6 @@ func (l *lateEncoder) drainEarly() {
 	// So the loop checks whether the tune has been closed, rather than relying
 	// only on Close reaching in and breaking the read — and it gives up on its
 	// own a bounded time past the mark, whatever else has gone wrong.
-	giveUp := l.until.Add(drainGiveUp)
 	for {
 		l.mu.Lock()
 		closed := l.closed
@@ -520,6 +557,12 @@ func (l *lateEncoder) drainEarly() {
 		if time.Now().After(giveUp) {
 			logger("[HOLD] %s nothing took the hand-off within %v of the mark; letting the encoder go rather than holding it open", l.label, drainGiveUp)
 			body.Close()
+			// Say so, as the error path does. Without this the reader waits on
+			// a hand-off that is never coming and fills for ever.
+			select {
+			case l.handoff <- nil:
+			default:
+			}
 			return
 		}
 		n, err := body.Read(buf)
@@ -560,6 +603,9 @@ func (l *lateEncoder) Read(p []byte) (int, error) {
 	if len(l.pend) > 0 {
 		n := copy(p, l.pend)
 		l.pend = l.pend[n:]
+		l.mu.Lock()
+		l.sent += int64(n)
+		l.mu.Unlock()
 		return n, nil
 	}
 	if body != nil {
@@ -567,6 +613,9 @@ func (l *lateEncoder) Read(p []byte) (int, error) {
 	}
 	if l.preroll != nil {
 		if d := time.Until(l.until); d > 0 {
+			if l.prerollDead {
+				return l.serveNulls(p, d)
+			}
 			return l.showPreroll(p, d)
 		}
 		return l.open(p)
@@ -625,7 +674,15 @@ func (l *lateEncoder) Read(p []byte) (int, error) {
 			if !l.quietSaid.Swap(true) {
 				logger("[HOLD] %s no keyframe within %v of the mark; filling again so the DVR does not give up", l.label, keyframeQuiet)
 			}
-			return l.emitNulls(p, nullBurst)
+			// On the diet, not flat out. quietFor floors at a millisecond and
+			// every read after the quiet expires re-enters this branch, so
+			// returning a burst straight away filled at a megabit and a
+			// quarter — a hundred and sixty-eight times the diet — and every
+			// byte of it lands directly in front of the picture, which is the
+			// one thing the quiet exists to prevent.
+			d, burst := l.nullPace(left)
+			time.Sleep(d)
+			return l.emitNulls(p, burst)
 		}
 	}
 	d, burst := l.nullPace(left)
@@ -661,13 +718,7 @@ func (l *lateEncoder) Read(p []byte) (int, error) {
 // the player a picture and a time base before any filler, not to fill the
 // whole hold: at a broadcast bitrate a ninety second wait of black is sixty
 // odd megabytes, to do a job the first few seconds have already done.
-const (
-	// One second is two keyframes of the clip plus its tables — everything a
-	// player needs to take a picture and a time base from, and nothing spare.
-	// Five was tried first and is more black than a recording should carry.
-	blackMost  = 1 * time.Second
-	blackLeast = time.Second
-)
+const ()
 
 // blackPatience is how long the wait will hold out for the black clip's next
 // frames before falling back to NULL packets. Long enough that a real-time
@@ -678,8 +729,6 @@ const (
 // second or two, so this is far longer than any healthy tune needs; it exists
 // only so a drain can never run for ever holding a tuner's encoder.
 const drainGiveUp = 30 * time.Second
-
-const blackPatience = 2 * time.Second
 
 // stripNulls removes NULL packets from a buffer of transport stream, and says
 // how many bytes went. They carry no frame, so nothing is lost by dropping
@@ -744,11 +793,14 @@ func (l *lateEncoder) takeHandoff(p []byte, r *handoffResult) (int, error) {
 	} else {
 		logger("[BLACK] %s no black went out, so the picture follows the wait directly", l.label)
 	}
-	l.body, l.pend = r.body, first
+	l.body = r.body
+	l.pend = nil
+	l.finishFiller()
+	l.pend = append(l.pend, first...)
 	body := l.body
 	nulls := l.nulls
 	l.mu.Unlock()
-	heldRecently.Store(l.name, time.Now())
+	heldRecently.Store(l.channel, time.Now())
 	logger("[HOLD] %s hold %v, %s sent, program starts", l.label, time.Since(l.t0).Round(time.Millisecond), byteCount(nulls))
 	if len(l.pend) > 0 {
 		n := copy(p, l.pend)
@@ -769,13 +821,22 @@ func (l *lateEncoder) showPreroll(p []byte, d time.Duration) (int, error) {
 	select {
 	case data, ok := <-l.preroll.out():
 		if !ok {
+			// The player is gone. Leave l.preroll set — see prerollDead — and
+			// fill until the mark, where Read takes the same route to open()
+			// it would have taken with the pre-roll alive. This is also how a
+			// player that died during the adb scripts arrives: earlyTune
+			// handed over its pointer to a process that had already ended,
+			// and the first receive here is the one that finds out.
 			logger("[HOLD] %s pre-roll ended early; NULL packets for the rest of the wait", l.label)
-			l.preroll = nil
+			l.prerollDead = true
 			return l.serveNulls(p, d)
 		}
 		l.pend = append(l.pend, data...)
 		n := copy(p, l.pend)
 		l.pend = l.pend[n:]
+		l.mu.Lock()
+		l.sent += int64(n)
+		l.mu.Unlock()
 		return n, nil
 	case <-time.After(gap):
 		if time.Until(l.until) <= 0 {
@@ -833,12 +894,38 @@ func (l *lateEncoder) emitNulls(p []byte, burst int) (int, error) {
 	n := nullPackets(p)
 	l.mu.Lock()
 	l.nulls += int64(n)
+	l.sent += int64(n)
 	closed := l.closed
 	l.mu.Unlock()
 	if closed {
 		return 0, io.EOF
 	}
 	return n, nil
+}
+
+// finishFiller completes the wait on a packet boundary before the program is
+// handed over. The caller holds l.mu.
+//
+// A pre-roll is read from ffmpeg's pipe in whatever sizes the pipe gives, and
+// stopping it cuts wherever it had got to — measured at 132 bytes into a packet
+// on a real tune. Appending the program to that fragment leaves everything
+// after it out of step for the rest of the stream. A demuxer on its own
+// resyncs and loses a frame, which is why this went unseen for so long;
+// anything downstream that carves packets at fixed offsets does far worse.
+//
+// The same rule is in holdReader for playback detection. Both need it, because
+// a pre-roll routes around drainEarly entirely — which is how four separate
+// faults have already reached only the people who have a pre-roll file.
+func (l *lateEncoder) finishFiller() {
+	k := (l.sent + int64(len(l.pend))) % tsPacketSize
+	if k == 0 {
+		return
+	}
+	if int64(len(l.pend)) >= k {
+		l.pend = l.pend[:int64(len(l.pend))-k]
+		return
+	}
+	l.pend = append(l.pend, bytes.Repeat([]byte{0xFF}, int(tsPacketSize-k))...)
 }
 
 func (l *lateEncoder) open(p []byte) (int, error) {
@@ -896,9 +983,23 @@ func (l *lateEncoder) open(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	l.body = body
+	l.finishFiller()
+	// Half a second of black between the filler and the program, the same as
+	// the NULL-packet path gets. finishFiller has just put the stream on a
+	// packet boundary, so this lands whole.
+	if len(blackPool) > 0 {
+		l.pend = append(l.pend, blackPool...)
+		logger("[BLACK] %s %s of black went out between the pre-roll and the picture", l.label, byteCount(int64(len(blackPool))))
+	}
 	nulls := l.nulls
+	pend := len(l.pend) > 0
 	l.mu.Unlock()
 	logger("[HOLD] %s hold %v, %s sent, program starts", l.label, time.Since(l.t0).Round(time.Millisecond), byteCount(nulls+preroll))
+	if pend {
+		// Whatever finishFiller left goes out first; Read drains pend before
+		// it touches body.
+		return l.Read(p)
+	}
 	return body.Read(p)
 }
 
@@ -943,17 +1044,6 @@ func (l *lateEncoder) Close() error {
 // of this program. The watcher only reads and reports — the bytes pass through
 // as they arrived.
 
-// packetPCR reads the PCR (27 MHz) from a packet's adaptation field.
-func packetPCR(pkt []byte) (uint64, bool) {
-	if pkt[3]&0x20 == 0 || pkt[4] < 7 || pkt[5]&0x10 == 0 {
-		return 0, false
-	}
-	base := uint64(pkt[6])<<25 | uint64(pkt[7])<<17 | uint64(pkt[8])<<9 |
-		uint64(pkt[9])<<1 | uint64(pkt[10])>>7
-	ext := uint64(pkt[10]&0x01)<<8 | uint64(pkt[11])
-	return base*300 + ext, true
-}
-
 // --- The 1xx window ---
 // A 1xx is protocol, not content: it puts nothing in the body, so the seconds
 // spent on it cost the DVR no bytes. Bounded by the DVR's header clock, which
@@ -990,20 +1080,26 @@ type hintHold struct {
 
 // beginHintHold takes the connection over and probes the DVR with one hint,
 // returning nil if it will not have them.
-func beginHintHold(w http.ResponseWriter, label string) *hintHold {
+// beginHintHold returns the hold, and whether the connection was taken over at
+// all. The two are not the same: a DVR that refuses the first hint has already
+// had its connection hijacked and then closed, so there is nothing left for the
+// handler to write to. Reporting that as "no hold happened" sent the handler on
+// to write a whole response into a dead socket and lose the tune — once per
+// process, until hintsWork turned the path off for good.
+func beginHintHold(w http.ResponseWriter, label string) (*hintHold, bool) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	conn, rw, err := hj.Hijack()
 	if err != nil {
 		logger("[HOLD] %s the connection could not be taken over (%v); filling the body", label, err)
-		return nil
+		return nil, false
 	}
 	h := &hintHold{conn: conn, rw: rw, began: time.Now(), label: label}
 	if !h.hint() {
 		h.refused(label, "would not take the first one")
-		return nil
+		return nil, true
 	}
 	// A DVR that rejects informational responses closes at once; one that
 	// accepts them says nothing, which is a read that times out.
@@ -1012,11 +1108,11 @@ func beginHintHold(w http.ResponseWriter, label string) *hintHold {
 	if _, err := rw.Read(b[:]); err != nil {
 		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 			h.refused(label, err.Error())
-			return nil
+			return nil, true
 		}
 	}
 	conn.SetReadDeadline(time.Time{})
-	return h
+	return h, true
 }
 
 // refused turns hints off for the process and drops the connection.
@@ -1101,9 +1197,11 @@ func holdOnHints(w http.ResponseWriter, src io.Reader, tuner, channel string) (*
 	if until.Before(stop) {
 		stop = until
 	}
-	h := beginHintHold(w, label)
+	h, taken := beginHintHold(w, label)
 	if h == nil {
-		return nil, false
+		// taken means the connection was hijacked and then closed, so the
+		// handler must not write to it.
+		return nil, taken
 	}
 	// The tune's scripts run off these reads; the filler itself is discarded.
 	drained := make(chan struct{})
@@ -1203,42 +1301,42 @@ const (
 	blackCosts = blackSeamFor
 )
 
-// blackPool is the black as a transport stream, or nil if it could not be made.
-// It is exactly blackSeamFor long and goes out whole, once, at the seam.
+// blackPool is the black as a transport stream, made with fillerEncodeArgs so
+// its parameter sets are the pre-roll's byte for byte, or nil if it could not
+// be made.
 var blackPool []byte
 
-// blackStartup makes it once, before the listener binds, where nothing can be
-// tuning yet (rule 10). A container that cannot make it still comes up, and
-// hands over exactly as it did before black existed.
+// blackStartup makes the clips once, before the listener binds, where nothing
+// can be tuning yet (rule 10). A container that cannot make them hands over
+// exactly as it did before black existed.
 func blackStartup() {
-	if prerollTS != "" {
-		// A pre-roll fills the wait itself; it needs no black from here.
-		return
-	}
 	const at = "/tmp/blackframe.ts"
-	// -g 15 puts a keyframe twice a second. Fast forward navigates by
-	// keyframes, so a run with only one at the front is a run a scrubber
-	// cannot move through — which is the complaint this exists to answer.
-	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
-		"-t", fmt.Sprintf("%.3f", blackSeamFor.Seconds()),
-		"-c:v", "libx264", "-preset", "ultrafast", "-g", "15",
-		"-pix_fmt", "yuv420p", "-f", "mpegts", at)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// At the pre-roll's own rate, whatever that turned out to be, so the two
+	// share one parameter set and the black follows the pre-roll with no
+	// reconfiguration. With no pre-roll it is stillRate, which the NULL path
+	// was watched working at. Nothing here is the program's rate; the program
+	// is a separate stream and never meets this.
+	rate := prerollRate
+	if rate == 0 {
+		rate = stillRate
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", fmt.Sprintf("color=c=black:s=%s:r=%d", prerollFrame, rate),
+		"-t", fmt.Sprintf("%.3f", blackSeamFor.Seconds())}
+	args = append(args, fillerEncodeArgs(rate)...)
+	args = append(args, "-f", "mpegts", at)
+	if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 		logger("[BLACK] could not make the black (%v): %s; hand-offs go out as they did before", err, firstLine(string(out)))
 		return
 	}
 	b, err := os.ReadFile(at)
-	if err != nil || len(b) == 0 {
+	if err != nil || len(b) < tsPacketSize {
 		logger("[BLACK] the black came out empty; hand-offs go out as they did before")
 		return
 	}
-	// Whole TS packets only. A part packet at the seam is a torn packet
-	// immediately in front of the program, which is the one place in the
-	// stream that cannot afford one.
 	blackPool = b[:len(b)/tsPacketSize*tsPacketSize]
-	logger("[BLACK] made %s of black, %s, to go in front of the picture at the hand-off",
-		blackWords(blackSeamFor), byteCount(int64(len(blackPool))))
+	logger("[BLACK] made %s of black at %d pictures a second, %s, to go in front of the picture at the hand-off",
+		blackWords(blackSeamFor), rate, byteCount(int64(len(blackPool))))
 }
 
 // blackWords says a black length. Not holdWords: that rounds to the second, so
@@ -1250,7 +1348,6 @@ func blackWords(d time.Duration) string {
 	}
 	return holdWords(d)
 }
-
 
 // dvrSendBuffer is how many bytes the kernel may hold for the DVR. At a
 // broadcast bitrate this is a couple of hundred milliseconds — enough that a
