@@ -371,6 +371,17 @@ clip shorter than the hold repeats until the hold is over — a still image simp
 — and a clip longer than the hold is cut off when the hold ends. The hold is
 `PLAYBACK_DELAY`, or ten minutes if that asks for more.
 
+The pre-roll and the program share one video stream so the player never has to switch
+tracks mid-recording, which is the one thing it will not do. One consequence is cosmetic
+and worth knowing: a player's stats overlay reads its **specified** frame rate from the
+first picture it sees, which is the pre-roll's, and keeps showing that number after the
+program takes over. So a 30 fps pre-roll in front of a 60 fps channel leaves the overlay
+reading `29.970 (specified)` for the whole recording. This is a label only. The program is
+carried and played at its own rate — the same overlay's **estimated** figure reflects it,
+dropped frames stay at zero, and audio and video stay in sync. Measured on a real tune: the
+program ran 1076 coded frames across 17.9 seconds, 60.00 fps, every frame exactly 1/60th of
+a second apart on the transport clock, while the overlay still said 29.970 specified.
+
 Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
 took over along with how much filler was sent.
 
