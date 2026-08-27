@@ -2222,6 +2222,29 @@ func (g *gateReader) scan(b []byte) int {
 			if g.armed0.IsZero() {
 				g.armed0 = g.armedAt
 			}
+			// Just told it may open, and nothing released yet. Everything
+			// queued behind this reader was captured while the wait was still
+			// running, so a keyframe chosen out of it is already old: the DVR
+			// is handed the whole queue at once — 512 KB, about six tenths of
+			// a second at this bitrate — and the player races through it,
+			// dropping frames, then settles. That is what "it dropped a
+			// shitload of frames and got really fast for a second and then
+			// caught back up" is made of.
+			//
+			// drainEarly empties the queue flushBeforeArm ahead of its gate
+			// for exactly this reason. Playback detection could not: it never
+			// knows in advance when it will be armed. It knows now — this is
+			// that moment, and it is inside the gate's own goroutine, so
+			// there is no race with a release that has not happened yet.
+			//
+			// The carry goes with it and the buffer is abandoned, so the
+			// keyframe is hunted through bytes that arrive after this point
+			// and not through what was already stored up.
+			if f, ok := g.src.(interface{ flush(string) }); ok {
+				f.flush("")
+				g.carry = nil
+				return len(b)
+			}
 		}
 		if g.vid[pid] && afc >= 2 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
 			if kind := g.releaseKind(); kind != "" {
