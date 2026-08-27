@@ -398,6 +398,34 @@ simply shows H.265 black for the wait, exactly as it does with no pre-roll at al
 a pre-roll on an H.265 encoder, supply it already encoded as H.265. Left at its `h264`
 default, nothing changes.
 
+**Making an H.265 pre-roll.** What ah4c wants on an H.265 encoder is an **H.265 MPEG-TS
+(`.ts`) video** at your channel's resolution (usually 1920x1080) — not a photo, and not a
+HEIC. [ffmpeg](https://ffmpeg.org) (free, open-source, on every platform) makes one in a
+single command. HandBrake cannot help here: it does not output `.ts`, and it will not
+encode a still image at all.
+
+From a **still image** — this loops the picture into a ten-second H.265 clip, scaled to
+fill a 1080p frame:
+
+```
+ffmpeg -loop 1 -i photo.jpg -t 10 -r 30 \
+  -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080" \
+  -c:v libx265 -pix_fmt yuv420p -an preroll.ts
+```
+
+From a **video clip** — re-encode it to H.265, keeping its length (change the scale to your
+channel's resolution, or drop the `-vf` line if it is already the right size):
+
+```
+ffmpeg -i input.mp4 \
+  -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080" \
+  -c:v libx265 -pix_fmt yuv420p -an preroll.ts
+```
+
+Then point `PREROLL_FILE` at the resulting `preroll.ts`, or drop it into the mounted
+`preroll` directory, and ah4c copies it through unchanged. (Both commands drop audio with
+`-an`, since the pre-roll plays silent; leave it off to keep the clip's own sound.)
+
 Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
 took over along with how much filler was sent.
 
