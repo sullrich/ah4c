@@ -434,10 +434,28 @@ func newHoldReader(src io.ReadCloser, hold *tuneHold) *holdReader {
 		show = ", showing the pre-roll"
 	}
 	logger("[HOLD] %s hold until the app is seen playing%s", hold.label, show)
+	// Read until there are bytes or a real error, not once.
+	//
+	// One read was safe against gateReader, which loops internally and never
+	// hands back (0, nil) — it blocks until it has something. It is not safe
+	// against captionStream, which returns (0, nil) on purpose the first time
+	// it sees bytes: it keeps that first chunk, starts its pump, and reports
+	// nothing. So with captions on, a single read here ended the hold carrying
+	// no data at all — the pre-roll stopped, the hand-off was declared, and
+	// the gate's tables and keyframe were not in it.
+	//
+	// This is the third time tonight that (0, nil) has broken a caller that
+	// did not expect it, and the second time it took down a tune. io.Reader
+	// permits it; assume nothing here reads only once.
 	go func() {
 		buf := make([]byte, 32*1024)
-		n, err := src.Read(buf)
-		h.first <- holdFirst{data: buf[:n], err: err}
+		for {
+			n, err := src.Read(buf)
+			if n > 0 || err != nil {
+				h.first <- holdFirst{data: buf[:n], err: err}
+				return
+			}
+		}
 	}()
 	return h
 }

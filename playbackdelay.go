@@ -283,10 +283,6 @@ type lateEncoder struct {
 	// handoff carries the gated encoder from the goroutine that has been
 	// draining it through the wait to the read that is serving the DVR.
 	handoff chan *handoffResult
-	// refresh is the encoder's one reopen. Its clock is started at the
-	// hand-off, not at the open: the encoder is now opened at tune start, and
-	// a shed spent during the wait is a shed the viewer never gets.
-	refresh *refreshSource
 	// drain is the gated chain drainEarly is reading, kept so Close can shut
 	// the encoder even when the hand-off has not happened yet.
 	drain io.ReadCloser
@@ -406,10 +402,10 @@ func (l *lateEncoder) drainEarly() {
 			err = fmt.Errorf("status %s", resp.Status)
 		}
 		if err == nil {
-			// No reopen on this path. The break exists to make the DVR discard
-			// what it has stored ahead (rule 11), and it earned that when a
-			// two megabyte queue and an autotuned kernel buffer were holding
-			// seconds of stale stream. Those are bounded now.
+			// No reopen anywhere any more. The break existed to make the
+			// DVR discard what it had stored ahead (rule 11), and it earned
+			// that when a two megabyte queue and an autotuned kernel buffer
+			// were holding seconds of stale stream. Those are bounded now.
 			//
 			// What is left behaves like a player-side start-up buffer: it
 			// grows for the first few seconds after the hand-off and then
@@ -419,7 +415,6 @@ func (l *lateEncoder) drainEarly() {
 			// break timing ever worked: twenty seconds, thirty, forty, or four
 			// of them. Playback detection, the hold that works, never breaks
 			// the connection at all.
-			l.refresh = nil
 			// Captions wrap the encoder itself, inside the gate, rather than
 			// the gate's output. Outside it they see their first frame at the
 			// hand-off, and the log shows what that costs: Vulkan enumerated,
@@ -753,9 +748,6 @@ func (l *lateEncoder) takeHandoff(p []byte, r *handoffResult) (int, error) {
 	body := l.body
 	nulls := l.nulls
 	l.mu.Unlock()
-	if l.refresh != nil {
-		l.refresh.arm(time.Now().Add(refreshAfterHold(holdDelay)))
-	}
 	heldRecently.Store(l.name, time.Now())
 	logger("[HOLD] %s hold %v, %s sent, program starts", l.label, time.Since(l.t0).Round(time.Millisecond), byteCount(nulls))
 	if len(l.pend) > 0 {
@@ -874,18 +866,29 @@ func (l *lateEncoder) open(p []byte) (int, error) {
 	// Captions wrap the encoder's stream, not the hold in front of it.
 	// Wrapping the hold hands the caption engine the pre-roll to work on and
 	// lets it rewrite the pre-roll's own video packets on the way past.
-	// A NULL hold carried no PCR, so the jump to the program's clock is a real
-	// discontinuity to declare, and the gate starts it on a keyframe.
-	// Armed here and now: this path opens the encoder at the hand-off, so the
-	// hand-off is this moment. refreshing hands back an unarmed source because
-	// the drained path opens at the tune and must not spend its shed during
-	// the wait — but nothing arms it here unless it is said, and an unarmed
-	// source never sheds at all. Silent, and only on the pre-roll's path.
-	rs := l.refreshing(resp.Body)
-	rs.arm(time.Now().Add(refreshAfterHold(holdDelay)))
-	body := markDiscontinuity(maybeWrapCaptions(
-		newGateReader(l.stallTolerant(rs), armed, true, time.Now(), nil),
-		l.tuner, l.name))
+	//
+	// No discontinuity marker, and no reopen. Both were here, both had already
+	// been convicted on the drained path, and neither had been taken off this
+	// one — so a pre-roll got the version of the hand-off that does not work.
+	// The maintainer's log is what showed it: pre-roll fine, "program starts",
+	// twenty-three megabytes of programme flowing at six and a half megabits,
+	// and a spinning circle until Channels gave up and tried the other tuner.
+	// Never starved; it simply never got a picture it could show.
+	//
+	// The marker is why. Declaring a new time base makes the player flush
+	// video and re-anchor, and what it plays meanwhile is audio with no
+	// picture — which is a spinner. That is written beside drainEarly's gate
+	// in this file, from the night it was found. It costs an SPS and a PPS on
+	// H.264 and a VPS, an SPS and a PPS on HEVC, so an HEVC encoder is blind
+	// for longer, and his log has the decoder saying so: "PPS id out of range".
+	//
+	// The reopen then did it again twenty seconds in, and that is the last
+	// line before his connection broke. Every shed timing was tried on the
+	// other path and every one came back behind; playback detection, the hold
+	// that works, never breaks the connection at all.
+	body := maybeWrapCaptions(
+		newGateReader(l.stallTolerant(resp.Body), armed, true, time.Now(), nil),
+		l.tuner, l.name)
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
@@ -949,79 +952,6 @@ func packetPCR(pkt []byte) (uint64, bool) {
 		uint64(pkt[9])<<1 | uint64(pkt[10])>>7
 	ext := uint64(pkt[10]&0x01)<<8 | uint64(pkt[11])
 	return base*300 + ext, true
-}
-
-// --- The hand-off's discontinuity marker ---
-// Telling the DVR the time base is new, so it does not read the jump from
-// filler to program as corruption. ffmpeg spells this initial_discontinuity;
-// there is no muxer in the path here, so it is set on the way past.
-
-// firstDiscontinuity sets the discontinuity indicator on the first packet of
-// each PID that carries an adaptation field, then steps aside.
-type firstDiscontinuity struct {
-	label string
-	// first is when the first PID was marked; marking runs for markWindow
-	// after it so every stream in the programme gets its wall, not just the
-	// video that happens to be in the gate's first release.
-	first time.Time
-	io.ReadCloser
-	seen map[int]bool
-	done bool
-}
-
-func markDiscontinuity(src io.ReadCloser) io.ReadCloser {
-	return &firstDiscontinuity{ReadCloser: src, seen: map[int]bool{}}
-}
-
-func (f *firstDiscontinuity) Read(p []byte) (int, error) {
-	n, err := f.ReadCloser.Read(p)
-	if f.done || n <= 0 {
-		return n, err
-	}
-	marked := 0
-	var on []string
-	for i := 0; i+tsPacketSize <= n; i += tsPacketSize {
-		pkt := p[i : i+tsPacketSize]
-		if pkt[0] != 0x47 || pkt[3]>>4&2 == 0 || pkt[4] == 0 {
-			continue
-		}
-		pid := int(pkt[1]&0x1F)<<8 | int(pkt[2])
-		if pid == 0x1FFF || f.seen[pid] {
-			continue
-		}
-		f.seen[pid] = true
-		pkt[5] |= 0x80
-		marked++
-		on = append(on, fmt.Sprintf("0x%X", pid))
-	}
-	if marked > 0 && f.first.IsZero() {
-		f.first = time.Now()
-	}
-	// Do NOT stop at the first read. The gate's first release is tables and a
-	// keyframe — all video — so stopping there marked the video PID and
-	// nothing else, for ever: the log said "discontinuity marked on 0x64" and
-	// that was the whole wall. Audio arrives in the next read, by which point
-	// the marker had switched itself off, so the audio stream was never told
-	// its time base was new. A player handed video that says "flush and
-	// re-anchor" and audio that says nothing cannot reconcile the two, and
-	// will not carry the playhead across the boundary — which leaves packets
-	// in front of it that it cannot play and fast forward cannot land on.
-	//
-	// So keep marking the first packet of every programme PID until markWindow
-	// after the first one, which is long enough for every stream in the PMT to
-	// have shown up and short enough that nothing mid-programme is touched.
-	if !f.first.IsZero() && time.Since(f.first) > markWindow {
-		f.done = true
-		// This is the wall between the tuning filler and the programme, and it
-		// has never said whether it went up. A marker that silently fails to
-		// mark looks exactly like one that worked, and this hold has been
-		// caught by a silent instrument more than once tonight. The filler is
-		// PID 0x1FFF only, which no programme uses, so the two are already
-		// separate by PID; this is what tells the player the time base on the
-		// programme's own PIDs is new and it should not try to carry anything
-		// across.
-	}
-	return n, err
 }
 
 // --- The 1xx window ---
@@ -1227,103 +1157,6 @@ func (l *lateEncoder) stallTolerant(body io.ReadCloser) *stallTolerantReader {
 		}
 		return r.Body, nil
 	}, l.label)
-}
-
-// The reopen's timing is measured, not chosen: at a ninety second hold, five
-// seconds into the program left the viewer five seconds behind; fifteen,
-// twenty-seven and thirty all landed at the live edge. What twenty does at
-// ninety was never on that list, and every build that went back to a flat
-// twenty has come back behind — the shed has to fall outside whatever the
-// player is still doing with the program it just acquired. refreshBase is what
-// every hold up to refreshPer was watched with; past that the point scales
-// with the hold, never above refreshMost, the longest point watched working.
-const (
-	refreshBase = 20 * time.Second
-	// refreshEvery is how often the break repeats after the first. A drift
-	// that grows needs pulling back more than once; a single shed only ever
-	// fixed the moment it happened.
-	refreshEvery = 30 * time.Second
-	refreshPer   = 45 * time.Second
-	refreshMost  = 30 * time.Second
-)
-
-// refreshAfterHold is how long after the program starts the encoder is
-// reopened, for a hold of the given length. Its own function so the arithmetic
-// can be checked without a DVR: twenty seconds at forty-five or under, thirty
-// at ninety or longer.
-func refreshAfterHold(hold time.Duration) time.Duration {
-	if hold <= refreshPer {
-		return refreshBase
-	}
-	// Through float64: a Duration is nanoseconds, and nanoseconds times
-	// nanoseconds overflows int64 for any hold longer than nine seconds.
-	d := time.Duration(float64(hold) * float64(refreshBase) / float64(refreshPer))
-	if d > refreshMost {
-		d = refreshMost
-	}
-	return d
-}
-
-// refreshing reopens the encoder once, shortly after the program starts, and
-// only if the encoder will have it. The new connection is opened before the old
-// one is closed, so an encoder that refuses a second reader — and some do,
-// while a tuner owns the stream — costs nothing at all: the refresh is declined,
-// said so once, and never tried again for this tune.
-func (l *lateEncoder) refreshing(body io.ReadCloser) *refreshSource {
-	return &refreshSource{ReadCloser: body, label: l.label, open: func() (io.ReadCloser, error) {
-		r, e := http.Get(l.url)
-		if e != nil {
-			return nil, e
-		}
-		if r.StatusCode != 200 {
-			r.Body.Close()
-			return nil, fmt.Errorf("status %s", r.Status)
-		}
-		return r.Body, nil
-	}}
-}
-
-type refreshSource struct {
-	io.ReadCloser
-	open func() (io.ReadCloser, error)
-	// at is when the shed is due, as unix nanoseconds; zero until armed. It is
-	// written by the DVR's goroutine at the hand-off and read by the drain's,
-	// so it is atomic rather than a plain time.
-	at    atomic.Int64
-	done  int
-	label string
-}
-
-// arm starts the shed's clock. Until this is called there is no shed, so a
-// connection opened at tune start does not spend it during the wait.
-func (r *refreshSource) arm(at time.Time) { r.at.Store(at.UnixNano()) }
-
-func (r *refreshSource) Read(p []byte) (int, error) {
-	// Once was right when there was something to shed once. Every reservoir in
-	// this program is bounded now — the queue is half a megabyte, the kernel's
-	// send buffer a quarter, no filler goes out after the hand-off — and what
-	// is left is a viewer who starts at the live edge and then drifts back,
-	// continuously, while the stream itself holds the wall to within fifteen
-	// milliseconds. Nothing here is over-delivering. The player is falling
-	// behind on its own, and the break is the only thing this program has that
-	// reaches into it: it makes the DVR discard what it has stored ahead.
-	//
-	// A single break cannot hold a drift. It pulls the viewer forward once and
-	// the drift resumes. So it repeats for as long as the tune runs.
-	if at := r.at.Load(); at != 0 && time.Now().UnixNano() >= at {
-		r.at.Store(time.Now().Add(refreshEvery).UnixNano())
-		r.done++
-		fresh, err := r.open()
-		if err != nil {
-			logger("[HOLD] %s the encoder would not open again (%v); leaving the stream as it is, the next one still comes", r.label, err)
-		} else {
-			old := r.ReadCloser
-			r.ReadCloser = fresh
-			old.Close()
-			logger("[HOLD] %s reopened the encoder (%d), dropping what the DVR had stored ahead of the show", r.label, r.done)
-		}
-	}
-	return r.ReadCloser.Read(p)
 }
 
 // --- Black at the seam ---
