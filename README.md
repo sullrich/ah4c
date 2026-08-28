@@ -461,7 +461,7 @@ services:
   # 2026.08.28
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
-  ah4c:
+  ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
     image: bnhf/ah4c:${TAG:-latest}
     container_name: ${CONTAINER_NAME:-ah4c}
     hostname: ${HOSTNAME:-ah4c}
@@ -555,6 +555,14 @@ TUNER4_IP=firestick-desk4:5555
 ENCODER4_URL=http://linkpi-encoder2:8090/stream3
 TUNER5_IP=firestick-desk5:5555
 ENCODER5_URL=http://linkpi-encoder2:8090/stream4
+TUNER6_IP=
+ENCODER6_URL=
+TUNER7_IP=
+ENCODER7_URL=
+TUNER8_IP=
+ENCODER8_URL=
+TUNER9_IP=
+ENCODER9_URL=
 STREAMER_APP=scripts/firetv/dtvstreamdeeplinks
 PYATV=false
 CHANNELSIP=media-server10
