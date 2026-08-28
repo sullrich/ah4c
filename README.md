@@ -458,17 +458,17 @@ took over along with how much filler was sent.
 
 ```yaml
 services:
-  # 2026.08.25
+  # 2026.08.28
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c:
     image: bnhf/ah4c:${TAG:-latest}
-    container_name: ah4c
-    hostname: ah4c
+    container_name: ${CONTAINER_NAME:-ah4c}
+    hostname: ${HOSTNAME:-ah4c}
     dns_search: ${DOMAIN:-localdomain} # Specify the name of your LAN's domain, usually local or localdomain
-    runtime: ${DOCKER_RUNTIME:-runc} # Closed captions only. Set DOCKER_RUNTIME=nvidia for an NVIDIA GPU with the CUDA engine build. Requires the NVIDIA container toolkit
+    runtime: ${DOCKER_RUNTIME:-runc} # Closed captions only. Set DOCKER_RUNTIME=nvidia for an NVIDIA GPU with the CUDA engine build. Requires the NVIDIA container toolkit.
     devices:
-      - ${GPU_DEVICE:-/dev/null} # Closed captions only. Set GPU_DEVICE=/dev/dri to let the Vulkan engine build use an Intel or AMD GPU. Left at the default it passes /dev/null, which always exists and does nothing
+      - ${GPU_DEVICE:-/dev/null} # Closed captions only. Set GPU_DEVICE=/dev/dri to let the Vulkan engine build use an Intel or AMD GPU. Left at the default it passes /dev/null, which always exists and does nothing.
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
@@ -513,20 +513,20 @@ services:
       - LINKPI_USERNAME=${LINKPI_USERNAME} # Username for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
       - LINKPI_PASSWORD=${LINKPI_PASSWORD} # Password for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS; not currently read by the bundled scripts, which log in with the LinkPi default password instead.
       - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
-      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. The black played inside a PLAYBACK_DELAY / PLAYBACK_DETECTION hold must be that same codec — a player will not switch its video decoder at the hand-off, so a filler in the wrong codec freezes instead of crossing to the program. This image has no software H.265 encoder, so the H.265 black is a clip shipped in the binary; H.264 is generated at startup as before. A pre-roll on an H.265 encoder must itself be H.265: an H.265 pre-roll is played as-is, and an H.264 pre-roll cannot be converted so it is refused and the hold shows H.265 black instead. Leave at h264 unless your encoder is set to H.265. Case-insensitive; h265 and hevc both work.
       - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
-      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports media audio playing and the picture is actually moving, then start on a keyframe, so a recording begins on the program rather than on the app's loading screen. Requires adb access to the tuner; network tuners only. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
-      - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long from the request before handing the DVR the program, so an app that takes longer than the DVR's 30 seconds to reach its video still records. The DVR is answered the moment it asks. About a second of generated black is played inside the wait, so the player is given real frames and a real time base rather than nothing but stuffing, and MPEG-TS NULL packets carry the rest of it; a pre-roll, when one is mounted, fills the whole wait instead. Nothing of the box tuning in is ever passed on. The encoder is opened at the start of the tune and read and thrown away for the whole wait, and when the delay is up the gate hands over the first keyframe off that connection, so the program starts on a whole picture at the encoder's live edge. Any bare number is seconds, decimals included; otherwise a duration like 30s or 1m. Anything above 10m is held for 10m, with a line in the log saying so; that ceiling is a guard against a typo, not a measured limit — forty-five seconds is the longest hold that has been watched land at the live edge, and longer ones are still being tested. The value is the total tune time, scripts included. Replaces the ffmpeg-based skip this variable ran in earlier builds, along with its 30 second ceiling. Network tuners only. Empty or 0 leaves the feature off.
-      - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. How many seconds the box may keep the exact player and media session it already had before the check stops watching adb and gates on motion alone. The default is 2, which suits Ospreys; apps that hold one player across channel changes, like the DirecTV app, need more. 0 or unset uses the default.
+      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports audio playing and the picture moving, then start on a keyframe, so recording begins on the program, not the loading screen. Requires adb; network tuners only. Case-insensitive; anything but true leaves it off.
+      - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. Seconds the box may keep its prior player/session before the check falls back to gating on motion alone. Default 2 suits Ospreys; apps like DirecTV that hold one player across channel changes need more. 0 or unset uses the default.
+      - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long before handing the DVR the program, so a slow-starting app still records within the DVR's 30s window. Black or a mounted pre-roll fills the wait; the box's own video is never passed through. Accepts a bare number (seconds) or a duration like 30s/1m, capped at 10m. Network tuners only. Empty or 0 disables it.
+      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. An H.264 pre-roll is refused on an H.265 encoder (falls back to black). Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default
-      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Closed captions only. Set to compute,utility when using an NVIDIA GPU, so the driver the CUDA engine build needs is passed in
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Closed captions only. Set to compute,utility when using an NVIDIA GPU, so the driver the CUDA engine build needs is passed in.
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
       - ${HOST_DIR}/ah4c/captions:/opt/captions # Closed caption settings, and the speech model, engine and any GPU driver downloaded from the Closed Captions page. Stays empty unless you turn captions on
-      - ${PREROLL_FILE:-${HOST_DIR}/ah4c/preroll}:/opt/preroll # A video or still image to show the DVR wherever it would otherwise be sent NULL packets: a tune held by PLAYBACK_DELAY or PLAYBACK_DETECTION, and an encoder stall covered by NULL_FRAME_INSERTION. Set PREROLL_FILE to the file's path on the host, or leave it blank and drop the file into this bound host directory, which stays empty unless you use one. Anything ffmpeg reads. It is prepared once at container start (remuxed when its codecs already suit a transport stream, encoded to H.264/AAC otherwise; a still becomes a 10 second clip with silent audio), starts the instant the DVR asks, before the box is even woken, loops for as long as the tune takes, and stops the moment the real stream is ready
+      - ${PREROLL_FILE:-${HOST_DIR}/ah4c/preroll}:/opt/preroll # A video or still image shown to the DVR instead of NULL packets, during a PLAYBACK_DELAY/PLAYBACK_DETECTION hold or a NULL_FRAME_INSERTION stall. Set PREROLL_FILE to a host path, or drop the file into this directory. Anything ffmpeg reads; prepared once at startup, loops until the real stream is ready
     restart: unless-stopped
 ```
 
@@ -577,10 +577,11 @@ LINKPI_USERNAME=
 LINKPI_PASSWORD=
 USER_SCRIPT=
 NULL_FRAME_INSERTION=false
-PREROLL_FILE=
 PLAYBACK_DETECTION=true
 PLAYBACK_STATIC_TIMEOUT=12
 PLAYBACK_DELAY=
+PREROLL_FILE=
+ENCODER_CODEC=h264
 HEARTBEAT_INTERVAL=
 NVIDIA_VISIBLE_DEVICES=
 NVIDIA_DRIVER_CAPABILITIES=
