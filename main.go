@@ -373,8 +373,9 @@ func parseCommand(cmd string) []string {
 	return args
 }
 
-// Tune into a application or network encoder
-func tune(idx, channel string) (io.ReadCloser, error) {
+// Tune into a application or network encoder. early is the pre-roll already
+// playing for this request, for the hold to carry on with, or nil.
+func tune(idx, channel string, early *earlyTune) (io.ReadCloser, error) {
 	tunerLock.Lock()
 	defer tunerLock.Unlock()
 	intidx, _ := strconv.Atoi(idx)
@@ -424,7 +425,10 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 			var ready chan struct{}
 			var base map[string]bool
 			var sig string
-			if strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
+			// The delay decides when the program starts, so playback detection
+			// does not run at all alongside it: no adb baseline before the
+			// tune, and nothing polling the box while the hold is in flight.
+			if holdDelay == 0 && strings.EqualFold(os.Getenv("PLAYBACK_DETECTION"), "TRUE") {
 				ready = make(chan struct{})
 				base = audioBaseline(t.tunerip)
 				sig = mediaSignature(t.tunerip)
@@ -434,73 +438,61 @@ func tune(idx, channel string) (io.ReadCloser, error) {
 				t.active = false
 				continue
 			}
-			if secs, _ := strconv.Atoi(os.Getenv("PLAYBACK_DELAY")); secs > 0 && ready == nil {
-				if secs > 30 {
-					logger("[PLAYBACK] %s PLAYBACK_DELAY %d is above the 30 second maximum, using 30", t.tunerip, secs)
-					secs = 30
-				}
-				if secs < 2 {
-					logger("[PLAYBACK] %s PLAYBACK_DELAY %d is below the 2 second minimum, using 2", t.tunerip, secs)
-					secs = 2
-				}
-				skip := secs - int(time.Since(tuneStart).Seconds()) - 2
-				if skip < 2 {
-					skip = 2
-				}
-				logger("[PLAYBACK] %s delaying playback for %d seconds", t.tunerip, secs)
-				cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
-					"-i", t.url, "-ss", strconv.Itoa(skip), "-c:v", "copy", "-c:a", "copy", "-f", "mpegts", "pipe:1")
-				cmd.Stderr = os.Stderr
-				pipe, err := cmd.StdoutPipe()
-				if err == nil {
-					err = cmd.Start()
-				}
+			label := fmt.Sprintf("tuner=%s", t.tunerip)
+			var body io.ReadCloser
+			var gate *gateReader
+			if holdDelay > 0 {
+				// A tune held by the delay does not open the encoder yet: the
+				// wait is the pre-roll or NULL packets, and the encoder is
+				// opened when the delay is up, so the program starts at the
+				// top of its own session rather than joined in progress.
+				// Keyed by channel, not by tuner. heldRecently exists so a DVR
+				// that reconnects mid-hold does not write a second wait into
+				// the same recording — but keyed by tuner it also skipped the
+				// hold when the viewer changed channel within holdAgainAfter,
+				// and then the recording opens on the app's loading screen,
+				// which is the whole thing the feature is for.
+				body = newLateEncoder(t.url, label, early.from(tuneStart), early.player(), i, fmt.Sprintf("tuner%d", i), channel)
+			} else {
+				resp, err := http.Get(t.url)
 				if err != nil {
-					logger("[ERR] Failed to start ffmpeg for PLAYBACK_DELAY: %v", err)
+					logger("[ERR] Failed to fetch source: %v", err)
+					t.active = false
+					continue
+				} else if resp.StatusCode != 200 {
+					logger("[ERR] Failed to fetch source: %v", resp.Status)
+					resp.Body.Close()
 					t.active = false
 					continue
 				}
-				t.active = true
-				t.index = i
-				return &reader{
-					ReadCloser: maybeWrapCaptions(pipe, i, fmt.Sprintf("tuner%d", i)),
-					channel:    channel,
-					t:          t,
-					cmd:        cmd,
-				}, nil
+				// NULL_FRAME_INSERTION=TRUE (case-insensitive): fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
+				body = resp.Body
+				if strings.EqualFold(os.Getenv("NULL_FRAME_INSERTION"), "TRUE") {
+					body = newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
+						r, e := http.Get(t.url)
+						if e != nil {
+							return nil, e
+						}
+						if r.StatusCode != 200 {
+							r.Body.Close()
+							return nil, fmt.Errorf("status %s", r.Status)
+						}
+						return r.Body, nil
+					}, label)
+				}
+				// The gate holds the stream back until the hold says so:
+				// playback detection with a pre-roll to show while it waits.
+				hold := newTuneHold(tuneStart, ready, label, early.player())
+				if hold != nil {
+					gate = newGateReader(body, hold.ready, false, time.Time{}, ready)
+					body = gate
+				}
+				body = hold.wrap(maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i)))
 			}
-			resp, err := http.Get(t.url)
-			if err != nil {
-				logger("[ERR] Failed to fetch source: %v", err)
-				t.active = false
-				continue
-			} else if resp.StatusCode != 200 {
-				logger("[ERR] Failed to fetch source: %v", resp.Status)
-				resp.Body.Close()
-				t.active = false
-				continue
-			}
-			// NULL_FRAME_INSERTION=TRUE (case-insensitive): fill encoder stalls with MPEG-TS NULLs so DVR never sees a zero-byte gap.
-			var body io.ReadCloser = resp.Body
-			if strings.EqualFold(os.Getenv("NULL_FRAME_INSERTION"), "TRUE") {
-				body = newStallTolerantReader(resp.Body, func() (io.ReadCloser, error) {
-					r, e := http.Get(t.url)
-					if e != nil {
-						return nil, e
-					}
-					if r.StatusCode != 200 {
-						r.Body.Close()
-						return nil, fmt.Errorf("status %s", r.Status)
-					}
-					return r.Body, nil
-				}, fmt.Sprintf("tuner=%s", t.tunerip))
-			}
-			var gate *gateReader
-			if ready != nil {
-				gate = newGateReader(body, ready)
-				body = gate
-			}
-			body = maybeWrapCaptions(body, i, fmt.Sprintf("tuner%d", i))
+			// The clock splice wraps the whole response in tuneEarlyWith, not
+			// here — the pre-roll has to be renumbered from its very first
+			// packet in the scripts window, not only after the tune result
+			// arrives, or its PIDs change mid-play and the player freezes.
 			t.active = true
 			t.index = i
 			r := &reader{
@@ -690,23 +682,37 @@ func run() error {
 	r.GET("/play/tuner:tuner/:channel", func(c *gin.Context) {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
-		reader, err := tune(tuner, channel)
+		reader, err := tuneEarly(tuner, channel)
 		if err != nil {
 			logger("[ERR] Failed to tune %s", err)
 			errorMessage := fmt.Sprintf("<html><body><h1>Error: %s</h1></body></html>", err.Error())
 			c.Data(500, "text/html; charset=utf-8", []byte(errorMessage))
 			return
 		}
+		// Closing the reader is what releases the tuner, runs the stop script
+		// and closes the encoder's connection, so every path must reach it.
+		defer reader.Close()
+		starttime := time.Now()
+		var bytesCopied int64
+		// The first stretch of a hold goes out as 1xx, which puts nothing in
+		// the body; the body carries whatever is left, however long that is.
+		h, taken := holdOnHints(c.Writer, reader, tuner, channel)
+		switch {
+		case h != nil:
+			defer h.Close()
+			if bytesCopied, err = h.stream(reader); err != nil {
+				logger("[IO] stream: %v", err)
+			}
+			return
+		case taken:
+			logger("[HOLD] tuner=%s channel=%s the DVR left during the hold", tuner, channel)
+			return
+		}
 		c.Header("Transfer-Encoding", "identity")
 		c.Header("Content-Type", "video/mp2t")
 		c.Writer.WriteHeaderNow()
 		c.Writer.Flush()
-		defer func() {
-			reader.Close()
-		}()
-		starttime := time.Now()
-		var bytesCopied int64
-		if bytesCopied, err = io.Copy(c.Writer, reader); err != nil {
+		if bytesCopied, err = copyFlush(c.Writer, reader); err != nil {
 			logger("[IO] io.Copy: %v", err)
 		}
 		logger("[IOINFO] Successfully copied %v bytes", bytesCopied)
@@ -1207,7 +1213,10 @@ func run() error {
 		}()
 	}
 	logger("[START] ah4c is ready")
-	return r.Run(":7654")
+	// Not r.Run: it builds its own listener and leaves the send buffer to the
+	// kernel, which autotunes it into the megabytes of stale video. See
+	// playbackdelay.go.
+	return serveLive(r, ":7654")
 }
 
 // Helper function to extract attribute from a line
@@ -1297,6 +1306,7 @@ func loadenv() {
 func main() {
 	logger("[START] ah4c %s is starting", buildVersion())
 	loadenv()
+	tuneHoldStartup()
 	loadCaptionConfig()
 	warnIfNotPersistent()
 	restoreGPURuntime()
@@ -1678,6 +1688,19 @@ type stallTolerantReader struct {
 	label         string
 	hasFirstChunk atomic.Bool
 	reconnects    atomic.Int64
+	// dropped counts chunks thrown away to keep the queue from becoming a
+	// rest is what would not fit in the last caller's buffer, handed over on
+	// the next Read. Only the reading goroutine touches it.
+	rest    []byte
+	dropped atomic.Int64
+	// out is how many bytes have gone downstream, so NULL fill can finish a
+	// torn packet before it starts whole ones. Only the reading goroutine
+	// touches it.
+	out int64
+	// filled counts NULL bytes put into a live program to cover an encoder
+	// stall. saidFill keeps that to one line a tune.
+	filled   atomic.Int64
+	saidFill bool
 }
 
 type sessionSource interface{ sessions() int64 }
@@ -1685,14 +1708,36 @@ type sessionSource interface{ sessions() int64 }
 func (s *stallTolerantReader) sessions() int64 { return s.reconnects.Load() }
 
 const (
-	stallReadGap         = 500 * time.Millisecond
-	srcStallReconnect    = 5 * time.Second
-	srcReconnectBackoff  = 2 * time.Second
-	reconnectLogEvery    = 10 * time.Second
+	stallReadGap        = 500 * time.Millisecond
+	srcStallReconnect   = 5 * time.Second
+	srcReconnectBackoff = 2 * time.Second
+	reconnectLogEvery   = 10 * time.Second
+	// stallQuietGap keeps a hold's quiet reader from spinning without making
+	// it block: long enough that a core is not burned, short enough that the
+	// hand-off is not delayed by it.
+	stallQuietGap        = 20 * time.Millisecond
 	preFirstChunkBudget  = 15 * time.Second // fail over fast on a dead tuner
 	postFirstChunkBudget = 3 * time.Minute  // ride through mid-stream glitches
 	chunkSize            = 32 * 1024
-	queueDepth           = 64
+	// queueDepth is how many chunks may wait between the encoder and the DVR.
+	// It was sixty-four — two megabytes, and the only constant here without a
+	// reason written beside it. Two megabytes is between one and a half and
+	// three and a half seconds of video, and a queue that deep is not headroom,
+	// it is a place for lag to live: the moment the DVR reads slower than the
+	// encoder sends, it fills, and then every slot the consumer frees is
+	// filled again at once. On this user's hardware it refilled two megabytes
+	// within about seven seconds of the hand-off and stood full for the rest of
+	// the recording — the picture correct, the timeline seconds behind, never
+	// catching up, and fast forward snapping back because the viewer really is
+	// at the live edge of a recording that is itself late.
+	//
+	// The depth was never what rode out a stall. A stall is bytes not arriving,
+	// so it can only drain this queue, never fill it; what covers a stall is
+	// the NULL fill Read manufactures after stallReadGap, which does not care
+	// how deep this is. So the depth only ever bought latency. Four chunks is
+	// a hundred and twenty-eight kilobytes, enough to cover the scheduling gap
+	// between one producer read and one consumer read and no more.
+	queueDepth = 16
 )
 
 func newStallTolerantReader(body io.ReadCloser, reconnectFn func() (io.ReadCloser, error), label string) *stallTolerantReader {
@@ -1751,7 +1796,28 @@ func (s *stallTolerantReader) producer() {
 			s.reconnects.Add(1)
 			s.bodyMu.Lock()
 			s.body = nb
+			// Re-check closed under the same lock, as drainEarly does when it
+			// publishes its body. For the whole round trip of the reconnect
+			// s.body was nil, so a Close that landed then closed nothing; if
+			// it did, this new body would be published, the loop would see
+			// closed and return, and nb would be held open by nobody for the
+			// life of the process. The encoder will not hand the same stream
+			// to a second reader, so the next tune on this tuner would get no
+			// video from a tuner that reported itself idle.
+			var gone bool
+			select {
+			case <-s.closed:
+				gone = true
+			default:
+			}
+			if gone {
+				s.body = nil
+			}
 			s.bodyMu.Unlock()
+			if gone {
+				nb.Close()
+				return
+			}
 			continue
 		}
 		n, err := readWithDeadline(body, chunk, srcStallReconnect)
@@ -1763,6 +1829,47 @@ func (s *stallTolerantReader) producer() {
 			case s.chunks <- data:
 			case <-s.closed:
 				return
+			default:
+				// The queue is full, which means the DVR has been reading
+				// slower than the encoder sends. This send used to block, and
+				// blocking is what made the queue a place lag goes to live:
+				// once queueDepth chunks are in it, every slot the consumer
+				// frees is filled again at once, so the viewer stays a full
+				// queue behind the encoder for the rest of the tune — two
+				// megabytes, which is between one and a half and three and a
+				// half seconds of video depending on the bitrate. Nothing
+				// drained it. That is what "behind, and it stays behind, and
+				// fast forward snaps back" is: the viewer is at the live edge
+				// of a recording that is itself late.
+				//
+				// A live stream would rather lose a moment than carry it for
+				// ever, so the oldest chunk goes and the newest is kept. This
+				// is the encoder reopen's trick — discard what is stored ahead
+				// of the show — made continuous and cheap instead of once and
+				// by force.
+				// The whole queue is the lag, not the newest chunk in it.
+				// Freeing one slot and filling it again leaves the queue full
+				// and the viewer exactly as far behind as they were — which
+				// is what a first attempt at this did, and the log said so:
+				// "dropped 1 chunk(s)", over and over, with the other
+				// sixty-three still sitting there. So empty it: everything
+				// waiting is old, and the newest chunk goes in alone.
+				gone := 0
+			drain:
+				for {
+					select {
+					case <-s.chunks:
+						gone++
+					default:
+						break drain
+					}
+				}
+				s.dropped.Add(int64(gone))
+				select {
+				case s.chunks <- data:
+				case <-s.closed:
+					return
+				}
 			}
 			if err == nil {
 				continue
@@ -1781,23 +1888,130 @@ func (s *stallTolerantReader) producer() {
 func (s *stallTolerantReader) Read(p []byte) (int, error) {
 	// Pre-first-chunk: nil channel disables the NULL-fill case, so Read blocks on chunks/closed only.
 	var stall <-chan time.Time
+	// No stall timer at all while a hold has the filling switched off. There
+	// is nothing to do when it fires — the wait is quiet on purpose — so the
+	// timer only exists to make Read return (0, nil), and a reader that
+	// returns (0, nil) in a loop is a spin: gateReader.Read calls src.Read in
+	// a tight loop until it opens, so every held tuner pegged a core doing
+	// nothing. The drain then could not keep up with its own encoder, the
+	// queue sat permanently full, and every push threw the whole thing away —
+	// fourteen hundred chunks discarded every ten seconds on a tune that had
+	// not even handed over yet, and tunes failing outright.
+	//
+	// With no timer the select simply blocks on chunks or closed, which is
+	// what a reader with nothing to say should do.
 	if s.hasFirstChunk.Load() {
 		t := time.NewTimer(stallReadGap)
 		defer t.Stop()
 		stall = t.C
+	}
+	// A chunk left over from a caller whose buffer could not take all of the
+	// last one goes first. Without this, copy silently threw the tail away:
+	// every caller today reads with thirty-two kilobytes or more so nothing
+	// lost a byte, but a caller reading smaller would have quietly dropped
+	// most of every chunk — a hole in the video, with nothing said. That is
+	// the shape of fault this program has been bitten by twice tonight.
+	if len(s.rest) > 0 {
+		n := copy(p, s.rest)
+		s.rest = s.rest[n:]
+		s.out += int64(n)
+		return n, nil
 	}
 	select {
 	case <-s.closed:
 		return 0, io.EOF
 	case data := <-s.chunks:
 		s.hasFirstChunk.Store(true)
-		return copy(p, data), nil
+		n := copy(p, data)
+		if n < len(data) {
+			s.rest = append(s.rest[:0], data[n:]...)
+		}
+		s.out += int64(n)
+		return n, nil
 	case <-stall:
+		// This reader once had its filling switched off during a hold, on the
+		// grounds that a stream held back on purpose should not be papered
+		// over. It is not worth what it costs. Returning no bytes here breaks
+		// captionStream.Read, which only starts its pump on a read that
+		// returns bytes — so the caption wrapper never started, the gate never
+		// saw a packet, the drain never logged, and no tune reached its
+		// hand-off at all. Blocking instead hung it just as hard, and
+		// returning (0, nil) in a loop spun a core.
+		//
+		// It never earned the risk either: the counter below, added to prove
+		// the filling was firing during holds, never once fired.
+		//
+		// This puts NULL packets into a live program. It exists so a stalled
+		// encoder does not show the DVR a zero-byte gap, and that is worth
+		// having — but the cost has never been said out loud, and it is the
+		// cost that matters here: NULLs carry no frames, so whatever is filled
+		// this way is stream the viewer cannot play or seek through. It sits
+		// between the playhead and the DVR's live edge and does not move.
+		//
+		// So it counts and it speaks. If a tune shows seconds of this, the
+		// encoder is stalling and the filler is turning those stalls into
+		// unplayable time in the recording.
+		// Finish the torn packet before starting whole ones. An encoder can
+		// stall part way through a packet, and filling from there put the
+		// whole rest of the stream out of step — which a demuxer resyncs
+		// from, but which anything downstream carving packets at fixed
+		// offsets does not. One damaged packet is a frame; a stream out of
+		// step is every frame after it.
+		if k := s.out % 188; k != 0 {
+			n := min(len(p), int(188-k))
+			for i := 0; i < n; i++ {
+				p[i] = 0xFF
+			}
+			s.filled.Add(int64(n))
+			s.out += int64(n)
+			s.sayFilled()
+			return n, nil
+		}
 		if len(p) < 188 {
-			return copy(p, nullTSPacket[:]), nil
+			s.filled.Add(188)
+			s.sayFilled()
+			n := copy(p, nullTSPacket[:])
+			s.out += int64(n)
+			return n, nil
 		}
 		n := min(len(p)/188*188, len(nullFill))
-		return copy(p, nullFill[:n]), nil
+		s.filled.Add(int64(n))
+		s.sayFilled()
+		n = copy(p, nullFill[:n])
+		s.out += int64(n)
+		return n, nil
+	}
+}
+
+// sayFilled says once, per reader, that the encoder stalled and the gap was
+// covered with NULL packets. Once: it used to repeat every ten seconds with a
+// running total, which reads like something getting worse rather than one
+// stall that was handled.
+func (s *stallTolerantReader) sayFilled() {
+	if s.saidFill {
+		return
+	}
+	s.saidFill = true
+	logger("[%s] the encoder went quiet; the gap is covered with NULL packets, which is stream the viewer cannot play through", s.label)
+}
+
+// flush throws away everything waiting in the queue, so what is read next is
+// the live edge. The hold calls this just before its gate arms: a gate that
+// arms against a full queue picks its keyframe out of two megabytes of
+// stored-up stream and hands the DVR video that is already seconds old, and
+// emptying the queue afterwards is too late — the stale frames have gone.
+func (s *stallTolerantReader) flush(label string) {
+	gone := 0
+	for {
+		select {
+		case <-s.chunks:
+			gone++
+		default:
+			if gone > 0 {
+				s.dropped.Add(int64(gone))
+			}
+			return
+		}
 	}
 }
 
@@ -1848,14 +2062,24 @@ type gateReader struct {
 	peak     int
 	vid      map[int]bool
 
+	// timed is set when a timer chose the wait, so the gate releases on the
+	// keyframe nearest the moment the timer named rather than weighing motion.
+	timed  bool
+	target time.Time
+	// detect closes when playback detection has seen the app playing; nil
+	// when detection is off. It is what allows the gate to take a keyframe
+	detect <-chan struct{}
+
 	sess       sessionSource
 	sessSeen   int64
 	sess0      int64
 	expectSwap atomic.Bool
 }
 
-func newGateReader(src io.ReadCloser, ready <-chan struct{}) *gateReader {
-	g := &gateReader{src: src, ready: ready, t0: time.Now()}
+// newGateReader gates src until ready closes. timed says the wait was a timer,
+// so the gate releases on the first keyframe after it rather than waiting to
+func newGateReader(src io.ReadCloser, ready <-chan struct{}, timed bool, target time.Time, detect <-chan struct{}) *gateReader {
+	g := &gateReader{src: src, ready: ready, t0: time.Now(), timed: timed, target: target, detect: detect}
 	if sc, ok := src.(sessionSource); ok {
 		g.sess = sc
 		g.sessSeen = sc.sessions()
@@ -1877,6 +2101,11 @@ func (g *gateReader) resync() {
 func (g *gateReader) expectNewStream() { g.expectSwap.Store(true) }
 
 func (g *gateReader) releaseKind() string {
+	// A timer decided how long to wait, so the gate's only remaining job is to
+	// start on a picture rather than in the middle of one. Weighing motion here
+	if g.timed {
+		return "timed"
+	}
 	if g.floor > 0 && g.lastWin >= g.floor*riseFactor {
 		return "moving"
 	}
@@ -1889,6 +2118,18 @@ func (g *gateReader) releaseKind() string {
 }
 
 func (g *gateReader) armed() bool {
+	return g.armedAtTime(time.Now())
+}
+
+// armedAtTime is armed as of a given moment, so the rule can be tested.
+// The hand-off lands on the keyframe nearest the timer's moment: the first
+func (g *gateReader) armedAtTime(now time.Time) bool {
+	if g.timed && !g.target.IsZero() {
+		if !now.Before(g.target) {
+			return true
+		}
+		return false
+	}
 	select {
 	case <-g.ready:
 		return true
@@ -1898,13 +2139,34 @@ func (g *gateReader) armed() bool {
 }
 
 func (g *gateReader) release(reason string) {
+	// Tables, then the keyframe, and nothing timestamped before the program:
+	// the DVR keeps time by the stream's own timestamps, so anything stamped
 	g.pend = append(append(append([]byte{}, g.pat...), g.pmt...), g.keep...)
 	g.open, g.keep = true, nil
-	logger("[PLAYBACK] started on a %s keyframe after %v", reason, time.Since(g.t0).Round(time.Millisecond))
+	if g.timed && !g.target.IsZero() {
+		logger("[PLAYBACK] start on keyframe, %v from the mark", time.Since(g.target).Round(time.Millisecond))
+		return
+	}
+	logger("[PLAYBACK] start on a %s keyframe after %v", reason, time.Since(g.t0).Round(time.Millisecond))
 }
 
-func videoPIDs(pkt []byte) map[int]bool {
-	s := pkt[5:]
+// gatePSI is the table section in pkt from its table_id on, however the
+// encoder packs it — payload only, or behind an adaptation field — or nil
+func gatePSI(pkt []byte, pusi bool, afc byte) []byte {
+	if !pusi || afc == 0 || afc == 2 {
+		return nil
+	}
+	off := 4
+	if afc == 3 {
+		off = 5 + int(pkt[4])
+	}
+	if off+1 >= 188 || pkt[off] != 0 {
+		return nil
+	}
+	return pkt[off+1:]
+}
+
+func videoPIDs(s []byte) map[int]bool {
 	if len(s) < 12 || s[0] != 0x02 {
 		return nil
 	}
@@ -1913,7 +2175,7 @@ func videoPIDs(pkt []byte) map[int]bool {
 	if end > len(s) {
 		end = len(s)
 	}
-	i := 12 + int(s[10]&0x0F)<<8 | int(s[11])
+	i := 12 + (int(s[10]&0x0F)<<8 | int(s[11]))
 	out := map[int]bool{}
 	for i+4 < end {
 		st := s[i]
@@ -1921,7 +2183,16 @@ func videoPIDs(pkt []byte) map[int]bool {
 		if st == 0x01 || st == 0x02 || st == 0x1B || st == 0x24 {
 			out[pid] = true
 		}
-		i += 5 + int(s[i+3]&0x0F)<<8 | int(s[i+4])
+		i += 5 + (int(s[i+3]&0x0F)<<8 | int(s[i+4]))
+	}
+	if len(out) == 0 {
+		// No stream type this knows. Encoders vary, and a codec nobody here
+		// has heard of should still gate on a picture rather than falling back
+		// to starting unaligned. The PCR is carried on the video PID on every
+		// encoder seen so far, so that is the one to watch.
+		if pcr := int(s[8]&0x1F)<<8 | int(s[9]); pcr != 0 && pcr != 0x1FFF {
+			out[pcr] = true
+		}
 	}
 	return out
 }
@@ -1937,15 +2208,15 @@ func (g *gateReader) scan(b []byte) int {
 		pid := int(pkt[1]&0x1F)<<8 | int(pkt[2])
 		afc, pusi := pkt[3]>>4&3, pkt[1]&0x40 != 0
 		if pid == 0 {
-			if pusi && afc == 1 && pkt[4] == 0 && pkt[5] == 0x00 {
+			if sec := gatePSI(pkt, pusi, afc); len(sec) > 0 && sec[0] == 0x00 {
 				g.pat = append(g.pat[:0], pkt...)
 			}
 			i += 188
 			continue
 		}
-		if pusi && afc == 1 && pkt[4] == 0 && pkt[5] == 0x02 {
+		if sec := gatePSI(pkt, pusi, afc); len(sec) > 0 && sec[0] == 0x02 {
 			g.pmt = append(g.pmt[:0], pkt...)
-			if v := videoPIDs(pkt); len(v) > 0 {
+			if v := videoPIDs(sec); len(v) > 0 {
 				g.vid = v
 			}
 			i += 188
@@ -1978,6 +2249,29 @@ func (g *gateReader) scan(b []byte) int {
 			g.armedAt = time.Now()
 			if g.armed0.IsZero() {
 				g.armed0 = g.armedAt
+			}
+			// Just told it may open, and nothing released yet. Everything
+			// queued behind this reader was captured while the wait was still
+			// running, so a keyframe chosen out of it is already old: the DVR
+			// is handed the whole queue at once — 512 KB, about six tenths of
+			// a second at this bitrate — and the player races through it,
+			// dropping frames, then settles. That is what "it dropped a
+			// shitload of frames and got really fast for a second and then
+			// caught back up" is made of.
+			//
+			// drainEarly empties the queue flushBeforeArm ahead of its gate
+			// for exactly this reason. Playback detection could not: it never
+			// knows in advance when it will be armed. It knows now — this is
+			// that moment, and it is inside the gate's own goroutine, so
+			// there is no race with a release that has not happened yet.
+			//
+			// The carry goes with it and the buffer is abandoned, so the
+			// keyframe is hunted through bytes that arrive after this point
+			// and not through what was already stored up.
+			if f, ok := g.src.(interface{ flush(string) }); ok {
+				f.flush("")
+				g.carry = nil
+				return len(b)
 			}
 		}
 		if g.vid[pid] && afc >= 2 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
@@ -2016,13 +2310,13 @@ func (g *gateReader) Read(p []byte) (int, error) {
 			break
 		}
 		if !g.open && !g.armed0.IsZero() && time.Since(g.armed0) > keyframeCeiling {
-			logger("[PLAYBACK] the encoder kept replacing its stream for %v after playback, starting unaligned",
+			logger("[PLAYBACK] encoder kept restarting for %v; starting unaligned",
 				time.Since(g.armed0).Round(time.Second))
 			g.pend = append(append([]byte{}, g.pat...), g.pmt...)
 			g.open, g.carry = true, nil
 		}
 		if !g.open && !g.armedAt.IsZero() && time.Since(g.armedAt) > keyframeWait {
-			logger("[PLAYBACK] no keyframe within %v of playback, starting unaligned", keyframeWait)
+			logger("[PLAYBACK] no keyframe within %v; starting unaligned", keyframeWait)
 			g.pend = append(append([]byte{}, g.pat...), g.pmt...)
 			g.open, g.carry = true, nil
 		}
@@ -2333,6 +2627,35 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
 		tunerip, budget, piidList(base), piidList(last), session)
 	return swapComing
+}
+
+// flushWriter is a response that can be pushed all the way out.
+type flushWriter interface {
+	io.Writer
+	Flush()
+}
+
+// copyFlush is io.Copy, flushed after every write.
+func copyFlush(dst flushWriter, src io.Reader) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var n int64
+	for {
+		r, rerr := src.Read(buf)
+		if r > 0 {
+			w, werr := dst.Write(buf[:r])
+			n += int64(w)
+			if werr != nil {
+				return n, werr
+			}
+			dst.Flush()
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return n, nil
+			}
+			return n, rerr
+		}
+	}
 }
 
 // readWithDeadline does r.Read with a timeout: on expiry the body is closed,
