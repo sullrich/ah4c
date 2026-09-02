@@ -376,10 +376,10 @@ function render() {
                     <span class="tag">${d.downloaded ? 'Saved in captions/drivers' : 'Not downloaded'}</span>
                 </div>
                 <div class="model-meta" style="margin-top:0.35rem;">${esc(d.note || '')}</div>
-                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from Debian backports, kept so a rebuild does not refetch them.</span>
+                <span class="model-src">Packages: ${esc((d.packages || []).join(' '))} &mdash; from Debian and its backports, kept so a rebuild does not refetch them.</span>
             </div>
             <div class="model-actions">
-                <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall' : 'Download'}</button>
+                <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall ' : 'Download '}${esc(d.name)}</button>
             </div>
         </div>`).join('');
 

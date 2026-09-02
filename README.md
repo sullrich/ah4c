@@ -102,7 +102,7 @@ actually runs on.
 | Build | Needs |
 | --- | --- |
 | CPU + Vulkan (one download) | Nothing for the processor; a Vulkan driver and `/dev/dri` for the GPU |
-| CUDA | The NVIDIA container runtime; the download carries its own CUDA runtime |
+| CUDA | The NVIDIA container runtime, plus the CUDA runtime download on the Closed Captions page |
 
 **Vulkan** covers Intel and AMD graphics. The driver is not in the image, so the page
 downloads it the same way it downloads a model: the packages and everything they depend on
@@ -123,8 +123,10 @@ env file and recreate the container:
 GPU_DEVICE=/dev/dri
 ```
 
-**CUDA** needs nothing installed: the download carries its own CUDA runtime, and the NVIDIA
-container toolkit supplies the driver. Set these instead:
+**CUDA** needs the NVIDIA container runtime to inject the host driver. The CUDA engine archive
+does not include CUDA's user-space runtime or cuBLAS; download those once from the Closed Captions
+page. They are saved with the models and restored before ah4c starts listening after a rebuild.
+Set these instead:
 
 ```
 DOCKER_RUNTIME=nvidia

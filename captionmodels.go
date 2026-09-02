@@ -283,8 +283,10 @@ func saveCaptionConfig(cfg captionConfig) error {
 	// processor deliberately does not clear that: a downloaded driver is kept
 	// working across restarts whatever the engine happens to be set to, so
 	// switching to the processor for an evening does not throw it away.
-	if v, ok := findEngineVariant(cfg.Engine); ok && v.Key == "vulkan" {
-		cfg.GPURuntime = "vulkan"
+	if v, ok := findEngineVariant(cfg.Engine); ok {
+		if _, found := findGPURuntime(v.Key); found {
+			cfg.GPURuntime = v.Key
+		}
 	}
 	// A phrase length the chosen model does not offer is not saved. It comes
 	// from a config written for a different model, and the model's own figure
