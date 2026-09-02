@@ -129,8 +129,10 @@ type engineVariant struct {
 	Suffix string `json:"-"`
 	SizeMB int    `json:"sizeMB"`
 	// Needs is the shared library that has to be loadable for this build to
-	// work. Empty means nothing beyond the base image.
-	Needs string `json:"needs"`
+	// work. AlsoNeeds names any others, in the order they must be loaded.
+	// Empty means nothing beyond the base image.
+	Needs     string   `json:"needs"`
+	AlsoNeeds []string `json:"-"`
 	// Why explains, in the page's words, what provides that library.
 	Why string `json:"why"`
 }
@@ -157,10 +159,11 @@ var engineVariants = []engineVariant{
 	},
 	{
 		Key: "cuda", Name: "GPU via CUDA", Suffix: "cuda",
-		Desc:   "Runs the model on an NVIDIA GPU. The download carries its own CUDA runtime, so only the driver has to come from outside.",
-		SizeMB: 537,
-		Needs:  "libcuda.so.1",
-		Why:    "Needs the NVIDIA container runtime, which injects the driver. Add the GPU to your compose file; nothing changes in the image.",
+		Desc:      "Runs the model on an NVIDIA GPU. Its CUDA 12 runtime and cuBLAS libraries are installed separately below and restored when the container starts.",
+		SizeMB:    537,
+		Needs:     "libcuda.so.1",
+		AlsoNeeds: cudaRuntimeLibraries,
+		Why:       "Needs the NVIDIA container runtime to inject the host driver, plus the CUDA runtime download below.",
 	},
 }
 
@@ -191,9 +194,31 @@ var (
 )
 
 func engineUsable(v engineVariant) bool {
-	if v.Needs == "" {
-		return true
+	for _, name := range engineRequirements(v) {
+		if !sharedLibraryUsable(name) {
+			return false
+		}
 	}
+	return true
+}
+
+func engineRequirements(v engineVariant) []string {
+	if v.Needs == "" {
+		return nil
+	}
+	return append([]string{v.Needs}, v.AlsoNeeds...)
+}
+
+func missingEngineRequirement(v engineVariant) string {
+	for _, name := range engineRequirements(v) {
+		if !sharedLibraryUsable(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+func sharedLibraryUsable(name string) bool {
 	// The lock covers the answer, never the asking.
 	//
 	// This used to hold the mutex across the dlopen, and that put a load of the
@@ -210,15 +235,15 @@ func engineUsable(v engineVariant) bool {
 	// the same library, which costs nothing: dlopen is reference counted and
 	// idempotent, and the second gets the handle the first already mapped.
 	usableLock.Lock()
-	ok, seen := usableCache[v.Needs]
+	ok, seen := usableCache[name]
 	usableLock.Unlock()
 	if seen {
 		return ok
 	}
-	h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	h, err := purego.Dlopen(name, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	ok = err == nil && h != 0
 	usableLock.Lock()
-	usableCache[v.Needs] = ok
+	usableCache[name] = ok
 	usableLock.Unlock()
 	return ok
 }

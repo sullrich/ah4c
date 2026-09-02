@@ -106,11 +106,15 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 			rate = r
 		}
 	}
+	targetCodec := "H.264"
+	if wantHEVC() {
+		targetCodec = "H.265"
+	}
 	var args []string
 	var kind []string
 	if still {
 		args = append(args, "-loop", "1", "-framerate", fmt.Sprint(stillRate), "-t", fmt.Sprint(prerollStillSeconds))
-		kind = append(kind, fmt.Sprintf("%s still cropped to %s as a %d second clip", video, prerollFrame, prerollStillSeconds))
+		kind = append(kind, fmt.Sprintf("%s still cropped to %s as a %d second %s clip", prerollCodecName(video), prerollFrame, prerollStillSeconds, targetCodec))
 	}
 	args = append(args, "-i", src)
 	if audio == "" {
@@ -122,20 +126,14 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	} else {
 		args = append(args, "-map", "0:a:0")
 	}
-	// H.265 encoder (ENCODER_CODEC=h265): the pre-roll must be H.265 too, or the
-	// player freezes at the hand-off — it will not switch its decoder. This image
-	// has no H.265 encoder to convert one, so an already-H.265 pre-roll is copied
-	// and anything else — an H.264 clip, a still — is refused; the hold then
-	// shows the built-in H.265 black instead of a pre-roll.
-	if wantHEVC() {
-		if video != "hevc" {
-			return prerollPlan{}, fmt.Errorf("is %s, but ENCODER_CODEC=h265 requires an H.265 pre-roll, which this build cannot create", video)
-		}
+	// The pre-roll must use the encoder's codec or the player freezes at the
+	// hand-off — it will not switch its decoder. Keep an existing H.265 stream;
+	// otherwise the Trixie image's libx265 converts it before the listener binds.
+	if wantHEVC() && video == "hevc" {
 		args = append(args, "-c:v", "copy")
-		kind = append(kind, "H.265 video copied to match the encoder")
+		kind = append(kind, "H.265 video copied without conversion")
 	} else {
-		// -c:v h264 picks whichever H.264 encoder this ffmpeg was built with.
-		// Even dimensions and yuv420p are what every H.264 encoder accepts;
+		// Even dimensions and yuv420p are accepted by both software encoders.
 		vf := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 		if still {
 			// A photograph is whatever size the camera made it. Encoded at
@@ -160,21 +158,30 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 		// film stays twenty-four, and a fifty frame clip stays fifty. The
 		// program is a separate stream on its own decoder and never sees it.
 		args = append(args, "-vf", vf)
-		args = append(args, fillerEncodeArgs(rate)...)
+		if wantHEVC() {
+			args = append(args, fillerHEVCEncodeArgs(rate)...)
+		} else {
+			args = append(args, fillerEncodeArgs(rate)...)
+		}
 		if !still {
-			kind = append(kind, video+" video encoded to match the black")
+			sourceCodec := prerollCodecName(video)
+			if sourceCodec == targetCodec {
+				kind = append(kind, sourceCodec+" video re-encoded")
+			} else {
+				kind = append(kind, sourceCodec+" video converted to "+targetCodec)
+			}
 		}
 	}
 	switch {
 	case audio == "":
 		args = append(args, "-c:a", "aac")
-		kind = append(kind, "silent aac audio added")
+		kind = append(kind, "silent AAC audio added")
 	case tsAudioCodecs[audio]:
 		args = append(args, "-c:a", "copy")
-		kind = append(kind, audio+" audio copied")
+		kind = append(kind, prerollCodecName(audio)+" audio copied")
 	default:
 		args = append(args, "-c:a", "aac")
-		kind = append(kind, audio+" audio encoded to aac")
+		kind = append(kind, prerollCodecName(audio)+" audio converted to AAC")
 	}
 	args = append(args, "-f", "mpegts")
 	return prerollPlan{rate: rate, args: args, kind: strings.Join(kind, ", ")}, nil
@@ -292,8 +299,31 @@ func preparePreroll(src string) {
 	}
 	prerollTS = prerollCache
 	prerollRate = plan.rate
-	logger("[PREROLL] prepared %s in %v: %s at %d fps, %s at %s", src,
+	logger("[PREROLL] prepared %s in %v: %s, %d fps, %s written to %s", src,
 		time.Since(t0).Round(time.Millisecond), plan.kind, plan.rate, byteCount(st.Size()), prerollCache)
+}
+
+func prerollCodecName(codec string) string {
+	switch strings.ToLower(codec) {
+	case "h264":
+		return "H.264"
+	case "hevc", "h265":
+		return "H.265"
+	case "mpeg2video":
+		return "MPEG-2"
+	case "mjpeg":
+		return "JPEG"
+	case "aac":
+		return "AAC"
+	case "ac3":
+		return "AC-3"
+	case "eac3":
+		return "E-AC-3"
+	case "mp2", "mp3":
+		return strings.ToUpper(codec)
+	default:
+		return codec
+	}
 }
 
 // probeError adds ffprobe's own words to an exec error, which otherwise only
@@ -1556,6 +1586,19 @@ func fillerEncodeArgs(rate int) []string {
 		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
 		"-profile:v", "high",
 		"-x264-params", fmt.Sprintf("keyint=%d:min-keyint=%d:scenecut=0:bframes=0:ref=1:aud=1", rate/2, rate/2),
+		"-pix_fmt", "yuv420p",
+		"-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+	}
+}
+
+func fillerHEVCEncodeArgs(rate int) []string {
+	if rate < 2 {
+		rate = stillRate
+	}
+	return []string{
+		"-c:v", "libx265", "-preset", "ultrafast", "-tune", "zerolatency",
+		"-profile:v", "main",
+		"-x265-params", fmt.Sprintf("keyint=%d:min-keyint=%d:scenecut=0:bframes=0:ref=1:aud=1", rate/2, rate/2),
 		"-pix_fmt", "yuv420p",
 		"-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
 	}

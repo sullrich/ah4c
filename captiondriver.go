@@ -407,6 +407,30 @@ func removeCaptionModel(m captionModel) error {
 	return nil
 }
 
+// removeRuntimeBuild deletes one downloaded engine archive. Some processor
+// choices share an archive, so the directory from runtimeAssetFor is the unit
+// removed rather than the name shown on the page.
+func removeRuntimeBuild(rt, variant string) error {
+	if _, found := findEngineVariant(variant); !found {
+		return fmt.Errorf("unknown engine build %q", variant)
+	}
+	_, dir, _, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
+	if !ok {
+		return fmt.Errorf("no %s build is published for %s/%s", rt, runtime.GOOS, runtime.GOARCH)
+	}
+	dlLock.Lock()
+	defer dlLock.Unlock()
+	if dlState.Active && dlState.Model == "engine" {
+		return fmt.Errorf("an engine build is still downloading")
+	}
+	if err := os.RemoveAll(filepath.Join(captionRuntime, dir)); err != nil {
+		return err
+	}
+	logger("[CC] Removed %s engine build %s", rt, variant)
+	refreshCaptionReady()
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // GPU driver support
 // ---------------------------------------------------------------------------
@@ -427,9 +451,11 @@ type gpuRuntime struct {
 	Name     string   `json:"name"`
 	Desc     string   `json:"desc"`
 	Packages []string `json:"packages"`
-	// Needs is the library whose presence proves the driver is in place.
-	Needs string `json:"needs"`
-	Note  string `json:"note"`
+	// Needs and AlsoNeeds are the libraries whose presence proves the runtime
+	// is in place, in load order.
+	Needs     string   `json:"needs"`
+	AlsoNeeds []string `json:"-"`
+	Note      string   `json:"note"`
 }
 
 var gpuRuntimes = []gpuRuntime{
@@ -441,6 +467,7 @@ var gpuRuntimes = []gpuRuntime{
 		Needs:    "libvulkan.so.1",
 		Note:     "Your compose file also has to pass the graphics device through, with a devices entry for /dev/dri.",
 	},
+	cudaRuntime,
 }
 
 func findGPURuntime(key string) (gpuRuntime, bool) {
@@ -453,6 +480,22 @@ func findGPURuntime(key string) (gpuRuntime, bool) {
 }
 
 func driverDir(g gpuRuntime) string { return filepath.Join(captionDrivers, g.Key) }
+
+// removeDriverPackages deletes the saved package set. Packages already put
+// into this running container stay loaded until it is recreated; without the
+// saved set they are not restored into the next one.
+func removeDriverPackages(g gpuRuntime) error {
+	gpuLock.Lock()
+	defer gpuLock.Unlock()
+	if gpuState.Active && gpuState.Kind == g.Key {
+		return fmt.Errorf("%s is still being set up", g.Name)
+	}
+	if err := os.RemoveAll(driverDir(g)); err != nil {
+		return err
+	}
+	logger("[CC] Removed the saved packages for %s; the loaded copy remains until the container is recreated", g.Name)
+	return nil
+}
 
 // driverDownloaded reports whether the saved set in the bind mount is
 // complete: every package the runtime names has its package file present. A
@@ -487,7 +530,27 @@ func driverActive(g gpuRuntime) bool {
 	// for an answer that had already been worked out. The engine's own calls
 	// into native code contend for that lock, which is the reason the cache was
 	// written in the first place; this simply was not using it.
-	return engineUsable(engineVariant{Needs: g.Needs})
+	return engineUsable(engineVariant{Needs: g.Needs, AlsoNeeds: g.AlsoNeeds})
+}
+
+// runtimeNeedsRestore reports whether a complete saved package set still has
+// work to do in this container. Vulkan needs both its loader and a usable ICD;
+// Trixie's ffmpeg brings the loader on its own, which is not a graphics driver.
+func runtimeNeedsRestore(g gpuRuntime) bool {
+	if !driverDownloaded(g) {
+		return false
+	}
+	active := driverActive(g)
+	if g.Key != "vulkan" {
+		return !active
+	}
+	return runtimeStateNeedsRestore(g.Key, active, anyVulkanManifests(), len(brokenVulkanDrivers()))
+}
+
+// runtimeStateNeedsRestore is the decision without filesystem or loader probes,
+// kept separate so the loader-without-an-ICD regression stays covered.
+func runtimeStateNeedsRestore(key string, active, manifests bool, broken int) bool {
+	return !active || key == "vulkan" && (!manifests || broken > 0)
 }
 
 type gpuInstallState struct {
@@ -859,21 +922,20 @@ type aptSource struct {
 
 // backportsSources is where the driver may be fetched from, in order.
 //
-// Both are the same suite of the same distribution, and that is the point.
-// The second is the archive of the first, read at a fixed date, for the day
-// the live index has moved on or the mirror will not answer. Neither can hand
-// back the base image's own driver, which is the one outcome worth refusing:
-// it installs, it loads, it captions, and it does all of it several times
-// slower than the driver being asked for while every check passes.
+// Both are the same distribution, and the second is an archive of the first
+// read at a fixed date. Vulkan comes from backports; CUDA's user-space runtime
+// is only published in stable non-free, so that component is listed beside it.
+// APT still prefers backports wherever the requested package exists there.
 func backportsSources(suite string) []aptSource {
+	stable := strings.TrimSuffix(suite, "-backports")
 	return []aptSource{
 		{
 			name: suite,
-			line: fmt.Sprintf("deb http://deb.debian.org/debian %s main\n", suite),
+			line: fmt.Sprintf("deb http://deb.debian.org/debian %s main non-free\ndeb http://deb.debian.org/debian %s non-free\n", suite, stable),
 		},
 		{
 			name: "the " + suite + " archive at " + backportsSnapshot,
-			line: fmt.Sprintf("deb https://snapshot.debian.org/archive/debian/%s/ %s main\n", backportsSnapshot, suite),
+			line: fmt.Sprintf("deb https://snapshot.debian.org/archive/debian/%s/ %s main non-free\ndeb https://snapshot.debian.org/archive/debian/%s/ %s non-free\n", backportsSnapshot, suite, backportsSnapshot, stable),
 			// The archive serves the Release file exactly as it was, so its
 			// valid-until date is in the past by design. Refusing it on those
 			// grounds would refuse the archive entirely.
@@ -1143,7 +1205,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// the priority for work that outlives it.
 	asSet := false
 	if atStartup {
-		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
+		args := driverPackageInstallArgs(debs...)
 		cmd := installCommand(!serving.Load(), "dpkg", args...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
@@ -1168,7 +1230,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
-		cmd := installCommand(!serving.Load(), "dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
+		cmd := installCommand(!serving.Load(), "dpkg", driverPackageInstallArgs(deb)...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
@@ -1203,11 +1265,12 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// Which is why it was reported by somebody watching the page and not by
 	// somebody who pressed the button and walked away.
 	forgetEngineUsable()
-	if err != nil && !driverActive(g) {
+	variant := engineVariant{Needs: g.Needs, AlsoNeeds: g.AlsoNeeds}
+	if err != nil && !engineUsable(variant) {
 		return string(out), fmt.Errorf("installing the saved packages: %w", err)
 	}
-	if !driverActive(g) {
-		return string(out), fmt.Errorf("%s still will not load", g.Needs)
+	if missing := missingEngineRequirement(variant); missing != "" {
+		return string(out), fmt.Errorf("%s still will not load", missing)
 	}
 	// The loader loading proves nothing about the drivers behind it: a
 	// forced install can put a current driver on top of last-era libraries,
@@ -1216,7 +1279,11 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// driver is opened the way the loader would open it, failures are named
 	// with the loader's own words, and if the network is still here apt is
 	// asked to complete what the forced install skipped.
-	if bad := brokenVulkanDrivers(); len(bad) > 0 {
+	var bad []string
+	if g.Key == "vulkan" {
+		bad = brokenVulkanDrivers()
+	}
+	if len(bad) > 0 {
 		// Asking apt to finish the job was tried here and it cannot: a forced
 		// install leaves the package present with its dependencies unmet, and
 		// the only repair apt will consider from there is removing it. It said
@@ -1241,8 +1308,20 @@ func applyDriver(g gpuRuntime) (string, error) {
 		setDriverFault("The driver packages installed but left no driver behind them, so there is nothing for the loader to offer. Press the driver download below to fetch a complete set.")
 		return string(out), fmt.Errorf("the packages installed but no Vulkan driver manifests exist; the saved set is incomplete — press the driver download to fetch it fresh")
 	}
-	setDriverFault("")
+	if g.Key == "vulkan" {
+		setDriverFault("")
+	}
 	return string(out), nil
+}
+
+// driverPackageInstallArgs is shared by the startup set install and its
+// one-package fallback so neither can downgrade a library from the base image.
+// Saved sets survive container upgrades: a Bookworm CUDA set once replaced
+// Trixie's libstdc++6 and broke adb on every GLIBCXX symbol the older library
+// did not have. A saved runtime may add packages or upgrade them, never take
+// the current distribution backward.
+func driverPackageInstallArgs(debs ...string) []string {
+	return append([]string{"-i", "--refuse-downgrade", "--force-depends", "--force-unsafe-io"}, debs...)
 }
 
 // politeCommand builds a command that loses every contest with a tune.
@@ -1498,8 +1577,8 @@ func accelStatus() accelReport {
 	}
 	switch {
 	case !engineUsable(v):
-		r.Headline = "Not accelerated: the driver is missing"
-		r.Detail = fmt.Sprintf("%s is selected but %s will not load. Download the driver below.", v.Name, v.Needs)
+		r.Headline = "Not accelerated: GPU support is missing"
+		r.Detail = fmt.Sprintf("%s is selected but %s will not load. Download the required runtime below.", v.Name, missingEngineRequirement(v))
 	case v.Key == "vulkan" && len(r.Devices) == 0:
 		r.Headline = "Not accelerated: no graphics device in the container"
 		r.Detail = "The driver is in place but /dev/dri is not here. Add a devices entry for /dev/dri to your compose file and recreate the container."
@@ -1681,22 +1760,10 @@ func restoreGPURuntimeQuietly() {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// A graphics driver is for captioning and nothing else here, so a container
-	// with captions switched off does not install one. It is not free: on a
-	// fresh bind mount it is a package at a time through dpkg, and that is
-	// forty seconds of a startup nobody asked for.
-	//
-	// It is not simply skipped, though. This is the only stretch of a
-	// container's life where nothing can be tuning, so refusing to install here
-	// means the install has to happen later, beside live tunes, which is the
-	// case that has cost recordings. Switching captions on is what asks for it,
-	// and that is where it now runs from — gated and divided, as it has to be
-	// once the door is open.
-	if !currentCaptionConfig().Enabled {
-		logger("[CC] Captions are off, so the graphics driver is left where it is. It goes in when captions are switched on.")
-		warmEngineCache()
-		return
-	}
+	// A saved package set is an instruction to keep that runtime available
+	// across container rebuilds. Restore it while the port is still unbound,
+	// even if captions are currently off, so enabling them later cannot move a
+	// package install beside live tunes.
 	restoreSavedDriver()
 }
 
@@ -1773,7 +1840,7 @@ func restoreSavedDriverNow() {
 	}
 	need := false
 	for _, g := range gpuRuntimes {
-		if driverDownloaded(g) && (!driverActive(g) || len(brokenVulkanDrivers()) > 0) {
+		if runtimeNeedsRestore(g) {
 			need = true
 		}
 	}
@@ -1802,9 +1869,12 @@ func restoreSavedDriverNow() {
 	// scan while the driver was broken, this repair cannot reach it until the
 	// process restarts — which deserves saying plainly, because from outside
 	// it looks like a fixed driver being ignored.
-	if txStarted() && len(brokenVulkanDrivers()) == 0 {
-		if v := currentEngineVariant(); strings.Contains(v, "vulkan") && !txBackendAvailable(txBackendVulkan) {
-			logger("[CC] The graphics driver is repaired, but the engine had already started without it. Restart the container to caption on the GPU.")
+	if txStarted() {
+		v := currentEngineVariant()
+		vulkanMissed := strings.Contains(v, "vulkan") && len(brokenVulkanDrivers()) == 0 && !txBackendAvailable(txBackendVulkan)
+		cudaMissed := strings.Contains(v, "cuda") && driverActive(cudaRuntime) && !txBackendAvailable(txBackendCUDA)
+		if vulkanMissed || cudaMissed {
+			logger("[CC] The GPU runtime is repaired, but the engine had already started without it. Restart the container to caption on the GPU.")
 		}
 	}
 }
@@ -1889,11 +1959,13 @@ func warmEngineCache() {
 	// itself — which is the one thing this function exists to prevent.
 	fresh := map[string]bool{}
 	for _, v := range engineVariants {
-		if v.Key == "auto" || v.Needs == "" {
-			continue
+		for _, name := range engineRequirements(v) {
+			if _, seen := fresh[name]; seen {
+				continue
+			}
+			h, err := purego.Dlopen(name, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+			fresh[name] = err == nil && h != 0
 		}
-		h, err := purego.Dlopen(v.Needs, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		fresh[v.Needs] = err == nil && h != 0
 	}
 	usableLock.Lock()
 	usableCache = fresh
@@ -1915,7 +1987,7 @@ func reinstallSavedDriver() {
 		// Anything with packages saved in the bind mount gets put back, whether
 		// or not the config remembers asking for it. The packages being there
 		// is the intent; a rebuild wipes the installed copy but not them.
-		if !driverDownloaded(g) || driverActive(g) {
+		if !runtimeNeedsRestore(g) {
 			continue
 		}
 		logger("[CC] %s is saved but not loaded, restoring it from %s", g.Name, driverDir(g))

@@ -184,16 +184,16 @@ crossing; half a second is.
 The black in front of the program must be the encoder's own codec. A player will
 not switch its video decoder at the hand-off, so a black in the wrong codec
 freezes the picture on itself instead of crossing to the program. `ENCODER_CODEC`
-is `h264` (the default) or `h265`. The H.264 black is generated at startup; this
-image has no software H.265 encoder, so the H.265 black is a half-second clip
-built once offline and embedded in the binary, which `ENCODER_CODEC=h265` selects.
+is `h264` (the default) or `h265`. The H.264 black is generated at startup; the
+H.265 black is a half-second clip embedded in the binary, which
+`ENCODER_CODEC=h265` selects.
 
 The pre-roll follows the same rule: it is the first coded video the player sees,
-so on an H.265 encoder it must itself be H.265. An H.265 pre-roll is played as-is;
-an H.264 pre-roll cannot be converted here and is refused, so the hold shows H.265
-black instead — the same hold that runs with no pre-roll at all. Nothing bridges
-an H.264 pre-roll to an H.265 program: a NULL gap, a black seam, and a stream-type
-relabel were all tried and all froze.
+so on an H.265 encoder it must itself be H.265. An H.265 pre-roll is copied; an
+H.264 clip, other video, or still image is encoded with the Trixie image's
+`libx265` during startup. If preparation fails, the hold shows the built-in H.265
+black instead. Nothing can bridge unlike codecs at the hand-off: a NULL gap, a
+black seam, and a stream-type relabel were all tried and all froze.
 
 ### PLAYBACK_DELAY pays for its own black
 
