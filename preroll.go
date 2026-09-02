@@ -106,11 +106,15 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 			rate = r
 		}
 	}
+	targetCodec := "H.264"
+	if wantHEVC() {
+		targetCodec = "H.265"
+	}
 	var args []string
 	var kind []string
 	if still {
 		args = append(args, "-loop", "1", "-framerate", fmt.Sprint(stillRate), "-t", fmt.Sprint(prerollStillSeconds))
-		kind = append(kind, fmt.Sprintf("%s still cropped to %s as a %d second clip", video, prerollFrame, prerollStillSeconds))
+		kind = append(kind, fmt.Sprintf("%s still cropped to %s as a %d second %s clip", prerollCodecName(video), prerollFrame, prerollStillSeconds, targetCodec))
 	}
 	args = append(args, "-i", src)
 	if audio == "" {
@@ -127,7 +131,7 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 	// otherwise the Trixie image's libx265 converts it before the listener binds.
 	if wantHEVC() && video == "hevc" {
 		args = append(args, "-c:v", "copy")
-		kind = append(kind, "H.265 video copied to match the encoder")
+		kind = append(kind, "H.265 video copied without conversion")
 	} else {
 		// Even dimensions and yuv420p are accepted by both software encoders.
 		vf := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
@@ -160,19 +164,24 @@ func planPreroll(src string, info prerollProbe) (prerollPlan, error) {
 			args = append(args, fillerEncodeArgs(rate)...)
 		}
 		if !still {
-			kind = append(kind, video+" video encoded to match the black")
+			sourceCodec := prerollCodecName(video)
+			if sourceCodec == targetCodec {
+				kind = append(kind, sourceCodec+" video re-encoded")
+			} else {
+				kind = append(kind, sourceCodec+" video converted to "+targetCodec)
+			}
 		}
 	}
 	switch {
 	case audio == "":
 		args = append(args, "-c:a", "aac")
-		kind = append(kind, "silent aac audio added")
+		kind = append(kind, "silent AAC audio added")
 	case tsAudioCodecs[audio]:
 		args = append(args, "-c:a", "copy")
-		kind = append(kind, audio+" audio copied")
+		kind = append(kind, prerollCodecName(audio)+" audio copied")
 	default:
 		args = append(args, "-c:a", "aac")
-		kind = append(kind, audio+" audio encoded to aac")
+		kind = append(kind, prerollCodecName(audio)+" audio converted to AAC")
 	}
 	args = append(args, "-f", "mpegts")
 	return prerollPlan{rate: rate, args: args, kind: strings.Join(kind, ", ")}, nil
@@ -290,8 +299,31 @@ func preparePreroll(src string) {
 	}
 	prerollTS = prerollCache
 	prerollRate = plan.rate
-	logger("[PREROLL] prepared %s in %v: %s at %d fps, %s at %s", src,
+	logger("[PREROLL] prepared %s in %v: %s, %d fps, %s written to %s", src,
 		time.Since(t0).Round(time.Millisecond), plan.kind, plan.rate, byteCount(st.Size()), prerollCache)
+}
+
+func prerollCodecName(codec string) string {
+	switch strings.ToLower(codec) {
+	case "h264":
+		return "H.264"
+	case "hevc", "h265":
+		return "H.265"
+	case "mpeg2video":
+		return "MPEG-2"
+	case "mjpeg":
+		return "JPEG"
+	case "aac":
+		return "AAC"
+	case "ac3":
+		return "AC-3"
+	case "eac3":
+		return "E-AC-3"
+	case "mp2", "mp3":
+		return strings.ToUpper(codec)
+	default:
+		return codec
+	}
 }
 
 // probeError adds ffprobe's own words to an exec error, which otherwise only
