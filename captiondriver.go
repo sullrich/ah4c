@@ -481,21 +481,6 @@ func findGPURuntime(key string) (gpuRuntime, bool) {
 
 func driverDir(g gpuRuntime) string { return filepath.Join(captionDrivers, g.Key) }
 
-// A saved set without a suite marker predates this check and may belong to the
-// old base image. Fresh downloads record their suite, so fixed installs never
-// receive the migration warning and a later distribution upgrade does.
-func driverPackageSetNeedsRefresh(g gpuRuntime) bool {
-	if !driverDownloaded(g) {
-		return false
-	}
-	current := backportsSuite()
-	if current == "" {
-		return false
-	}
-	saved, err := os.ReadFile(filepath.Join(driverDir(g), ".suite"))
-	return err != nil || strings.TrimSpace(string(saved)) != current
-}
-
 // removeDriverPackages deletes the saved package set. Packages already put
 // into this running container stay loaded until it is recreated; without the
 // saved set they are not restored into the next one.
@@ -890,9 +875,6 @@ func fetchDriver(g gpuRuntime) (string, error) {
 			return log.String(), fmt.Errorf("downloading %s: %w", strings.Join(g.Packages, " "), aptErr)
 		}
 		return log.String(), fmt.Errorf("no packages ended up in %s", dir)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".suite"), []byte(suite+"\n"), 0o644); err != nil {
-		return log.String(), fmt.Errorf("recording the distribution for the saved packages: %w", err)
 	}
 	n, _ := savedDebs(g)
 	names := make([]string, len(n))
