@@ -138,6 +138,12 @@ Each variable must appear only once. Do not add these above the empty NVIDIA def
 those defaults in place farther down the file: when a variable is repeated, the later empty value
 wins and the NVIDIA runtime exposes no driver to the container.
 
+> **Upgrading from a pre-Trixie image:** pull and recreate the container with the current image,
+> then press **Reinstall** once for every saved Vulkan or CUDA runtime on the Closed Captions page.
+> Driver packages survive container rebuilds, so packages saved by the previous Debian release
+> need to be replaced with Trixie versions. Current images refuse to let an older saved package
+> downgrade a newer library from the base image.
+
 These are ordinary env settings rather than edits to the compose file, and GPU access defaults
 to off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
 `NVIDIA_VISIBLE_DEVICES` exposes no GPU. Nobody without a card has to change anything.

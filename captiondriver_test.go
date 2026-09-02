@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRuntimeStateNeedsRestore(t *testing.T) {
 	tests := []struct {
@@ -23,5 +26,12 @@ func TestRuntimeStateNeedsRestore(t *testing.T) {
 				t.Fatalf("runtimeStateNeedsRestore() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDriverPackageInstallRefusesDowngrades(t *testing.T) {
+	args := strings.Join(driverPackageInstallArgs("saved.deb"), "\x00")
+	if !strings.Contains(args, "--refuse-downgrade") {
+		t.Fatalf("dpkg arguments allow a saved package to downgrade the base image: %q", args)
 	}
 }

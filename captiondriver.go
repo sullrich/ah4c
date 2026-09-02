@@ -1205,7 +1205,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 	// the priority for work that outlives it.
 	asSet := false
 	if atStartup {
-		args := append([]string{"-i", "--force-depends", "--force-unsafe-io"}, debs...)
+		args := driverPackageInstallArgs(debs...)
 		cmd := installCommand(!serving.Load(), "dpkg", args...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
@@ -1230,7 +1230,7 @@ func applyDriver(g gpuRuntime) (string, error) {
 			warned = true
 			logger("[CC] %s is going in through a busy machine, one package at a time and yielding between them. Nothing is being skipped.", g.Name)
 		}
-		cmd := installCommand(!serving.Load(), "dpkg", "-i", "--force-depends", "--force-unsafe-io", deb)
+		cmd := installCommand(!serving.Load(), "dpkg", driverPackageInstallArgs(deb)...)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		b, e := cmd.CombinedOutput()
 		out = append(out, b...)
@@ -1312,6 +1312,16 @@ func applyDriver(g gpuRuntime) (string, error) {
 		setDriverFault("")
 	}
 	return string(out), nil
+}
+
+// driverPackageInstallArgs is shared by the startup set install and its
+// one-package fallback so neither can downgrade a library from the base image.
+// Saved sets survive container upgrades: a Bookworm CUDA set once replaced
+// Trixie's libstdc++6 and broke adb on every GLIBCXX symbol the older library
+// did not have. A saved runtime may add packages or upgrade them, never take
+// the current distribution backward.
+func driverPackageInstallArgs(debs ...string) []string {
+	return append([]string{"-i", "--refuse-downgrade", "--force-depends", "--force-unsafe-io"}, debs...)
 }
 
 // politeCommand builds a command that loses every contest with a tune.

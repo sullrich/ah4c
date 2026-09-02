@@ -153,6 +153,15 @@
             <div class="model-list" id="runtimeRow"></div>
             <div class="model-list" id="driverRow" style="margin-top:0.6rem;"></div>
             <div id="drvState"></div>
+            <div class="warn" style="margin:0.6rem 0 0;">
+                <span class="dot"></span>
+                <div>
+                    <div class="h">Upgrading from a pre-Trixie image?</div>
+                    <div class="d">Press Reinstall once for every saved Vulkan or CUDA runtime.
+                    Driver packages survive container rebuilds, so packages saved by the previous
+                    Debian release need to be replaced with Trixie versions.</div>
+                </div>
+            </div>
             <p class="footnote">
                 GPU choices appear only when this container can load them (for Vulkan: a driver and
                 <code>/dev/dri</code>). The log names the device actually doing the work.
