@@ -1,7 +1,7 @@
-#docker buildx build --platform linux/amd64,linux/arm64 --build-arg CDVR_RELEASE=$(curl -s https://channels-dvr.s3.amazonaws.com/latest.txt | tr -d '\n') -f Dockerfile -t bnhf/ah4c:latest . --push --no-cache
+#docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t bnhf/ah4c:latest . --push --no-cache
 
 # First Stage: Build ws-scrcpy and ah4c
-FROM golang:bookworm AS builder
+FROM golang:trixie AS builder
 
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,21 +26,22 @@ RUN git clone --branch main --single-branch https://github.com/sullrich/ah4c . \
     && go build -o /opt/ah4c
 
 # Second Stage: Create the Runtime Environment
-FROM debian:bookworm-slim AS runner
+FROM debian:trixie-slim AS runner
 LABEL maintainer="The Slayer <slayer@technologydragonslayer.com>"
 
 ARG TARGETARCH
-ARG CDVR_RELEASE
-ARG CDVR_URL=https://channels-dvr.s3.amazonaws.com
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Add contrib/non-free/non-free-firmware components
 RUN sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
 
 # Install runtime dependencies (adb for Android-based tuners, nodejs/npm for ws-scrcpy, python3 for pyatv)
+# ffmpeg/ffprobe come from the Debian repo; trixie's 7:7.1.5-0+deb13u1 carries the
+# CVE-2026-8461 (MagicYUV "PixelSmash") fix on amd64 and arm64 (DSA-6361-1).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl bash dnsutils procps nano tzdata jq bc \
     android-tools-adb tesseract-ocr \
+    ffmpeg \
     nodejs npm \
     python3 python3-pip \
     libva2 libva-drm2 vainfo \
@@ -54,21 +55,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y --auto-remove build-essential python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Intel VA driver & (optionally) QSV libs only on amd64
+# Add Intel VA driver & QSV runtime only on amd64
+# trixie dropped the legacy Media SDK (libmfx1); QSV in ffmpeg 7.x uses oneVPL:
+# libvpl2 (dispatcher) + libmfx-gen1.2 (GPU runtime, Gen11/Ice Lake and newer).
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
-        intel-media-va-driver-non-free libmfx1 && \
+        intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 && \
       rm -rf /var/lib/apt/lists/* ; \
     fi
 
 # (Optional) set for Intel VA driver name
 ENV LIBVA_DRIVER_NAME=iHD
-
-# Download ffmpeg and ffprobe from Channels DVR
-RUN ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "arm64") \
-    && curl -fsSL ${CDVR_URL}/${CDVR_RELEASE}/ffmpeg-linux-${ARCH} -o /usr/bin/ffmpeg \
-    && curl -fsSL ${CDVR_URL}/${CDVR_RELEASE}/ffprobe-linux-${ARCH} -o /usr/bin/ffprobe \
-    && chmod +x /usr/bin/ffmpeg /usr/bin/ffprobe
 
 # Set up working directories
 RUN mkdir -p /opt/scripts /tmp/scripts /tmp/m3u /opt/html /opt/static
