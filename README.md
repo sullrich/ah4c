@@ -358,10 +358,11 @@ PREROLL_FILE=/data/preroll.mp4
 With more than one file in the directory, one named `preroll.*` is used; otherwise the
 first by name, and the log says which.
 
-The file is prepared once, at container start, into a transport stream: a video whose
-codecs already suit one (H.264, HEVC or MPEG-2 with AAC, AC3, MP2 or MP3) is remuxed as it
-is, anything else is encoded to H.264 and AAC, a still image becomes a ten second clip with
-silent audio, and a silent video gains silent audio. It loops for as long as the wait lasts
+The file is prepared once, at container start, into a transport stream. Video is encoded
+to match `ENCODER_CODEC` (H.264 by default, or H.265), while an existing H.265 stream is
+copied when the encoder is H.265. Audio already suitable for MPEG-TS is copied, anything
+else becomes AAC, a still image becomes a ten second clip with silent audio, and a silent
+video gains silent audio. It loops for as long as the wait lasts
 and stops the moment the real stream is ready. It is the first thing the DVR gets: the
 request is answered with the pre-roll already playing, before the pre script has woken the
 box, and the tune runs underneath. With nothing holding the tune, the encoder takes over
@@ -391,46 +392,15 @@ a second apart on the transport clock, while the overlay still said 29.970 speci
 **An H.265 encoder** needs one setting: `ENCODER_CODEC=h265`, and the **hold** — `PLAYBACK_DELAY`
 or `PLAYBACK_DETECTION` — is fully supported. The player will not switch its video decoder
 mid-recording, so the black played inside the hand-off has to be the program's own codec, or
-the picture freezes on it instead of crossing to the program. This image's ffmpeg has no
-software H.265 encoder, so ah4c cannot make an H.265 black at startup; a half-second clip is
-built once, offline, and shipped inside the binary, and `ENCODER_CODEC=h265` selects it.
+the picture freezes on it instead of crossing to the program. A half-second H.265 clip is
+shipped inside the binary, and `ENCODER_CODEC=h265` selects it.
 
-The **pre-roll** is the exception. It is the first coded video the player sees, so it must
-itself be H.265 — an H.264 pre-roll would lock the player onto an H.264 decoder that then
-cannot cross into the H.265 program (nothing bridges that: not a NULL gap, not a black seam,
-not a relabel; all were tried and froze). Since this image cannot convert one, an H.265
-pre-roll is played as-is, and an H.264 pre-roll on an H.265 encoder is **refused** — the hold
-simply shows H.265 black for the wait, exactly as it does with no pre-roll at all. So to show
-a pre-roll on an H.265 encoder, supply it already encoded as H.265. Left at its `h264`
-default, nothing changes.
-
-**Making an H.265 pre-roll.** What ah4c wants on an H.265 encoder is an **H.265 MPEG-TS
-(`.ts`) video** at your channel's resolution (usually 1920x1080) — not a photo, and not a
-HEIC. [ffmpeg](https://ffmpeg.org) (free, open-source, on every platform) makes one in a
-single command. HandBrake cannot help here: it does not output `.ts`, and it will not
-encode a still image at all.
-
-From a **still image** — this loops the picture into a ten-second H.265 clip, scaled to
-fill a 1080p frame:
-
-```
-ffmpeg -loop 1 -i photo.jpg -t 10 -r 30 \
-  -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080" \
-  -c:v libx265 -pix_fmt yuv420p -an preroll.ts
-```
-
-From a **video clip** — re-encode it to H.265, keeping its length (change the scale to your
-channel's resolution, or drop the `-vf` line if it is already the right size):
-
-```
-ffmpeg -i input.mp4 \
-  -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080" \
-  -c:v libx265 -pix_fmt yuv420p -an preroll.ts
-```
-
-Then point `PREROLL_FILE` at the resulting `preroll.ts`, or drop it into the mounted
-`preroll` directory, and ah4c copies it through unchanged. (Both commands drop audio with
-`-an`, since the pre-roll plays silent; leave it off to keep the clip's own sound.)
+The **pre-roll** follows the same rule. It is the first coded video the player sees, so on
+an H.265 encoder it must itself be H.265. The container prepares that automatically at
+startup: an existing H.265 pre-roll is copied, while an H.264 clip, other video, or still
+image is encoded with the Trixie image's `libx265`. If preparation fails, the log says why
+and the hold falls back to the built-in H.265 black. Left at the `h264` default, nothing
+changes.
 
 Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
 took over along with how much filler was sent.
@@ -545,7 +515,7 @@ services:
       - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports audio playing and the picture moving, then start on a keyframe, so recording begins on the program, not the loading screen. Requires adb; network tuners only. Case-insensitive; anything but true leaves it off.
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. Seconds the box may keep its prior player/session before the check falls back to gating on motion alone. Default 2 suits Ospreys; apps like DirecTV that hold one player across channel changes need more. 0 or unset uses the default.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long before handing the DVR the program, so a slow-starting app still records within the DVR's 30s window. Black or a mounted pre-roll fills the wait; the box's own video is never passed through. Accepts a bare number (seconds) or a duration like 30s/1m, capped at 10m. Network tuners only. Empty or 0 disables it.
-      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. An H.264 pre-roll is refused on an H.265 encoder (falls back to black). Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
+      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. Pre-roll video is converted to match; an existing H.265 stream is copied. Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
       # ── NVIDIA GPU ──────────────────────────────────────────────────────────
       # Used by the CUDA caption engine and any CMDn calling h264_nvenc/hevc_nvenc. Needs the NVIDIA container toolkit.

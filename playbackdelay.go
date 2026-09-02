@@ -1197,10 +1197,8 @@ const (
 // locked onto the black into a program of a different codec, and freezes.
 var blackPool []byte
 
-// blackHEVCAsset is a half second of H.265 black, made once offline and shipped
-// in the binary. This image's ffmpeg has no software H.265 encoder, so an H.265
-// black cannot be made at startup; it is embedded instead and used as-is when
-// ENCODER_CODEC says the encoder is H.265.
+// blackHEVCAsset is a half second of H.265 black, made once and shipped in the
+// binary. It is used as-is when ENCODER_CODEC says the encoder is H.265.
 //
 //go:embed blackframe_hevc.ts
 var blackHEVCAsset []byte
@@ -1227,8 +1225,8 @@ func blackStartup() {
 		return
 	}
 	if wantHEVC() {
-		// H.265 encoder: the black has to be H.265 too, and this image cannot
-		// make one, so the clip shipped in the binary is used as-is.
+		// H.265 encoder: the black has to be H.265 too, so the clip shipped in
+		// the binary is used as-is.
 		blackPool = blackHEVCAsset[:len(blackHEVCAsset)/tsPacketSize*tsPacketSize]
 		logger("[BLACKFRAMES] using the built-in %s of H.265 black, %s, to go in front of the picture at the hand-off",
 			blackWords(blackSeamFor), byteCount(int64(len(blackPool))))
