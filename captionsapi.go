@@ -70,8 +70,9 @@ type captionStatus struct {
 
 type captionStatusDriver struct {
 	gpuRuntime
-	Downloaded bool `json:"downloaded"`
-	Active     bool `json:"active"`
+	Downloaded   bool `json:"downloaded"`
+	Active       bool `json:"active"`
+	NeedsRefresh bool `json:"needsRefresh"`
 }
 
 type captionStatusEngine struct {
@@ -540,9 +541,10 @@ func captionStatusPayload() captionStatus {
 	drivers := make([]captionStatusDriver, 0, len(gpuRuntimes))
 	for _, g := range gpuRuntimes {
 		drivers = append(drivers, captionStatusDriver{
-			gpuRuntime: g,
-			Downloaded: driverDownloaded(g),
-			Active:     driverActive(g),
+			gpuRuntime:   g,
+			Downloaded:   driverDownloaded(g),
+			Active:       driverActive(g),
+			NeedsRefresh: driverPackageSetNeedsRefresh(g),
 		})
 	}
 	// Both engines' builds are offered, so the page can say what a model would

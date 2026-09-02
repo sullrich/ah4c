@@ -142,7 +142,8 @@ wins and the NVIDIA runtime exposes no driver to the container.
 > then press **Reinstall** once for every saved Vulkan or CUDA runtime on the Closed Captions page.
 > Driver packages survive container rebuilds, so packages saved by the previous Debian release
 > need to be replaced with Trixie versions. Current images refuse to let an older saved package
-> downgrade a newer library from the base image.
+> downgrade a newer library from the base image. The page shows this notice only for a saved set
+> from an earlier image, and removes it after the runtime is reinstalled.
 
 These are ordinary env settings rather than edits to the compose file, and GPU access defaults
 to off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
