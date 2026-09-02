@@ -533,6 +533,26 @@ func driverActive(g gpuRuntime) bool {
 	return engineUsable(engineVariant{Needs: g.Needs, AlsoNeeds: g.AlsoNeeds})
 }
 
+// runtimeNeedsRestore reports whether a complete saved package set still has
+// work to do in this container. Vulkan needs both its loader and a usable ICD;
+// Trixie's ffmpeg brings the loader on its own, which is not a graphics driver.
+func runtimeNeedsRestore(g gpuRuntime) bool {
+	if !driverDownloaded(g) {
+		return false
+	}
+	active := driverActive(g)
+	if g.Key != "vulkan" {
+		return !active
+	}
+	return runtimeStateNeedsRestore(g.Key, active, anyVulkanManifests(), len(brokenVulkanDrivers()))
+}
+
+// runtimeStateNeedsRestore is the decision without filesystem or loader probes,
+// kept separate so the loader-without-an-ICD regression stays covered.
+func runtimeStateNeedsRestore(key string, active, manifests bool, broken int) bool {
+	return !active || key == "vulkan" && (!manifests || broken > 0)
+}
+
 type gpuInstallState struct {
 	Kind     string `json:"kind"`
 	Active   bool   `json:"active"`
@@ -1730,22 +1750,10 @@ func restoreGPURuntimeQuietly() {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	// A graphics driver is for captioning and nothing else here, so a container
-	// with captions switched off does not install one. It is not free: on a
-	// fresh bind mount it is a package at a time through dpkg, and that is
-	// forty seconds of a startup nobody asked for.
-	//
-	// It is not simply skipped, though. This is the only stretch of a
-	// container's life where nothing can be tuning, so refusing to install here
-	// means the install has to happen later, beside live tunes, which is the
-	// case that has cost recordings. Switching captions on is what asks for it,
-	// and that is where it now runs from — gated and divided, as it has to be
-	// once the door is open.
-	if !currentCaptionConfig().Enabled {
-		logger("[CC] Captions are off, so the graphics driver is left where it is. It goes in when captions are switched on.")
-		warmEngineCache()
-		return
-	}
+	// A saved package set is an instruction to keep that runtime available
+	// across container rebuilds. Restore it while the port is still unbound,
+	// even if captions are currently off, so enabling them later cannot move a
+	// package install beside live tunes.
 	restoreSavedDriver()
 }
 
@@ -1822,7 +1830,7 @@ func restoreSavedDriverNow() {
 	}
 	need := false
 	for _, g := range gpuRuntimes {
-		if driverDownloaded(g) && (!driverActive(g) || (g.Key == "vulkan" && len(brokenVulkanDrivers()) > 0)) {
+		if runtimeNeedsRestore(g) {
 			need = true
 		}
 	}
@@ -1969,7 +1977,7 @@ func reinstallSavedDriver() {
 		// Anything with packages saved in the bind mount gets put back, whether
 		// or not the config remembers asking for it. The packages being there
 		// is the intent; a rebuild wipes the installed copy but not them.
-		if !driverDownloaded(g) || driverActive(g) {
+		if !runtimeNeedsRestore(g) {
 			continue
 		}
 		logger("[CC] %s is saved but not loaded, restoring it from %s", g.Name, driverDir(g))
