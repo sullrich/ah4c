@@ -407,6 +407,30 @@ func removeCaptionModel(m captionModel) error {
 	return nil
 }
 
+// removeRuntimeBuild deletes one downloaded engine archive. Some processor
+// choices share an archive, so the directory from runtimeAssetFor is the unit
+// removed rather than the name shown on the page.
+func removeRuntimeBuild(rt, variant string) error {
+	if _, found := findEngineVariant(variant); !found {
+		return fmt.Errorf("unknown engine build %q", variant)
+	}
+	_, dir, _, ok := runtimeAssetFor(rt, runtime.GOOS, runtime.GOARCH, variant)
+	if !ok {
+		return fmt.Errorf("no %s build is published for %s/%s", rt, runtime.GOOS, runtime.GOARCH)
+	}
+	dlLock.Lock()
+	defer dlLock.Unlock()
+	if dlState.Active && dlState.Model == "engine" {
+		return fmt.Errorf("an engine build is still downloading")
+	}
+	if err := os.RemoveAll(filepath.Join(captionRuntime, dir)); err != nil {
+		return err
+	}
+	logger("[CC] Removed %s engine build %s", rt, variant)
+	refreshCaptionReady()
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // GPU driver support
 // ---------------------------------------------------------------------------
@@ -456,6 +480,22 @@ func findGPURuntime(key string) (gpuRuntime, bool) {
 }
 
 func driverDir(g gpuRuntime) string { return filepath.Join(captionDrivers, g.Key) }
+
+// removeDriverPackages deletes the saved package set. Packages already put
+// into this running container stay loaded until it is recreated; without the
+// saved set they are not restored into the next one.
+func removeDriverPackages(g gpuRuntime) error {
+	gpuLock.Lock()
+	defer gpuLock.Unlock()
+	if gpuState.Active && gpuState.Kind == g.Key {
+		return fmt.Errorf("%s is still being set up", g.Name)
+	}
+	if err := os.RemoveAll(driverDir(g)); err != nil {
+		return err
+	}
+	logger("[CC] Removed the saved packages for %s; the loaded copy remains until the container is recreated", g.Name)
+	return nil
+}
 
 // driverDownloaded reports whether the saved set in the bind mount is
 // complete: every package the runtime names has its package file present. A

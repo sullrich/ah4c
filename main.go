@@ -863,12 +863,35 @@ func run() error {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
 	})
+	r.DELETE("/api/captions/driver/:kind", func(c *gin.Context) {
+		g, ok := findGPURuntime(c.Param("kind"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown driver"})
+			return
+		}
+		if err := removeDriverPackages(g); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, captionStatusPayload())
+	})
 	r.POST("/api/captions/runtime/:variant", func(c *gin.Context) {
 		if err := startRuntimeDownload(c.Param("variant"), c.Query("model")); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "started"})
+	})
+	r.DELETE("/api/captions/runtime/:runtime/:variant", func(c *gin.Context) {
+		if c.Param("runtime") != rtTranscribe {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown speech engine"})
+			return
+		}
+		if err := removeRuntimeBuild(c.Param("runtime"), c.Param("variant")); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, captionStatusPayload())
 	})
 	r.POST("/api/captions/download/:model", func(c *gin.Context) {
 		m, ok := findCaptionModel(c.Param("model"))

@@ -380,6 +380,7 @@ function render() {
             </div>
             <div class="model-actions">
                 <button class="btn btn-sm" onclick="getDriver('${esc(d.key)}')">${d.downloaded ? 'Reinstall ' : 'Download '}${esc(d.name)}</button>
+                ${d.downloaded ? `<button class="btn btn-danger btn-sm" onclick="removeDriver('${esc(d.key)}', '${esc(d.name)}')">Remove</button>` : ''}
             </div>
         </div>`).join('');
 
@@ -456,7 +457,7 @@ function render() {
                             <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span>
                     </div>
                     <div class="model-actions">
-                        ${e.installed ? '<span class="badge badge-active">Downloaded</span>'
+                        ${e.installed ? `<span class="badge badge-active">Downloaded</span><button class="btn btn-danger btn-sm" onclick="removeRuntime('${esc(rt.key)}', '${esc(e.key)}', ${e.shared ? 'true' : 'false'})">Remove</button>`
                                       : (e.usable && inUse ? `<button class="btn btn-sm" onclick="getRuntime('${esc(e.key)}')">Download</button>` : '')}
                     </div>
                 </div>`).join('')}</div>
@@ -713,6 +714,18 @@ async function getDriver(kind) {
     pollDriver();
 }
 
+async function removeDriver(kind, name) {
+    if (!confirm(`Delete the saved packages for ${name}? The copy already loaded stays in this container until it is recreated.`)) return;
+    const r = await fetch('/api/captions/driver/' + encodeURIComponent(kind), {method: 'DELETE'});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        document.getElementById('saved').textContent = body.error || 'Could not remove the saved packages';
+        return;
+    }
+    state = body;
+    render();
+}
+
 let drvPolling = false;
 async function pollDriver() {
     if (drvPolling) return;
@@ -746,6 +759,19 @@ async function removeModel(key) {
     if (!confirm('Delete this downloaded model?')) return;
     const r = await fetch('/api/captions/model/' + encodeURIComponent(key), {method: 'DELETE'});
     if (r.ok) { state = await r.json(); render(); }
+}
+
+async function removeRuntime(runtime, variant, shared) {
+    const extra = shared ? ' This also removes the other choices that share the same download.' : '';
+    if (!confirm('Delete this downloaded engine build?' + extra + ' Native code already in use stays mapped until the container is restarted.')) return;
+    const r = await fetch('/api/captions/runtime/' + encodeURIComponent(runtime) + '/' + encodeURIComponent(variant), {method: 'DELETE'});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        document.getElementById('saved').textContent = body.error || 'Could not remove the engine build';
+        return;
+    }
+    state = body;
+    render();
 }
 
 let polling = false;
