@@ -1,6 +1,21 @@
 #!/bin/bash
 # docker-start.sh
-# 2026.08.24
+# 2026.09.02
+
+# Date stamp of the ah4c.yaml this image was built from. Bump together with the
+# AH4C_COMPOSE line in ah4c.yaml whenever the compose file changes shape.
+# checkVersions compares it to the AH4C_COMPOSE the running container was
+# started with.
+LATEST_COMPOSE=2026.09.01
+
+# Fold the container startup output into ah4c's own log file so the WebUI Logs
+# page shows one log, not just ah4c's lines. fd 3 keeps the real stdout for
+# `docker logs`; every other line this script, its helpers and ws-scrcpy print
+# is timestamped to match ah4c's format and appended to /tmp/ah4c.log as well.
+# ah4c is exec'd on fd 3 at the end - it writes /tmp/ah4c.log itself, so routing
+# it through the tee would double every line.
+exec 3>&1
+exec > >(while IFS= read -r line; do printf '%(%Y/%m/%d %H:%M:%S)T %s\n' -1 "$line"; done | tee -a /tmp/ah4c.log) 2>&1
 
 # Ensure render group can access GPU device
 [[ -c /dev/dri/renderD128 ]] && chgrp render /dev/dri/renderD128
@@ -162,6 +177,23 @@ createM3Us() {
 # Echo the value of every set variable whose name begins with $1
 expandVars() { local v; for v in $(compgen -v "$1"); do echo "${!v}"; done; }
 
+# Confirm the compose file is current and report the running image version,
+# mirroring bnhf/apcupsd-master-slave. Its output is timestamped and captured to
+# /tmp/ah4c.log by the redirect at the top of this script, so it shows in the
+# WebUI Logs page too. Informational only - nothing is blocked.
+checkVersions() {
+  if [ "${AH4C_COMPOSE}" == "$LATEST_COMPOSE" ]; then
+    echo "docker-start.sh: Docker Compose version $AH4C_COMPOSE confirmed as up to date"
+  else
+    echo "docker-start.sh: WARNING -- Docker Compose version '${AH4C_COMPOSE:-unset}' does not match latest ($LATEST_COMPOSE) -- please update your compose file"
+  fi
+
+  # vYYYY.MM.DD.HHMM stamp that bump-version.sh embedded in the binary via //go:embed
+  local running
+  running=$(grep -aoE 'v20[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{4}' /opt/ah4c | head -n1)
+  echo "docker-start.sh: Currently running bnhf/ah4c version ${running:-unknown}"
+}
+
 # Fix hostname resolution, connect tuners, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
@@ -182,7 +214,12 @@ main() {
   # printed while ah4c is deliberately not answering on 7654 yet. Unlabeled,
   # that is ah4c appearing to say it is up when it is not.
   npm start --prefix ws-scrcpy 2>&1 | sed -u 's/^/[SCRCPY] /' &
-  ./ah4c
+  # Print the version summary once ah4c is actually serving, so it lands at the
+  # end of the startup log rather than buried in the middle of ah4c's own
+  # output. Capped so it still prints if the port never comes up.
+  ( n=0; until curl -sf -o /dev/null --max-time 2 http://localhost:7654/api/version || [ $n -ge 180 ]; do n=$((n + 1)); sleep 1; done; checkVersions ) &
+  # On fd 3 (the real stdout), not the tee: ah4c writes /tmp/ah4c.log itself.
+  exec ./ah4c >&3 2>&3
 }
 
 main

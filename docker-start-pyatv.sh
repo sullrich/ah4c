@@ -1,6 +1,21 @@
 #!/bin/bash
 # docker-start-pyatv.sh
-# 2025.01.22
+# 2026.09.02
+
+# Date stamp of the ah4c.yaml this image was built from. Bump together with the
+# AH4C_COMPOSE line in ah4c.yaml whenever the compose file changes shape.
+# checkVersions compares it to the AH4C_COMPOSE the running container was
+# started with.
+LATEST_COMPOSE=2026.09.01
+
+# Fold the container startup output into ah4c's own log file so the WebUI Logs
+# page shows one log, not just ah4c's lines. fd 3 keeps the real stdout for
+# `docker logs`; every other line this script, its helpers and ws-scrcpy print
+# is timestamped to match ah4c's format and appended to /tmp/ah4c.log as well.
+# ah4c is exec'd on fd 3 at the end - it writes /tmp/ah4c.log itself, so routing
+# it through the tee would double every line.
+exec 3>&1
+exec > >(while IFS= read -r line; do printf '%(%Y/%m/%d %H:%M:%S)T %s\n' -1 "$line"; done | tee -a /tmp/ah4c.log) 2>&1
 
 #androids=( $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP )
 
@@ -149,6 +164,23 @@ createM3Us() {
   done
 }
 
+# Confirm the compose file is current and report the running image version,
+# mirroring bnhf/apcupsd-master-slave. Its output is timestamped and captured to
+# /tmp/ah4c.log by the redirect at the top of this script, so it shows in the
+# WebUI Logs page too. Informational only - nothing is blocked.
+checkVersions() {
+  if [ "${AH4C_COMPOSE}" == "$LATEST_COMPOSE" ]; then
+    echo "docker-start-pyatv.sh: Docker Compose version $AH4C_COMPOSE confirmed as up to date"
+  else
+    echo "docker-start-pyatv.sh: WARNING -- Docker Compose version '${AH4C_COMPOSE:-unset}' does not match latest ($LATEST_COMPOSE) -- please update your compose file"
+  fi
+
+  # vYYYY.MM.DD.HHMM stamp that bump-version.sh embedded in the binary via //go:embed
+  local running
+  running=$(grep -aoE 'v20[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{4}' /opt/ah4c | head -n1)
+  echo "docker-start-pyatv.sh: Currently running bnhf/ah4c version ${running:-unknown}"
+}
+
 # Fix hostanme resolution, connect adb devices, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
@@ -159,7 +191,12 @@ main() {
   checkM3Us directv.m3u dtvosprey.m3u dtvstream.m3u foo-fighters.m3u fubo.m3u hulu.m3u livetv.m3u npo.m3u silicondust.m3u sling.m3u spectrum.m3u youtubetv_shield.m3u youtubetv.m3u
   #createM3Us $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"
-  ./ah4c
+  # Print the version summary once ah4c is actually serving, so it lands at the
+  # end of the startup log rather than buried in the middle of ah4c's own
+  # output. Capped so it still prints if the port never comes up.
+  ( n=0; until curl -sf -o /dev/null --max-time 2 http://localhost:7654/api/version || [ $n -ge 180 ]; do n=$((n + 1)); sleep 1; done; checkVersions ) &
+  # On fd 3 (the real stdout), not the tee: ah4c writes /tmp/ah4c.log itself.
+  exec ./ah4c >&3 2>&3
 }
 
 main

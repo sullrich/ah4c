@@ -1,5 +1,5 @@
 services:
-  # 2026.08.28
+  # 2026.09.01
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
@@ -13,55 +13,79 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
+      - AH4C_COMPOSE=2026.09.01 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
-      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP and ENCODERn_URL line below for each beyond 9
+      # ── Tuners ──────────────────────────────────────────────────────────────
+      # One trio per tuner: TUNERn_IP is the box to tune; video comes from CMDn if set, otherwise ENCODERn_URL.
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP, ENCODERn_URL and CMDn trio below for each beyond 9
       - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
+      - ENCODER1_URL=${ENCODER1_URL} # Tuner #1 source URL (http://hostname/stream). Streamed directly when CMD1 is blank; otherwise referenced by CMD1 as ${ENCODER1_URL}.
+      - CMD1=${CMD1} # Optional tuner #1 command; ah4c streams its stdout (end it with "-f mpegts -") instead of fetching ENCODER1_URL. No shell.
       - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
+      - ENCODER2_URL=${ENCODER2_URL} # Tuner #2 source URL. Streamed directly when CMD2 is blank; otherwise referenced by CMD2 as ${ENCODER2_URL}.
+      - CMD2=${CMD2} # Optional tuner #2 command; ah4c streams its stdout instead of fetching ENCODER2_URL. See CMD1.
       - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
+      - ENCODER3_URL=${ENCODER3_URL} # Tuner #3 source URL. Streamed directly when CMD3 is blank; otherwise referenced by CMD3 as ${ENCODER3_URL}.
+      - CMD3=${CMD3} # Optional tuner #3 command; ah4c streams its stdout instead of fetching ENCODER3_URL. See CMD1.
       - TUNER4_IP=${TUNER4_IP} # Streaming device #4 with adb port in the form hostname:port or ip:port
+      - ENCODER4_URL=${ENCODER4_URL} # Tuner #4 source URL. Streamed directly when CMD4 is blank; otherwise referenced by CMD4 as ${ENCODER4_URL}.
+      - CMD4=${CMD4} # Optional tuner #4 command; ah4c streams its stdout instead of fetching ENCODER4_URL. See CMD1.
       - TUNER5_IP=${TUNER5_IP} # Streaming device #5 with adb port in the form hostname:port or ip:port
+      - ENCODER5_URL=${ENCODER5_URL} # Tuner #5 source URL. Streamed directly when CMD5 is blank; otherwise referenced by CMD5 as ${ENCODER5_URL}.
+      - CMD5=${CMD5} # Optional tuner #5 command; ah4c streams its stdout instead of fetching ENCODER5_URL. See CMD1.
       - TUNER6_IP=${TUNER6_IP} # Streaming device #6 with adb port in the form hostname:port or ip:port
+      - ENCODER6_URL=${ENCODER6_URL} # Tuner #6 source URL. Streamed directly when CMD6 is blank; otherwise referenced by CMD6 as ${ENCODER6_URL}.
+      - CMD6=${CMD6} # Optional tuner #6 command; ah4c streams its stdout instead of fetching ENCODER6_URL. See CMD1.
       - TUNER7_IP=${TUNER7_IP} # Streaming device #7 with adb port in the form hostname:port or ip:port
+      - ENCODER7_URL=${ENCODER7_URL} # Tuner #7 source URL. Streamed directly when CMD7 is blank; otherwise referenced by CMD7 as ${ENCODER7_URL}.
+      - CMD7=${CMD7} # Optional tuner #7 command; ah4c streams its stdout instead of fetching ENCODER7_URL. See CMD1.
       - TUNER8_IP=${TUNER8_IP} # Streaming device #8 with adb port in the form hostname:port or ip:port
+      - ENCODER8_URL=${ENCODER8_URL} # Tuner #8 source URL. Streamed directly when CMD8 is blank; otherwise referenced by CMD8 as ${ENCODER8_URL}.
+      - CMD8=${CMD8} # Optional tuner #8 command; ah4c streams its stdout instead of fetching ENCODER8_URL. See CMD1.
       - TUNER9_IP=${TUNER9_IP} # Streaming device #9 with adb port in the form hostname:port or ip:port
-      - ENCODER1_URL=${ENCODER1_URL} # Full URL for tuner #1 in the form http://hostname/stream or http://ip/stream
-      - ENCODER2_URL=${ENCODER2_URL} # Full URL for tuner #2 in the form http://hostname/stream or http://ip/stream
-      - ENCODER3_URL=${ENCODER3_URL} # Full URL for tuner #3 in the form http://hostname/stream or http://ip/stream
-      - ENCODER4_URL=${ENCODER4_URL} # Full URL for tuner #4 in the form http://hostname/stream or http://ip/stream
-      - ENCODER5_URL=${ENCODER5_URL} # Full URL for tuner #5 in the form http://hostname/stream or http://ip/stream
-      - ENCODER6_URL=${ENCODER6_URL} # Full URL for tuner #6 in the form http://hostname/stream or http://ip/stream
-      - ENCODER7_URL=${ENCODER7_URL} # Full URL for tuner #7 in the form http://hostname/stream or http://ip/stream
-      - ENCODER8_URL=${ENCODER8_URL} # Full URL for tuner #8 in the form http://hostname/stream or http://ip/stream
-      - ENCODER9_URL=${ENCODER9_URL} # Full URL for tuner #9 in the form http://hostname/stream or http://ip/stream
+      - ENCODER9_URL=${ENCODER9_URL} # Tuner #9 source URL. Streamed directly when CMD9 is blank; otherwise referenced by CMD9 as ${ENCODER9_URL}.
+      - CMD9=${CMD9} # Optional tuner #9 command; ah4c streams its stdout instead of fetching ENCODER9_URL. See CMD1.
+      # ── Streaming app and DVR ───────────────────────────────────────────────
       - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
       - PYATV=${PYATV:-false} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
       - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
+      # ── Failure alerts ──────────────────────────────────────────────────────
+      # Email via SMTP and/or a webhook GET, sent when a tune fails. Leave blank to disable.
       - ALERT_SMTP_SERVER=${ALERT_SMTP_SERVER} # The domainname:port of the SMTP server you'll be using like smtp.gmail.com:587. This is for sending ah4c alerts if tuning fails.
       - ALERT_AUTH_SERVER=${ALERT_AUTH_SERVER} # The auth server for the e-mail you'll be using like smtp.gmail.com
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM} # The e-mail address you'd like your ah4c failure alert e-mails to show as being from.
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS} # Gmail and Yahoo both support the creation of app-specific e-mail passwords, and this is the way to go! It's NOT recommended to use your everyday e-mail password.
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO} # The e-mail address you'd like your alert e-mails sent to.
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL} # URL to GET when an alert fires (same failures that trigger the e-mail); put $reason in the URL and it's replaced with the URL-encoded message. Blank disables it.
+      # ── Guide tuning and content updates ────────────────────────────────────
       - LIVETV_ATTEMPTS=${LIVETV_ATTEMPTS} # For FireTV Live Guide tuning only, set maximum number of attempts at finding the desired channel
       - CREATE_M3US=${CREATE_M3US:-false} # Set to true to create device-specific M3Us for use with Amazon Prime Premium channels -- requires a FireTV device
       - UPDATE_SCRIPTS=${UPDATE_SCRIPTS:-true} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist or not
       - UPDATE_M3US=${UPDATE_M3US:-true} # Set to true if you'd like the sample m3us updated whether they exist or not
+      # ── Timezone and session handling ───────────────────────────────────────
       - TZ=${TZ} # Your local timezone in Linux "tz" format
       - SPEED_MODE=${SPEED_MODE:-false} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
+      # ── Autocrop (LinkPi encoders only) ─────────────────────────────────────
       - AUTOCROP_CHANNELS=${AUTOCROP_CHANNELS} # Space separated list of channels (by number) with black borders on 4 sides to autocrop while maintaining aspect ratio. Requires LinkPi Encoder!
       - LINKPI_HOSTNAME=${LINKPI_HOSTNAME} # Hostname or IP of the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
       - LINKPI_USERNAME=${LINKPI_USERNAME} # Username for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS.
       - LINKPI_PASSWORD=${LINKPI_PASSWORD} # Password for the LinkPi Encoder's web API. Required for AUTOCROP_CHANNELS; not currently read by the bundled scripts, which log in with the LinkPi default password instead.
+      # ── Custom startup script ───────────────────────────────────────────────
       - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
+      # ── Recording continuity and playback timing ────────────────────────────
+      # Keep recordings starting on the program and free of gaps within the DVR's 30s tune window.
       - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
       - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports audio playing and the picture moving, then start on a keyframe, so recording begins on the program, not the loading screen. Requires adb; network tuners only. Case-insensitive; anything but true leaves it off.
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. Seconds the box may keep its prior player/session before the check falls back to gating on motion alone. Default 2 suits Ospreys; apps like DirecTV that hold one player across channel changes need more. 0 or unset uses the default.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long before handing the DVR the program, so a slow-starting app still records within the DVR's 30s window. Black or a mounted pre-roll fills the wait; the box's own video is never passed through. Accepts a bare number (seconds) or a duration like 30s/1m, capped at 10m. Network tuners only. Empty or 0 disables it.
       - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. An H.264 pre-roll is refused on an H.265 encoder (falls back to black). Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # Closed captions only. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
-      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Closed captions only. Set to compute,utility when using an NVIDIA GPU, so the driver the CUDA engine build needs is passed in.
+      # ── NVIDIA GPU ──────────────────────────────────────────────────────────
+      # Used by the CUDA caption engine and any CMDn calling h264_nvenc/hevc_nvenc. Needs the NVIDIA container toolkit.
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # For the CUDA caption engine and/or an NVENC CMDn. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Set to compute,utility for the CUDA caption engine. A CMDn using h264_nvenc/hevc_nvenc also needs video - use compute,utility,video (or all).
     volumes:
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
