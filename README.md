@@ -126,7 +126,7 @@ GPU_DEVICE=/dev/dri
 **CUDA** needs the NVIDIA container runtime to inject the host driver. The CUDA engine archive
 does not include CUDA's user-space runtime or cuBLAS; download those once from the Closed Captions
 page. They are saved with the models and restored before ah4c starts listening after a rebuild.
-Set these instead:
+Replace the existing entries in your env file with these values:
 
 ```
 DOCKER_RUNTIME=nvidia
@@ -134,8 +134,12 @@ NVIDIA_VISIBLE_DEVICES=all
 NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ```
 
-Both are ordinary env settings rather than edits to the compose file, and both default to
-off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
+Each variable must appear only once. Do not add these above the empty NVIDIA defaults and leave
+those defaults in place farther down the file: when a variable is repeated, the later empty value
+wins and the NVIDIA runtime exposes no driver to the container.
+
+These are ordinary env settings rather than edits to the compose file, and GPU access defaults
+to off: `GPU_DEVICE` passes `/dev/null`, which exists everywhere and does nothing, and an empty
 `NVIDIA_VISIBLE_DEVICES` exposes no GPU. Nobody without a card has to change anything.
 
 A GPU build is grayed out until the library it needs is loadable, which is settled by asking
@@ -568,6 +572,8 @@ HOSTNAME=ah4c
 DOMAIN=localdomain tailxxxxx.ts.net
 DOCKER_RUNTIME=runc
 GPU_DEVICE=/dev/dri
+NVIDIA_VISIBLE_DEVICES=
+NVIDIA_DRIVER_CAPABILITIES=
 HOST_PORT=7654
 IPADDRESS=docker6:7654
 NUMBER_TUNERS=5
@@ -626,8 +632,6 @@ PLAYBACK_DELAY=
 PREROLL_FILE=
 ENCODER_CODEC=h264
 HEARTBEAT_INTERVAL=
-NVIDIA_VISIBLE_DEVICES=
-NVIDIA_DRIVER_CAPABILITIES=
 HOST_DIR=/data
 ```
 
@@ -650,4 +654,3 @@ in the image either way, and captions run on the processor if none of this is se
 
 #### Developer Instructions
 First see https://github.com/sullrich/ah4c/blob/main/getting_started.txt
-
