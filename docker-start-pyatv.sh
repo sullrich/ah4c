@@ -1,12 +1,12 @@
 #!/bin/bash
 # docker-start-pyatv.sh
-# 2026.09.02
+# 2026.09.03
 
 # Date stamp of the ah4c.yaml this image was built from. Bump together with the
 # AH4C_COMPOSE line in ah4c.yaml whenever the compose file changes shape.
 # checkVersions compares it to the AH4C_COMPOSE the running container was
 # started with.
-LATEST_COMPOSE=2026.09.01
+LATEST_COMPOSE=2026.09.03
 
 # Fold the container startup output into ah4c's own log file so the WebUI Logs
 # page shows one log, not just ah4c's lines. fd 3 keeps the real stdout for

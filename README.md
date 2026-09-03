@@ -440,7 +440,7 @@ took over along with how much filler was sent.
 
 ```yaml
 services:
-  # 2026.09.01
+  # 2026.09.03
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
@@ -454,7 +454,7 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
-      - AH4C_COMPOSE=2026.09.01 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_COMPOSE=2026.09.03 # Compose file date stamp - do not change. The startup log flags it when out of date.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       # ── Tuners ──────────────────────────────────────────────────────────────
@@ -491,6 +491,7 @@ services:
       - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
       - PYATV=${PYATV:-false} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
       - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
+      - FASTCHANNELS_URL=${FASTCHANNELS_URL} # Base URL of your FastChannels container, so the firetv/fastchannels scripts can use its built-in ah4c integration to tune. A URL pre-filled into an exported script overrides this.
       # ── Failure alerts ──────────────────────────────────────────────────────
       # Email via SMTP and/or a webhook GET, sent when a tune fails. Leave blank to disable.
       - ALERT_SMTP_SERVER=${ALERT_SMTP_SERVER} # The domainname:port of the SMTP server you'll be using like smtp.gmail.com:587. This is for sending ah4c alerts if tuning fails.
@@ -522,7 +523,7 @@ services:
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. Seconds the box may keep its prior player/session before the check falls back to gating on motion alone. Default 2 suits Ospreys; apps like DirecTV that hold one player across channel changes need more. 0 or unset uses the default.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long before handing the DVR the program, so a slow-starting app still records within the DVR's 30s window. Black or a mounted pre-roll fills the wait; the box's own video is never passed through. Accepts a bare number (seconds) or a duration like 30s/1m, capped at 10m. Network tuners only. Empty or 0 disables it.
       - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. Pre-roll video is converted to match; an existing H.265 stream is copied. Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
-      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-0} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Set to 0 to disable.
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-180} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Default 180; set to 0 to disable.
       # ── NVIDIA GPU ──────────────────────────────────────────────────────────
       # Used by the CUDA caption engine and any CMDn calling h264_nvenc/hevc_nvenc. Needs the NVIDIA container toolkit.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # For the CUDA caption engine and/or an NVENC CMDn. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
@@ -583,6 +584,7 @@ CMD9=
 STREAMER_APP=scripts/firetv/dtvstreamdeeplinks
 PYATV=false
 CHANNELSIP=media-server10
+FASTCHANNELS_URL=
 ALERT_SMTP_SERVER=smtp.gmail.com:587
 ALERT_AUTH_SERVER=smtp.gmail.com
 ALERT_EMAIL_FROM=xxxxxxxxxx@gmail.com
