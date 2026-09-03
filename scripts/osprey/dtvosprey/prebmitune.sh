@@ -25,7 +25,7 @@ adbConnect() {
 
   while true; do
     adb connect "$streamerIP"
-    $adbTarget shell input keyevent KEYCODE_WAKEUP
+    $adbTarget shell true
     local adbEventSuccess=$?
 
     if [[ $adbEventSuccess -eq 0 ]]; then
@@ -54,6 +54,8 @@ adbWake() {
     fi
     echo "with KEYCODE_WAKEUP"
     input keyevent KEYCODE_WAKEUP')
+  echo "Woke $streamerIP $wakePath"
+  touch "$streamerNoPort/adbAppRunning"
 }
 
 #Block until the app is playing AND owns the focused window, otherwise input text goes nowhere

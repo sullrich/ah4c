@@ -26,7 +26,7 @@ adbConnect() {
   local -i adbCounter=0
 
   while true; do
-    $adbTarget shell input keyevent KEYCODE_WAKEUP
+    $adbTarget shell true
     local adbEventSuccess=$?
 
     if [[ $adbEventSuccess -eq 0 ]]; then
@@ -56,6 +56,8 @@ adbWake() {
     fi
     echo "with KEYCODE_WAKEUP"
     input keyevent KEYCODE_WAKEUP')
+  echo "Woke $streamerIP $wakePath"
+  touch $streamerNoPort/adbAppRunning
 }
 
 #Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
