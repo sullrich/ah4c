@@ -2058,7 +2058,7 @@ func (s *stallTolerantReader) Close() error {
 const (
 	adbTimeout           = 5 * time.Second
 	adbGiveUp            = 3
-	playbackPoll         = 250 * time.Millisecond
+	playbackPoll         = 100 * time.Millisecond
 	playbackConfirm      = 2
 	playbackStaticFor    = 2 * time.Second
 	playbackSessionEvery = time.Second
