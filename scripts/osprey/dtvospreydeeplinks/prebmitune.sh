@@ -1,6 +1,6 @@
 #!/bin/bash
 # prebmitune.sh for osprey/dtvospreydeeplinks
-# 2026.07.30
+# 2026.09.02
 
 #Debug on if uncommented
 set -x
@@ -44,9 +44,18 @@ adbConnect() {
 }
 
 adbWake() {
-  $adbTarget shell input keyevent KEYCODE_WAKEUP
-  echo "Waking $streamerIP"
-  touch $streamerNoPort/adbAppRunning
+  wakePath=$($adbTarget shell '
+    if [ "$(getprop ro.build.version.sdk)" = 30 ]; then
+      read up _ < /proc/uptime
+      service call power 12 i64 "${up%.*}${up#*.}0" i32 2 s16 ah4c s16 com.android.shell >/dev/null 2>&1
+      i=0
+      while [ $i -lt 20 ]; do
+        service call power 16 2>/dev/null | grep -q 00000001 && { echo "through the power manager"; exit 0; }
+        i=$((i+1))
+      done
+    fi
+    echo "with KEYCODE_WAKEUP"
+    input keyevent KEYCODE_WAKEUP')
 }
 
 #Block until the app holds audio focus or reports playing, otherwise the tune gets dropped
