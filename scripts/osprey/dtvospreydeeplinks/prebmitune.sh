@@ -1,6 +1,6 @@
 #!/bin/bash
 # prebmitune.sh for osprey/dtvospreydeeplinks
-# 2026.09.02
+# 2026.09.03
 
 #Debug on if uncommented
 set -x
