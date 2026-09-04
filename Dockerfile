@@ -20,10 +20,8 @@ WORKDIR /ws-scrcpy/dist
 RUN npm install
 
 # Build ah4c application
-WORKDIR /go/src/github.com/mackid1993
-ARG AH4C_SHA=main
-RUN git clone https://github.com/mackid1993/ah4c . \
-    && git checkout ${AH4C_SHA} \
+WORKDIR /go/src/github.com/sullrich
+RUN git clone --branch main --single-branch https://github.com/sullrich/ah4c . \
     && sh bump-version.sh \
     && go build -o /opt/ah4c
 
