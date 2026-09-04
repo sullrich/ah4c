@@ -1,6 +1,6 @@
 #!/bin/bash
 # prebmitune.sh for osprey/dtvosprey
-# 2026.09.03
+# 2026.07.30
 
 #Debug on if uncommented
 set -x
@@ -25,7 +25,7 @@ adbConnect() {
 
   while true; do
     adb connect "$streamerIP"
-    $adbTarget shell true
+    $adbTarget shell input keyevent KEYCODE_WAKEUP
     local adbEventSuccess=$?
 
     if [[ $adbEventSuccess -eq 0 ]]; then
@@ -42,19 +42,8 @@ adbConnect() {
 }
 
 adbWake() {
-  wakePath=$($adbTarget shell '
-    if [ "$(getprop ro.build.version.sdk)" = 30 ]; then
-      read up _ < /proc/uptime
-      service call power 12 i64 "${up%.*}${up#*.}0" i32 2 s16 ah4c s16 com.android.shell >/dev/null 2>&1
-      i=0
-      while [ $i -lt 20 ]; do
-        service call power 16 2>/dev/null | grep -q 00000001 && { echo "through the power manager"; exit 0; }
-        i=$((i+1))
-      done
-    fi
-    echo "with KEYCODE_WAKEUP"
-    input keyevent KEYCODE_WAKEUP')
-  echo "Woke $streamerIP $wakePath"
+  $adbTarget shell input keyevent KEYCODE_WAKEUP
+  echo "Waking $streamerIP"
   touch "$streamerNoPort/adbAppRunning"
 }
 
