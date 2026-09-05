@@ -236,8 +236,14 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 			if r.gateReady != nil {
 				if base != nil {
-					if waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone) && r.gate != nil {
-						r.gate.expectNewStream()
+					swap, confirmed := waitForPlayback(r.t.tunerip, base, r.gateSig, r.gateDone)
+					if r.gate != nil {
+						if confirmed {
+							r.gate.playbackConfirmed()
+						}
+						if swap {
+							r.gate.expectNewStream()
+						}
 					}
 				} else {
 					logger("[PLAYBACK] %s no audio baseline, gating on motion alone", r.t.tunerip)
@@ -2052,7 +2058,7 @@ func (s *stallTolerantReader) Close() error {
 const (
 	adbTimeout           = 5 * time.Second
 	adbGiveUp            = 3
-	playbackPoll         = 250 * time.Millisecond
+	playbackPoll         = 100 * time.Millisecond
 	playbackConfirm      = 2
 	playbackStaticFor    = 2 * time.Second
 	playbackSessionEvery = time.Second
@@ -2085,6 +2091,8 @@ type gateReader struct {
 	peak     int
 	vid      map[int]bool
 
+	motionSeen bool
+
 	// timed is set when a timer chose the wait, so the gate releases on the
 	// keyframe nearest the moment the timer named rather than weighing motion.
 	timed  bool
@@ -2097,6 +2105,7 @@ type gateReader struct {
 	sessSeen   int64
 	sess0      int64
 	expectSwap atomic.Bool
+	confirmed  atomic.Bool
 }
 
 // newGateReader gates src until ready closes. timed says the wait was a timer,
@@ -2115,6 +2124,7 @@ func (g *gateReader) resync() {
 	g.pat, g.pmt, g.carry, g.keep = nil, nil, nil, nil
 	g.vid = nil
 	g.winBytes, g.lastWin, g.floor, g.peak = 0, 0, 0, 0
+	g.motionSeen = false
 	g.winStart = time.Time{}
 	if !g.armedAt.IsZero() {
 		g.armedAt = time.Now()
@@ -2123,13 +2133,42 @@ func (g *gateReader) resync() {
 
 func (g *gateReader) expectNewStream() { g.expectSwap.Store(true) }
 
+// playbackConfirmed says the box has been heard playing the new program, so
+// the next keyframe is the program and the picture needs no further weighing.
+func (g *gateReader) playbackConfirmed() { g.confirmed.Store(true) }
+
+func (g *gateReader) recordWindow(n int) {
+	if g.floor == 0 || n < g.floor {
+		g.floor = n
+	}
+	g.lastWin = n
+	if n > g.peak {
+		g.peak = n
+	}
+	if !g.armedAt.IsZero() && g.floor > 0 && n >= g.floor*riseFactor {
+		g.motionSeen = true
+	}
+}
+
+func (g *gateReader) startHunt(now time.Time) {
+	g.armedAt = now
+	if g.armed0.IsZero() {
+		g.armed0 = now
+	}
+	g.winBytes = 0
+	g.winStart = time.Time{}
+}
+
 func (g *gateReader) releaseKind() string {
 	// A timer decided how long to wait, so the gate's only remaining job is to
 	// start on a picture rather than in the middle of one. Weighing motion here
 	if g.timed {
 		return "timed"
 	}
-	if g.floor > 0 && g.lastWin >= g.floor*riseFactor {
+	if g.confirmed.Load() {
+		return "confirmed"
+	}
+	if g.motionSeen {
 		return "moving"
 	}
 	if g.floor > 0 && g.peak < g.floor*riseFactor && g.lastWin >= busyWindow &&
@@ -2253,14 +2292,8 @@ func (g *gateReader) scan(b []byte) int {
 		}
 		if now := time.Now(); now.Sub(g.winStart) >= riseWindow {
 			full := now.Sub(g.winStart) <= 2*riseWindow && g.winBytes >= minWindow
-			if full && (g.floor == 0 || g.winBytes < g.floor) {
-				g.floor = g.winBytes
-			}
 			if full {
-				g.lastWin = g.winBytes
-				if g.winBytes > g.peak {
-					g.peak = g.winBytes
-				}
+				g.recordWindow(g.winBytes)
 			}
 			g.winBytes, g.winStart = 0, now
 		}
@@ -2269,10 +2302,7 @@ func (g *gateReader) scan(b []byte) int {
 			continue
 		}
 		if g.armedAt.IsZero() {
-			g.armedAt = time.Now()
-			if g.armed0.IsZero() {
-				g.armed0 = g.armedAt
-			}
+			g.startHunt(time.Now())
 			// Just told it may open, and nothing released yet. Everything
 			// queued behind this reader was captured while the wait was still
 			// running, so a keyframe chosen out of it is already old: the DVR
@@ -2294,6 +2324,9 @@ func (g *gateReader) scan(b []byte) int {
 			if f, ok := g.src.(interface{ flush(string) }); ok {
 				f.flush("")
 				g.carry = nil
+				return len(b)
+			}
+			if g.detect != nil {
 				return len(b)
 			}
 		}
@@ -2590,7 +2623,7 @@ func playbackStaticBudget() time.Duration {
 	return playbackStaticFor
 }
 
-func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) bool {
+func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-chan struct{}) (swap, confirmed bool) {
 	t0 := time.Now()
 	budget := playbackTimeout
 	staticFor := playbackStaticBudget()
@@ -2604,14 +2637,14 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
-			return swapComing
+			return swapComing, false
 		default:
 		}
 		out := adbAudio(tunerip)
 		if len(out) == 0 {
 			if fails++; fails >= adbGiveUp {
 				logger("[PLAYBACK] %s unreachable over adb, gating on motion alone", tunerip)
-				return swapComing
+				return swapComing, false
 			}
 			time.Sleep(playbackPoll)
 			continue
@@ -2620,7 +2653,7 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 		last = audioPiids(string(out))
 		if heldNewID(base, last, held) {
 			logger("[PLAYBACK] %s playing after %v", tunerip, time.Since(t0).Round(time.Millisecond))
-			return swapComing
+			return swapComing, true
 		}
 		if sig != "" && !swapComing && time.Since(sigAt) >= playbackSessionEvery {
 			nowSig, sigAt = mediaSignature(tunerip), time.Now()
@@ -2636,7 +2669,7 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 			} else if time.Since(staticSince) >= staticFor {
 				logger("[PLAYBACK] %s kept the player and the session it already had (%s), so a tune cannot be seen from here; gating on motion after %v",
 					tunerip, piidList(last), time.Since(t0).Round(time.Millisecond))
-				return swapComing
+				return swapComing, false
 			}
 		} else {
 			staticSince = time.Time{}
@@ -2649,7 +2682,7 @@ func waitForPlayback(tunerip string, base map[string]bool, sig string, done <-ch
 	}
 	logger("[PLAYBACK] %s not confirmed within %v, gating on motion alone; baseline had %s, the box now has %s, media session %s",
 		tunerip, budget, piidList(base), piidList(last), session)
-	return swapComing
+	return swapComing, false
 }
 
 // flushWriter is a response that can be pushed all the way out.
