@@ -279,6 +279,18 @@ type handoffResult struct {
 	body  io.ReadCloser
 }
 
+// armFlushReader keeps the stall queue reachable through the wrappers between
+// it and the timed gate. gateReader flushes a source at the exact instant it
+// arms, before it accepts a keyframe; without this adapter, a caption or tune
+// settle wrapper hides the queue and the delay can release the bytes that
+// accumulated behind it as a short, frame-dropping burst.
+type armFlushReader struct {
+	io.ReadCloser
+	flushSource func(string)
+}
+
+func (r *armFlushReader) flush(label string) { r.flushSource(label) }
+
 // newLateEncoder holds from t0 until the delay is up, then opens url. early is
 // a pre-roll already playing, which it takes over and shows for the wait.
 // heldRecently remembers when a channel last finished its hold, so a DVR that
@@ -435,6 +447,11 @@ func (l *lateEncoder) drainEarly() {
 			// actually mark, on the one path that was working because it was
 			// inert" as one of four fixes that were coherent and wrong; this
 			// is that marker.
+			// Keep the real queue visible to gateReader even when src is wrapped.
+			// The timed gate can then empty it synchronously when it arms, before
+			// the first keyframe is chosen. The earlier scheduled flush remains a
+			// head start; this one is the hand-off guarantee.
+			src = &armFlushReader{ReadCloser: src, flushSource: st.flush}
 			g := newGateReader(src, nil, true, l.until, nil)
 			l.mu.Lock()
 			l.gate = g
