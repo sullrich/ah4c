@@ -1,0 +1,17 @@
+# Keep local test builds (Dockerfile.test) from sending junk to the daemon.
+.git
+.gitignore
+
+# Compiled binary from `go build`
+/androidhdmi-for-channels
+
+# Caption runtime state: settings, downloaded speech models, engine and drivers
+/captions/
+
+# Local secrets/state, never something a build should read
+/env
+*.log
+
+# Scratch tests written by review agents
+/zz_*_test.go
+/guard_test.go

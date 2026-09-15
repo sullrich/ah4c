@@ -1,6 +1,6 @@
 #!/bin/bash
 # docker-start.sh
-# 2026.09.03
+# 2026.09.13
 
 # Date stamp of the ah4c.yaml this image was built from. Bump together with the
 # AH4C_COMPOSE line in ah4c.yaml whenever the compose file changes shape.
@@ -143,6 +143,38 @@ checkScripts() {
   done
 }
 
+# scripts/all/all can dispatch a tune to any device/provider (see
+# scripts/all/all/bmitune.sh), so unlike checkScripts -- which only ever
+# populates the one $STREAMER_APP directory -- it needs every device/provider
+# script set on disk, not just the one currently selected. Same copy-if-missing
+# rule as checkScripts, just applied to every scripts/<device>/<provider> the
+# image was built with instead of one.
+checkAllScripts() {
+
+  local scripts=($@)
+  local dir rel script
+
+  for dir in /tmp/scripts/*/*/; do
+    [[ -d $dir ]] || continue
+    rel=${dir#/tmp/}
+    rel=${rel%/}
+    mkdir -p ./$rel
+
+    for script in "${scripts[@]}"
+      do
+        if [ ! -f /opt/$rel/$script ] && [ -f /tmp/$rel/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
+          cp /tmp/$rel/$script ./$rel 2>/dev/null \
+          && chmod +x ./$rel/$script \
+          && echo "No existing ./$rel/$script found or UPDATE_SCRIPTS set to true"
+        else
+          if [ -f /tmp/$rel/$script ]; then
+            echo "Existing ./$rel/$script found, and will be preserved"
+          fi
+        fi
+    done
+  done
+}
+
 # Check if a given M3U file is already present in the M3U directory, and if not, copy it
 checkM3Us() {
 
@@ -203,6 +235,7 @@ main() {
   if [[ "${PYATV,,}" == "true" ]]; then atvConnections $(expandVars TUNER); else adbConnections $(expandVars TUNER); fi
 
   checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh common.sh atvpair.sh
+  [[ "$STREAMER_APP" == "scripts/all/all" ]] && checkAllScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh common.sh atvpair.sh
   checkM3Us allente.m3u channels.m3u coachella.m3u directv.m3u dtvdeeplinks.m3u dtvosprey.m3u dtvstream.m3u dtvstreamdeeplinks.m3u edc.m3u foo-fighters.m3u fubo.m3u hulu.m3u kodifaves-pbs-seatac.m3u livetv.m3u nbc.m3u npo.m3u pbs-seatac.m3u pbs-worcester.m3u silicondust.m3u sling.m3u spectrum.m3u xfinity.m3u youtubetv_shield.m3u youtubetv.m3u zinwell.m3u
 
   if [[ "${PYATV,,}" != "true" ]]; then createM3Us $(expandVars TUNER); fi
