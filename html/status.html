@@ -153,7 +153,7 @@
         function openTunerModal(index) {
             modalIndex = index;
             $('#modalTunerNumber').text(index);
-            $('#modalTitle').text('Tuner ' + (index + 1) + ' — ' + (tunerIps[index] || ''));
+            $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
             setModalHint();
             $('#tunerModal').addClass('open');
             startPreviewClicked();
@@ -286,11 +286,11 @@
 
         function releaseTuner(index) {
             if (releasing[index]) return;
-            if (tunerActive[index] && !confirm('Tuner ' + (index + 1) + ' is streaming. Run the stop script and release its lock?')) return;
+            if (tunerActive[index] && !confirm('Tuner ' + index + ' is streaming. Run the stop script and release its lock?')) return;
             releasing[index] = true;
             $('.release-btn-' + index).prop('disabled', true).text('Releasing…');
             $.ajax({ url: '/api/tuner/' + index + '/release', type: 'POST', timeout: 30000 })
-                .fail(function() { alert('Release failed for tuner ' + (index + 1) + ' — check the logs.'); })
+                .fail(function() { alert('Release failed for tuner ' + index + ' — check the logs.'); })
                 .always(function() { releasing[index] = false; });
         }
 
@@ -414,8 +414,8 @@
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''}">
 		                        <div class="tuner-status-head">
-		                            <span class="tuner-number">${index + 1}</span>
-		                            <strong>Tuner ${index + 1}</strong>
+		                            <span class="tuner-number">${index}</span>
+		                            <strong>Tuner ${index}</strong>
 		                            ${badge}
 		                        </div>
 		                        <div class="tuner-pairing">
