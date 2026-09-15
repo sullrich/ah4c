@@ -1306,6 +1306,10 @@ func (l liveListener) Accept() (net.Conn, error) {
 // serveLive runs the router on addr with the send buffer capped. It replaces
 // r.Run, which builds its own listener and leaves the buffer to the kernel.
 func serveLive(r *gin.Engine, addr string) error {
+	// Routes that don't belong in main.go's diff against upstream (see
+	// allm3u.go) are added here, before anything is listening.
+	registerAllM3URoutes(r)
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
