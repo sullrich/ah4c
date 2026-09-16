@@ -358,6 +358,7 @@ function chooseLocalScript(path) {
 }
 
 function render() {
+    document.body.classList.toggle('wizard-mode', wizard);
     byId('settings-content').classList.remove('hidden');
     if (state.persistWarning) showNotice(state.persistWarning, 'danger');
     renderCatalog();

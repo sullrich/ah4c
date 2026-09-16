@@ -431,6 +431,7 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .m3u-copy-row { display: grid; grid-template-columns: 1fr auto; gap: .5rem; align-items: center; margin-top: .55rem; }
 .wizard-panel { max-width: 820px; margin: 1rem auto; }
 .wizard-panel p { color: var(--text-muted); }
+.wizard-mode .pagebar { display: none; }
 .wizard-steps { display: flex; justify-content: center; gap: .5rem; margin-bottom: 1rem; }
 .wizard-steps span { padding: .3rem .7rem; border: 1px solid var(--border); border-radius: 999px; color: var(--text-faint); }
 .wizard-steps span.active { color: var(--accent); border-color: var(--accent); }
