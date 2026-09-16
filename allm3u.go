@@ -92,7 +92,7 @@ func allM3USources() []string {
 	return files
 }
 
-// registerAllM3URoutes wires up the "Create ALL M3U" page. It is called from
+// registerAllM3URoutes wires up the "Create all.m3u" page. It is called from
 // serveLive, right before the listener starts, which keeps every new route
 // out of main.go: that file's diff against upstream stays purely additive
 // and carried by the ui-refactor PR.
