@@ -6,7 +6,7 @@
 # AH4C_COMPOSE line in ah4c.yaml whenever the compose file changes shape.
 # checkVersions compares it to the AH4C_COMPOSE the running container was
 # started with.
-LATEST_COMPOSE=2026.09.03
+LATEST_COMPOSE=2026.09.16
 
 # Fold the container startup output into ah4c's own log file so the WebUI Logs
 # page shows one log, not just ah4c's lines. fd 3 keeps the real stdout for
@@ -101,36 +101,92 @@ atvConnections() {
   done
 }
 
-# Check if a given script is already present in the appropriate scripts directory, and if not, copy it
-checkScripts() {
-
-  local scripts=($@)
-  mkdir -p ./scripts/firetv/directv ./$STREAMER_APP
-  #scripts=( prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh )
-  
-  for script in "${scripts[@]}"
-    do
-      if [ ! -f /opt/scripts/firetv/directv/$script ] && [ -f /tmp/scripts/firetv/directv/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
-        cp /tmp/scripts/firetv/directv/$script ./scripts/firetv/directv 2>/dev/null \
-        && chmod +x ./scripts/firetv/directv/$script \
-        && echo "No existing ./scripts/firetv/directv/$script found or UPDATE_SCRIPTS set to true"
-      else
-        if [ -f /tmp/scripts/firetv/directv/$script ]; then
-          echo "Existing ./scripts/firetv/directv/$script found, and will be preserved"
-        fi
-      fi
-
-      if [ ! -f /opt/$STREAMER_APP/$script ] && [ -f /tmp/$STREAMER_APP/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
-        cp /tmp/$STREAMER_APP/$script ./$STREAMER_APP 2>/dev/null \
-        && chmod +x ./$STREAMER_APP/$script \
-        && echo "No existing ./$STREAMER_APP/$script found or UPDATE_SCRIPTS set to true"
-      else
-        if [ -f /tmp/$STREAMER_APP/$script ]; then
-          echo "Existing ./$STREAMER_APP/$script found, and will be preserved"
-        fi
-      fi
+# A package may contain any number of helpers, but these are its three entry points.
+scriptPackageComplete() {
+  local dir="$1" file
+  for file in bmitune.sh prebmitune.sh stopbmitune.sh; do
+    [ -f "$dir/$file" ] || return 1
   done
 }
+
+# Download only the configured streamer directory, never the repository's full scripts tree.
+fetchConfiguredScripts() {
+  local work api name url packageTarget packageParent packageName stage backup
+  [[ -n "$STREAMER_APP" ]] || { echo "No STREAMER_APP configured; no tuner scripts requested"; return; }
+  [[ "$STREAMER_APP" =~ ^scripts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "WARNING: Invalid STREAMER_APP path '$STREAMER_APP'"; return; }
+  packageTarget="/opt/$STREAMER_APP"
+  packageParent="${packageTarget%/*}"
+  packageName="${packageTarget##*/}"
+  backup="$packageParent/.${packageName}.backup"
+  if ! scriptPackageComplete "$packageTarget" && scriptPackageComplete "$backup"; then
+    [ -e "$packageTarget" ] && rm -rf "$packageTarget"
+    mv "$backup" "$packageTarget" && echo "Restored the previous $STREAMER_APP package after an interrupted update"
+  elif scriptPackageComplete "$packageTarget" && [ -e "$backup" ]; then
+    rm -rf "$backup"
+  fi
+  if scriptPackageComplete "/opt/$STREAMER_APP" && [[ "${UPDATE_SCRIPTS,,}" != "true" ]]; then
+    echo "Existing $STREAMER_APP scripts found; GitHub was not checked"
+    return
+  fi
+
+  local -a downloads=()
+  work=$(mktemp -d /tmp/ah4c-streamer.XXXXXX) || return
+  api="https://api.github.com/repos/sullrich/ah4c/contents/$STREAMER_APP?ref=main"
+  if ! curl -fsSL --connect-timeout 3 --max-time 8 "$api" -o "$work/files.json"; then
+    if scriptPackageComplete "/opt/$STREAMER_APP"; then
+      echo "WARNING: GitHub could not be reached; continuing with the complete local $STREAMER_APP package"
+    else
+      echo "WARNING: GitHub could not be reached and $STREAMER_APP is not complete locally; it needs bmitune.sh, prebmitune.sh, and stopbmitune.sh"
+    fi
+    rm -rf "$work"
+    return
+  fi
+  mkdir -p "$work/files"
+  while IFS=$'\t' read -r name url; do
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    downloads+=(--url "$url" --output "$work/files/$name")
+  done < <(jq -r '.[] | select(.type == "file" and .download_url != null) | [.name, .download_url] | @tsv' "$work/files.json")
+  if [ ${#downloads[@]} -eq 0 ] || ! curl -fsSL --parallel --parallel-max 20 --connect-timeout 3 --max-time 15 "${downloads[@]}"; then
+    echo "WARNING: Could not download the complete $STREAMER_APP package"
+    rm -rf "$work"
+    return
+  fi
+  if ! scriptPackageComplete "$work/files"; then
+    echo "WARNING: GitHub package $STREAMER_APP must contain bmitune.sh, prebmitune.sh, and stopbmitune.sh; preserving any stored scripts"
+    rm -rf "$work"
+    return
+  fi
+  if ! mkdir -p "$packageParent"; then
+    echo "WARNING: Could not prepare the local folder for $STREAMER_APP"
+    rm -rf "$work"
+    return
+  fi
+  stage=$(mktemp -d "$packageParent/.${packageName}.update.XXXXXX") || { rm -rf "$work"; return; }
+  if ! cp -a "$work/files/." "$stage/"; then
+    echo "WARNING: Could not stage the updated $STREAMER_APP package"
+    rm -rf "$stage" "$work"
+    return
+  fi
+  find "$stage" -maxdepth 1 -name '*.sh' -exec chmod +x {} +
+  [ -e "$backup" ] && rm -rf "$backup"
+  if [ -e "$packageTarget" ] && ! mv "$packageTarget" "$backup"; then
+    echo "WARNING: Could not preserve the existing $STREAMER_APP package"
+    rm -rf "$stage" "$work"
+    return
+  fi
+  if ! mv "$stage" "$packageTarget"; then
+    echo "WARNING: Could not activate the updated $STREAMER_APP package; restoring the existing package"
+    [ -e "$backup" ] && mv "$backup" "$packageTarget"
+    rm -rf "$stage" "$work"
+    return
+  fi
+  [ -e "$backup" ] && rm -rf "$backup"
+  echo "Downloaded only the configured $STREAMER_APP directory from sullrich/ah4c"
+  [[ "$STREAMER_APP" == "scripts/all/all" ]] && echo "WARNING: scripts/all/all dispatch targets must already exist under /opt/scripts; ah4c does not bulk-download every provider"
+  rm -rf "$work"
+}
+
+expandVars() { local v; for v in $(compgen -v "$1"); do echo "${!v}"; done; }
 
 # Check if a given M3U file is already present in the M3U directory, and if not, copy it
 checkM3Us() {
@@ -141,7 +197,7 @@ checkM3Us() {
 
   for m3u in "${m3us[@]}"
     do
-      if [ ! -f /opt/m3u/$m3u ] || [[ $UPDATE_M3US == "true" ]]; then
+      if [ ! -f /opt/m3u/$m3u ] || [[ "${UPDATE_M3US:-true}" == "true" ]]; then
         cp /tmp/m3u/$m3u ./m3u \
         && echo "No existing $m3u found or UPDATE_M3US set to true"
       else
@@ -184,10 +240,12 @@ checkVersions() {
 # Fix hostanme resolution, connect adb devices, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
-  fixTunerDNS $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
-  fixEncoderDNS $ENCODER1_URL $ENCODER2_URL $ENCODER3_URL $ENCODER4_URL
-  atvConnections $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
-  checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh atvpair.sh
+  eval "$(./ah4c -print-env)"
+  fetchConfiguredScripts || echo "WARNING: Script package preparation failed; continuing ah4c startup"
+
+  fixTunerDNS $(expandVars TUNER)
+  fixEncoderDNS $(expandVars ENCODER)
+  atvConnections $(expandVars TUNER)
   checkM3Us directv.m3u dtvosprey.m3u dtvstream.m3u foo-fighters.m3u fubo.m3u hulu.m3u livetv.m3u npo.m3u silicondust.m3u sling.m3u spectrum.m3u youtubetv_shield.m3u youtubetv.m3u
   #createM3Us $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"

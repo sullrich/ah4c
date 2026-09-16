@@ -1,0 +1,225 @@
+package main
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestSaveSettingsUsesPrivateAtomicFile(t *testing.T) {
+	oldPath := settingsPathOverride
+	settingsPathOverride = t.TempDir() + "/nested/settings.json"
+	t.Cleanup(func() { settingsPathOverride = oldPath })
+	s := emptySettings()
+	s.Vars["IPADDRESS"] = "ah4c:7654"
+	if err := saveSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(settingsPathOverride)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("settings mode = %o", info.Mode().Perm())
+	}
+	if _, err := os.Stat(settingsPathOverride + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temporary file remains: %v", err)
+	}
+}
+
+func TestEnvValueUsable(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		present bool
+		want    bool
+	}{
+		{"true", true, true},
+		{"", true, false},
+		{"", false, false},
+	} {
+		if got := envValueUsable(tc.value, tc.present); got != tc.want {
+			t.Fatalf("envValueUsable(%q, %v) = %v, want %v", tc.value, tc.present, got, tc.want)
+		}
+	}
+}
+
+func TestComputeLockSetTreatsEmptyAsUnset(t *testing.T) {
+	s := Settings{Vars: map[string]string{"PLAYBACK_DETECTION": "false"}, Extra: map[string]string{"MY_KNOB": "x"}}
+	got := computeLockSet([]string{"PLAYBACK_DETECTION=", "IPADDRESS=ah4c:7654", "TUNER1_IP=box:5555", "MY_KNOB="}, s)
+	if got["PLAYBACK_DETECTION"] || got["MY_KNOB"] {
+		t.Fatal("empty environment values must not lock settings")
+	}
+	if !got["IPADDRESS"] || !got["TUNER1_IP"] {
+		t.Fatal("non-empty catalog and tuner values must lock settings")
+	}
+}
+
+func TestSynthesizeTunerVars(t *testing.T) {
+	got := synthesizeTunerVars([]TunerSpec{{TunerIP: "box", EncoderURL: "http://enc", CMD: "ffmpeg", TEECMD: "tee"}})
+	want := map[string]string{"NUMBER_TUNERS": "1", "TUNER1_IP": "box", "ENCODER1_URL": "http://enc", "CMD1": "ffmpeg", "TEECMD1": "tee"}
+	for key, value := range want {
+		if got[key] != value {
+			t.Fatalf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+	if got := synthesizeTunerVars(nil)["NUMBER_TUNERS"]; got != "0" {
+		t.Fatalf("empty tuner list produced NUMBER_TUNERS=%q", got)
+	}
+}
+
+func TestMaterializePlanPrecedence(t *testing.T) {
+	s := Settings{
+		Vars:   map[string]string{"IPADDRESS": "json:7654", "PLAYBACK_DETECTION": "true"},
+		Tuners: []TunerSpec{{TunerIP: "json-box", EncoderURL: "http://json-enc"}},
+		Extra:  map[string]string{"MY_KNOB": "json"},
+	}
+	sets, locked := materializePlan([]string{"IPADDRESS=env:7654", "PLAYBACK_DETECTION=", "MY_KNOB=env", "TUNER1_IP=env-box"}, s)
+	if sets["IPADDRESS"] != "" || !locked["IPADDRESS"] {
+		t.Fatal("non-empty environment did not win")
+	}
+	if sets["PLAYBACK_DETECTION"] != "true" || locked["PLAYBACK_DETECTION"] {
+		t.Fatal("empty environment should be filled from settings")
+	}
+	if sets["TUNER1_IP"] != "" || !locked["TUNER1_IP"] {
+		t.Fatal("individual tuner environment value did not win")
+	}
+	if sets["NUMBER_TUNERS"] != "1" {
+		t.Fatalf("NUMBER_TUNERS = %q", sets["NUMBER_TUNERS"])
+	}
+}
+
+func TestMaterializeBootstrapPrecedence(t *testing.T) {
+	s := emptySettings()
+	s.Vars["SPEED_MODE"] = "true"
+	sets, locked, sources := materializeBootstrapPlan(
+		[]string{"PYATV=true", "UPDATE_M3US="}, s, true,
+		map[string]string{"SPEED_MODE": "false", "UPDATE_M3US": "false"},
+	)
+	if !locked["PYATV"] || sets["PYATV"] != "" {
+		t.Fatal("real environment must win and lock")
+	}
+	if sets["SPEED_MODE"] != "true" || sources["SPEED_MODE"] != "settings.json" {
+		t.Fatal("settings must win over ./env")
+	}
+	if sets["UPDATE_M3US"] != "false" || sources["UPDATE_M3US"] != "./env" {
+		t.Fatal("./env must win over the built-in default")
+	}
+	if sets["ENCODER_CODEC"] != "h264" || sources["ENCODER_CODEC"] != "built-in default" {
+		t.Fatal("built-in default was not materialized")
+	}
+}
+
+func TestLegacyTunerTopologyWinsWhenSettingsFileIsAbsent(t *testing.T) {
+	sets, _, sources := materializeBootstrapPlan(nil, emptySettings(), false, map[string]string{
+		"NUMBER_TUNERS": "1", "TUNER1_IP": "legacy-box", "ENCODER1_URL": "http://legacy-encoder",
+	})
+	if sets["NUMBER_TUNERS"] != "1" || sets["TUNER1_IP"] != "legacy-box" || sources["NUMBER_TUNERS"] != "./env" {
+		t.Fatalf("legacy tuner topology not preserved: %#v %#v", sets, sources)
+	}
+}
+
+func TestJSONTunerEmptyFieldBlocksLegacyFallback(t *testing.T) {
+	s := emptySettings()
+	s.Tuners = []TunerSpec{{TunerIP: "box", CMD: "capture"}}
+	sets, _, _ := materializeBootstrapPlan(nil, s, true, map[string]string{"ENCODER1_URL": "http://old-encoder"})
+	value, exists := sets["ENCODER1_URL"]
+	if !exists || value != "" {
+		t.Fatalf("empty JSON tuner field did not remain authoritative: %#v", sets)
+	}
+}
+
+func TestLockedNumberTunersIgnoresJSONTopology(t *testing.T) {
+	s := Settings{Tuners: []TunerSpec{{TunerIP: "json-box", EncoderURL: "http://json-enc"}}}
+	sets, locked := materializePlan([]string{"NUMBER_TUNERS=2"}, s)
+	if !locked["NUMBER_TUNERS"] {
+		t.Fatal("NUMBER_TUNERS should be locked")
+	}
+	if _, ok := sets["TUNER1_IP"]; ok {
+		t.Fatal("JSON tuner topology must be ignored when NUMBER_TUNERS is locked")
+	}
+}
+
+func TestShellExportsQuotesHostileValues(t *testing.T) {
+	out := shellExports(map[string]string{"SAFE": "a b'$(touch /tmp/nope)"}, map[string]bool{"IPADDRESS": true})
+	if !strings.Contains(out, "export SAFE='a b'\\''$(touch /tmp/nope)'") {
+		t.Fatalf("unexpected shell quoting: %s", out)
+	}
+	if !strings.Contains(out, "export AH4C_ENV_LOCKED='IPADDRESS'") {
+		t.Fatalf("missing lock export: %s", out)
+	}
+	for _, bad := range []map[string]string{{"bad-key": "x"}, {"SAFE": "one\ntwo"}} {
+		out = shellExports(bad, nil)
+		if strings.Contains(out, "export SAFE=") || !strings.Contains(out, "AH4C_ENV_LOCKED=''") {
+			t.Fatalf("bad export was not rejected: %s", out)
+		}
+	}
+}
+
+func TestConfigComplete(t *testing.T) {
+	values := map[string]string{"STREAMER_APP": "scripts/firetv/hulu", "NUMBER_TUNERS": "0"}
+	if !configComplete(func(key string) string { return values[key] }) {
+		t.Fatal("zero-tuner configuration with a selected script was rejected")
+	}
+	values["STREAMER_APP"] = ""
+	if !configComplete(func(key string) string { return values[key] }) {
+		t.Fatal("configuration without streamer app was rejected")
+	}
+	values["STREAMER_APP"] = "hulu"
+	if configComplete(func(key string) string { return values[key] }) {
+		t.Fatal("configuration with an invalid streamer path was accepted")
+	}
+}
+
+func TestStreamerTuneReadyRequiresValidSelection(t *testing.T) {
+	values := map[string]string{}
+	lookup := func(key string) string { return values[key] }
+	if streamerTuneReady(lookup) {
+		t.Fatal("tuning was ready without a streamer script")
+	}
+	values["STREAMER_APP"] = "hulu"
+	if streamerTuneReady(lookup) {
+		t.Fatal("tuning was ready with an invalid streamer path")
+	}
+	values["STREAMER_APP"] = "scripts/firetv/hulu"
+	if !streamerTuneReady(lookup) {
+		t.Fatal("tuning was not ready with a valid streamer path")
+	}
+}
+
+func TestTunerCountDegradesMissingConfigurationToZero(t *testing.T) {
+	if got, err := tunerCount(""); err != nil || got != 0 {
+		t.Fatalf("missing count = %d, %v", got, err)
+	}
+	for _, value := range []string{"nope", "-1"} {
+		if got, err := tunerCount(value); err == nil || got != 0 {
+			t.Fatalf("invalid count %q = %d, %v", value, got, err)
+		}
+	}
+}
+
+func TestBoolCompatibility(t *testing.T) {
+	for _, value := range []string{"true", "TRUE", "1"} {
+		if !envBoolTrueOrOne(value) {
+			t.Fatalf("%q should enable a boolean", value)
+		}
+	}
+	for _, value := range []string{"false", "0", "yes", ""} {
+		if envBoolTrueOrOne(value) {
+			t.Fatalf("%q should not enable a boolean", value)
+		}
+	}
+}
+
+func TestValidateSettingsSchemaRejectsUnsafeKeysAndValues(t *testing.T) {
+	for _, settings := range []Settings{
+		{Version: 1, Vars: map[string]string{"NOT_CATALOGED": "x"}},
+		{Version: 1, Extra: map[string]string{"bad-key": "x"}},
+		{Version: 1, Extra: map[string]string{"CMD1": "x"}},
+		{Version: 1, Extra: map[string]string{"SAFE_KEY": "one\ntwo"}},
+		{Version: 1, Tuners: []TunerSpec{{CMD: "one\ntwo"}}},
+	} {
+		if err := validateSettingsSchema(normalizeSettings(settings)); err == nil {
+			t.Fatalf("unsafe settings were accepted: %#v", settings)
+		}
+	}
+}

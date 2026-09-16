@@ -9,7 +9,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -1513,25 +1512,7 @@ func tailLines(s string, n int) string {
 // image. Downloading several hundred megabytes into somewhere that evaporates
 // is a miserable way to find that out, so it is checked and said out loud.
 func captionDirPersistent() (bool, string) {
-	abs, err := filepath.Abs(captionDir)
-	if err != nil {
-		return true, ""
-	}
-	f, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		// Not a Linux container; nothing to warn about.
-		return true, ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		// The mount point is the fifth field.
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 5 && fields[4] == abs {
-			return true, ""
-		}
-	}
-	return false, abs
+	return mountPointPersistent(captionDir)
 }
 
 // renderNodes lists the graphics devices visible inside the container.
