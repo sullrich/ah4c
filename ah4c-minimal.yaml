@@ -12,9 +12,8 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654
 
-    environment:
-      - AH4C_HOST_DIR_CONFIGURED=${HOST_DIR:+true} # Internal safety check: blank means HOST_DIR was not set.
-    # NVIDIA users: uncomment the NVIDIA values in ah4c-minimal.env and these lines.
+    # NVIDIA users: uncomment the NVIDIA values in ah4c-minimal.env and this block.
+    # environment:
     #   - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
     #   - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES}
 

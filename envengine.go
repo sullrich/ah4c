@@ -758,16 +758,7 @@ func missingRequiredPersistentMounts() []persistentMountRequirement {
 	if !runningInContainer() {
 		return nil
 	}
-	requirements := requiredPersistentMounts()
-	if hostDirMarkerMissing() {
-		return requirements
-	}
-	return filterMissingPersistentMounts(requirements, requiredMountPersistent)
-}
-
-func hostDirMarkerMissing() bool {
-	value, present := os.LookupEnv("AH4C_HOST_DIR_CONFIGURED")
-	return present && !strings.EqualFold(strings.TrimSpace(value), "true")
+	return filterMissingPersistentMounts(requiredPersistentMounts(), requiredMountPersistent)
 }
 
 func configDirPersistent() (bool, string) {

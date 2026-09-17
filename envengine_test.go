@@ -76,17 +76,6 @@ func TestMountPointDetailsReadsBindSourceRoot(t *testing.T) {
 	}
 }
 
-func TestHostDirMarkerOnlyBlocksWhenExplicitlyEmpty(t *testing.T) {
-	t.Setenv("AH4C_HOST_DIR_CONFIGURED", "")
-	if !hostDirMarkerMissing() {
-		t.Fatal("empty HOST_DIR marker was accepted")
-	}
-	t.Setenv("AH4C_HOST_DIR_CONFIGURED", "true")
-	if hostDirMarkerMissing() {
-		t.Fatal("configured HOST_DIR marker was rejected")
-	}
-}
-
 func TestEnvValueUsable(t *testing.T) {
 	for _, tc := range []struct {
 		value   string
