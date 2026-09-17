@@ -135,6 +135,27 @@
                 <div id="section-playback" class="settings-grid"></div>
             </section>
 
+            <section class="card settings-section" data-section="preroll">
+                <div class="card-title settings-section-title"><span>Pre-roll file</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <p class="section-help">Upload an image or video to show while a stream is getting ready. The file is saved in the mounted pre-roll folder so it survives container updates. Uploading or deleting a file requires a restart.</p>
+                <div class="preroll-manager">
+                    <div class="setting-field">
+                        <div class="setting-label"><label>Current file</label></div>
+                        <div id="preroll-current" class="preroll-current">Checking…</div>
+                        <div id="preroll-message" class="setting-description"></div>
+                    </div>
+                    <div class="setting-field preroll-picker">
+                        <div class="setting-label"><label>Choose a new file</label></div>
+                        <input id="preroll-file" type="file" accept="image/*,video/*,.ts,.m2ts">
+                    </div>
+                    <div class="btn-row preroll-actions">
+                        <button id="upload-preroll" class="btn btn-primary btn-sm" type="button">Upload file</button>
+                        <button id="delete-preroll" class="btn btn-danger btn-sm" type="button">Delete file</button>
+                        <span id="preroll-status" class="muted"></span>
+                    </div>
+                </div>
+            </section>
+
             <section class="card settings-section" data-section="alerts">
                 <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <div id="section-alerts" class="settings-grid"></div>
@@ -290,6 +311,7 @@ let remoteStreamerChoices = [];
 let wizard = false;
 let wizardStep = 0;
 let localScriptDirectory = null;
+let prerollState = null;
 let appleTVPairSession = '';
 let appleTVPairCard = null;
 let appleTVPairAbort = null;
@@ -302,8 +324,101 @@ async function loadSettings() {
     const response = await fetch('/api/config');
     state = await response.json();
     wizard = !state.wizardDisabled && (new URLSearchParams(location.search).get('wizard') === '1' || state.wizard);
-    await loadStreamers(false);
+    await Promise.all([loadStreamers(false), loadPreroll()]);
     render();
+}
+
+async function loadPreroll() {
+    const status = byId('preroll-status');
+    try {
+        const response = await fetch('/api/config/preroll');
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Could not read the pre-roll folder');
+        prerollState = payload;
+        renderPreroll();
+    } catch (error) {
+        prerollState = null;
+        status.textContent = error.message;
+        renderPreroll();
+    }
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / Math.pow(1024, unit)).toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+function renderPreroll() {
+    const current = byId('preroll-current');
+    const message = byId('preroll-message');
+    const picker = byId('preroll-file');
+    const upload = byId('upload-preroll');
+    const remove = byId('delete-preroll');
+    if (!prerollState) {
+        current.textContent = 'Unavailable';
+        picker.disabled = true;
+        upload.disabled = true;
+        remove.disabled = true;
+        return;
+    }
+    current.textContent = prerollState.present ? `${prerollState.name} · ${formatFileSize(prerollState.size)}` : 'No pre-roll file';
+    message.textContent = prerollState.message || (prerollState.restartNeeded ? 'Restart ah4c to apply this change.' : 'Images and videos are prepared when ah4c starts.');
+    picker.disabled = !prerollState.managed;
+    upload.disabled = !prerollState.managed || !picker.files.length;
+    remove.disabled = !prerollState.managed || !prerollState.present;
+}
+
+function applyPrerollRestartState() {
+    if (!prerollState?.restartNeeded || !state) return;
+    state.restartNeeded = true;
+    state.restartRequired = [...new Set([...(state.restartRequired || []), 'pre-roll'])];
+    updateRestartUI();
+}
+
+async function uploadPreroll() {
+    const file = byId('preroll-file').files[0];
+    if (!file) return;
+    const status = byId('preroll-status');
+    const button = byId('upload-preroll');
+    button.disabled = true;
+    status.textContent = 'Uploading…';
+    const form = new FormData();
+    form.append('file', file);
+    try {
+        const response = await fetch('/api/config/preroll', {method:'POST', body:form});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Upload failed');
+        prerollState = payload;
+        byId('preroll-file').value = '';
+        status.textContent = 'Uploaded. Restart to use it.';
+        renderPreroll();
+        applyPrerollRestartState();
+    } catch (error) {
+        status.textContent = error.message;
+        renderPreroll();
+    }
+}
+
+async function deletePreroll() {
+    if (!prerollState?.present || !confirm(`Delete ${prerollState.name}?`)) return;
+    const status = byId('preroll-status');
+    const button = byId('delete-preroll');
+    button.disabled = true;
+    status.textContent = 'Deleting…';
+    try {
+        const response = await fetch('/api/config/preroll', {method:'DELETE'});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Delete failed');
+        prerollState = payload;
+        status.textContent = 'Deleted. Restart to apply.';
+        renderPreroll();
+        applyPrerollRestartState();
+    } catch (error) {
+        status.textContent = error.message;
+        renderPreroll();
+    }
 }
 
 async function loadStreamers(remote) {
@@ -367,7 +482,7 @@ async function browseLocalScripts(path = '') {
 }
 
 async function checkLocalScripts() {
-    await loadStreamers(false);
+    await Promise.all([loadStreamers(false), loadPreroll()]);
     if (!await browseLocalScripts()) return;
     const count = localStreamerChoices.length;
     byId('streamer-query-status').textContent = count === 1 ? 'Found 1 complete local script choice.' : `Found ${count} complete local script choices.`;
@@ -1200,7 +1315,7 @@ function readableList(items) {
 }
 
 function restartReasonLabels() {
-    const special = {tuners:'Tuner changes'};
+    const special = {tuners:'Tuner changes', 'pre-roll':'Pre-roll file'};
     return (state.restartRequired || []).map(key => special[key] || state.catalog.find(spec => spec.key === key)?.label || key);
 }
 
@@ -1402,6 +1517,9 @@ document.addEventListener('keydown', event => {
     if (byId('tuner-preview-modal').classList.contains('open')) closeTunerPreview();
 });
 window.addEventListener('pagehide', stopTunerPreview);
+byId('preroll-file').addEventListener('change', renderPreroll);
+byId('upload-preroll').addEventListener('click', uploadPreroll);
+byId('delete-preroll').addEventListener('click', deletePreroll);
 byId('add-extra').addEventListener('click', () => addExtraRow());
 async function handleSaveClick() {
     const saveButtons = [...document.querySelectorAll('[data-save-settings]')];

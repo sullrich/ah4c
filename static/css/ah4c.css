@@ -452,6 +452,11 @@ select:focus {
 .setting-field input:disabled, .setting-field select:disabled, .tuner-card input:disabled { cursor: not-allowed; background-color: var(--surface-hover); color: var(--text-muted); }
 .config-lock { color: var(--warning); border-color: rgba(217,165,74,.35); margin-left: auto; }
 .custom-streamer { margin-top: 0.4rem; }
+.preroll-manager { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem 1rem; margin-top: .75rem; }
+.preroll-current { min-height: 35px; padding: .45rem .65rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--mono); font-size: .8rem; }
+.preroll-picker input[type="file"] { width: 100%; padding: .42rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: .76rem; }
+.preroll-picker input[type="file"]::file-selector-button { margin-right: .6rem; padding: .3rem .55rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+.preroll-actions { grid-column: 1 / -1; margin-top: 0; }
 .config-notice { display: flex; align-items: center; gap: 0.8rem; justify-content: space-between; padding: 0.7rem 0.9rem; border: 1px solid var(--info); border-radius: var(--radius); margin-bottom: 0.9rem; background: var(--surface); }
 .config-notice--warning { border-color: var(--warning); }
 .config-notice--danger { border-color: var(--danger); color: var(--danger); }
@@ -501,6 +506,7 @@ details.card > summary::-webkit-details-marker { display: none; }
   .extra-row { grid-template-columns: 1fr; }
   .settings-actions { flex-wrap: wrap; }
   #save-status { flex-basis: 100%; }
+  .preroll-manager { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
