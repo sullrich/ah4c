@@ -606,7 +606,7 @@ details.card > summary::-webkit-details-marker { display: none; }
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 0.5rem;
-  align-items: end;
+  align-items: start;
   margin-bottom: 0.8rem;
 }
 
@@ -631,6 +631,7 @@ details.card > summary::-webkit-details-marker { display: none; }
   align-items: center;
   justify-content: center;
   height: 33px;
+  margin-top: 1.3rem;
   color: var(--text-faint);
   font-size: 0.9rem;
 }

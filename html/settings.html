@@ -66,20 +66,20 @@
             </section>
 
             <section class="card settings-section" data-section="streamer">
-                <div class="card-title">Streaming app</div>
-                <p class="section-help"><strong>Optional during initial setup:</strong> Choose the streaming service and type of device you want ah4c to control. This choice tells ah4c how to open the right app, switch to the requested channel, and stop playback when finished.</p>
+                <div class="card-title">Streaming app scripts</div>
+                <p class="section-help"><strong>Optional during initial setup:</strong> ah4c uses a small set of scripts to open your streaming app, switch to the requested channel, and stop playback when finished. You do not need to read or edit them. The official choices come from the <a href="https://github.com/sullrich/ah4c/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts folder in sullrich/ah4c on GitHub</a>.</p>
                 <div class="btn-row compact-row">
-                    <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Choose from this server</button>
-                    <button id="query-streamers" class="btn btn-sm" type="button">Find choices online</button>
+                    <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Browse local scripts</button>
+                    <button id="query-streamers" class="btn btn-sm" type="button">Check GitHub for scripts</button>
                     <span id="streamer-query-status" class="muted"></span>
                 </div>
-                <p class="setting-description">The first button shows choices already installed on this server. The second refreshes the online list. It does not download every choice.</p>
+                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. <strong>Check GitHub for scripts</strong> reads only the available folder names; it does not download every script. ah4c downloads only the choice you select, and a GitHub outage never prevents it from using a complete stored copy.</p>
                 <div id="section-streamer" class="settings-grid"></div>
                 <div id="local-script-browser" class="local-script-browser hidden">
                     <div class="local-script-browser-head">
                         <div>
-                            <strong>Choices on this server</strong>
-                            <div id="local-script-path" class="muted">Installed choices</div>
+                            <strong>Local scripts on this server</strong>
+                            <div id="local-script-path" class="muted">Scripts folder</div>
                         </div>
                         <button id="close-local-scripts" class="btn btn-sm" type="button">Close</button>
                     </div>
@@ -364,7 +364,7 @@ async function deletePreroll() {
 async function loadStreamers(remote) {
     const status = byId('streamer-query-status');
     const typedChoice = selectedStreamerPath();
-    if (status && remote) status.textContent = 'Checking for available choices…';
+    if (status && remote) status.textContent = 'Checking sullrich/ah4c on GitHub for scripts…';
     try {
         const query = new URLSearchParams({details:'true'});
         if (remote) query.set('remote', 'true');
@@ -373,12 +373,12 @@ async function loadStreamers(remote) {
         if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
         if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
         if (!response.ok) {
-            if (status) status.textContent = 'The online list is unavailable right now. Showing choices already stored on this server.';
+            if (status) status.textContent = 'GitHub is unavailable right now. Showing local and previously saved scripts.';
             const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
             if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
             return;
         }
-        if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} available choices. Nothing was downloaded.`;
+        if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`;
         const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
         if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
     } catch (error) {
@@ -390,13 +390,13 @@ async function browseLocalScripts(path = '') {
     const browser = byId('local-script-browser');
     const list = byId('local-script-list');
     browser.classList.remove('hidden');
-    list.innerHTML = '<div class="muted">Reading the controls stored on this server…</div>';
+    list.innerHTML = '<div class="muted">Reading the local scripts folder…</div>';
     try {
         const response = await fetch('/api/config/local-scripts?path=' + encodeURIComponent(path));
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Could not read the controls stored on this server');
+        if (!response.ok) throw new Error(payload.error || 'Could not read the local scripts folder');
         localScriptDirectory = payload;
-        byId('local-script-path').textContent = payload.path ? `Installed choices / ${payload.path}` : 'Installed choices';
+        byId('local-script-path').textContent = payload.path ? `Scripts folder / ${payload.path}` : 'Scripts folder';
         byId('local-script-up').classList.toggle('hidden', !payload.path);
         byId('use-local-script').classList.toggle('hidden', !payload.selectable);
         byId('use-local-script').disabled = state.catalog.find(item => item.key === 'STREAMER_APP')?.locked;
@@ -425,7 +425,7 @@ async function checkLocalScripts() {
     await loadStreamers(false);
     if (!await browseLocalScripts()) return;
     const count = localStreamerChoices.length;
-    byId('streamer-query-status').textContent = count === 1 ? 'Found 1 ready choice on this server.' : `Found ${count} ready choices on this server.`;
+    byId('streamer-query-status').textContent = count === 1 ? 'Found 1 complete local script choice.' : `Found ${count} complete local script choices.`;
 }
 
 async function uploadLocalScripts() {
@@ -540,7 +540,7 @@ function renderFieldInto(spec, target, replace = false) {
         const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Choose your streaming app…</option>${localOptions ? `<optgroup label="Installed on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="Available online">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Choose scripts for your streaming app…</option>${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -562,7 +562,7 @@ function renderFieldInto(spec, target, replace = false) {
             if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
             if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
-            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'Online version selected. ah4c will download this choice when it starts and check for updates on future starts.';
+            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
         });
     }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
@@ -600,10 +600,11 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     });
     card.querySelector('[data-pair-apple-tv]').addEventListener('click', () => openAppleTVPairing(card));
     card.querySelectorAll('[data-tuner]').forEach(input => input.addEventListener('input', () => {
-        validateTunerCard(card);
+        input.classList.remove('input-invalid');
+        const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
+        if (output) output.textContent = '';
         updateTunerDeviceLabels();
     }));
-    validateTunerCard(card);
     return card;
 }
 
@@ -953,6 +954,15 @@ async function checkConnections() {
     const summary = byId('connection-check-status');
     if (!cards.length) {
         summary.textContent = 'Add a tuner first.';
+        return false;
+    }
+    let firstInvalid = null;
+    cards.forEach(card => {
+        if (!validateTunerCard(card) && !firstInvalid) firstInvalid = card;
+    });
+    if (firstInvalid) {
+        summary.textContent = 'Fix the highlighted address before checking connections.';
+        firstInvalid.querySelector('.input-invalid')?.focus();
         return false;
     }
     button.disabled = true;
