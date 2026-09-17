@@ -263,7 +263,7 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'
 async function loadSettings() {
     const response = await fetch('/api/config');
     state = await response.json();
-    wizard = new URLSearchParams(location.search).get('wizard') === '1' || state.wizard;
+    wizard = !state.wizardDisabled && (new URLSearchParams(location.search).get('wizard') === '1' || state.wizard);
     await Promise.all([loadStreamers(false), loadPreroll()]);
     render();
 }

@@ -771,7 +771,7 @@ func configResponse() gin.H {
 	return gin.H{
 		"persistent": persistent, "persistWarning": warning, "dockerManaged": dockerManaged,
 		"missingPersistentMounts": persistentMountResponse(missingMounts),
-		"restartNeeded":           configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "catalog": catalog,
+		"restartNeeded":           configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "wizardDisabled": setupWizardDisabled(os.Getenv), "catalog": catalog,
 		"tuners": tunerResponse(s, locked), "extra": s.Extra, "extraLocked": extraLocked, "host": host,
 	}
 }
@@ -1195,7 +1195,15 @@ func restartTuneConflict() ([]int, bool) {
 }
 
 func setupWizardNeeded() bool {
-	return !environmentSetupReady(os.Getenv)
+	return setupWizardNeededFor(os.Getenv)
+}
+
+func setupWizardNeededFor(lookup func(string) string) bool {
+	return !setupWizardDisabled(lookup) && !environmentSetupReady(lookup)
+}
+
+func setupWizardDisabled(lookup func(string) string) bool {
+	return strings.EqualFold(strings.TrimSpace(lookup("SETUP_WIZARD")), "false")
 }
 
 func environmentSetupReady(lookup func(string) string) bool {

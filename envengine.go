@@ -94,6 +94,7 @@ var varCatalog = []VarSpec{
 var environmentOnlyKeys = map[string]bool{
 	"ALLOW_DEBUG_VIDEO_PREVIEW": true,
 	"CC_WATCHDOG":               true,
+	"SETUP_WIZARD":              true,
 }
 
 var hostCatalog = []VarSpec{
