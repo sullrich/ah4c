@@ -634,6 +634,18 @@ details.card > summary::-webkit-details-marker { display: none; }
 
 .pair .field { margin-bottom: 0; }
 
+.pair .field label.connection-label { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.connection-state { display: inline-flex; align-items: center; gap: .3rem; color: var(--text-faint); font-size: .66rem; font-weight: 500; white-space: nowrap; }
+.connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+.connection-state--ready .connection-dot { background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+.connection-state--checking { color: var(--accent); }
+.connection-state--checking .connection-dot { background: var(--accent); }
+.connection-state--authorize, .connection-state--pair { color: var(--warning); }
+.connection-state--authorize .connection-dot, .connection-state--pair .connection-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--accent-soft); }
+.connection-state--error .connection-dot { background: var(--danger); }
+.connection-message { margin-top: .25rem; color: var(--text-muted); font-size: .68rem; line-height: 1.35; }
+.connection-message:empty { display: none; }
+
 .pair-link {
   display: flex;
   align-items: center;
@@ -1141,6 +1153,43 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   border-radius: var(--radius-sm);
   line-height: 1.5;
 }
+.apple-tv-pair-modal { width: min(520px, 100%); }
+.restart-prompt-modal { width: min(500px, 100%); }
+.restart-prompt-modal p { color: var(--text-muted); line-height: 1.55; }
+.restart-tune-warning {
+  margin: .8rem 0;
+  padding: .7rem .8rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(224, 108, 94, 0.45);
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+}
+.apple-tv-pair-modal .card-title { margin-bottom: .15rem; }
+.apple-tv-pair-modal p { color: var(--text-muted); line-height: 1.55; }
+.pairing-ready {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .65rem .75rem;
+  color: var(--live);
+  background: var(--live-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.pairing-ready .connection-dot { background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+.apple-tv-pin-field { margin: 1rem 0 0; }
+.apple-tv-pin-field input {
+  width: 10rem;
+  max-width: 100%;
+  font-family: var(--mono);
+  font-size: 1.45rem;
+  letter-spacing: .45rem;
+  text-align: center;
+}
+.pairing-status { min-height: 1.4rem; margin-top: .8rem; }
+.apple-tv-pair-actions { margin-top: .6rem; }
+
 .remote {
   display: flex;
   gap: 1.5rem;

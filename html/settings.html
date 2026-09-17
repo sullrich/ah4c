@@ -6,6 +6,7 @@
     <title>Settings — AH4C</title>
     <link rel="stylesheet" href="/static/css/ah4c.css">
     <script src="/static/js/theme.js"></script>
+    <script defer src="https://unpkg.com/mpegts.js/dist/mpegts.js"></script>
 </head>
 <body>
     <div class="pagebar">
@@ -117,12 +118,15 @@
                 <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
+                <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
                 <p id="tuner-lock-hint" class="section-help hidden">Environment-owned tuner numbers remain fixed. Other tuner numbers can still be managed here.</p>
                 <div id="no-tuners-hint" class="empty-state hidden"><strong>No tuners are configured.</strong> ah4c can start this way. Add one now, or return to Settings from the main navigation when you have the details.</div>
                 <div id="tuners" class="tuner-grid"></div>
                 <div class="btn-row">
                     <button id="add-tuner" class="btn" type="button">Add tuner</button>
                     <button id="edit-tuner-order" class="btn" type="button">Edit tuner order</button>
+                    <button id="check-connections" class="btn" type="button">Check connections</button>
+                    <span id="connection-check-status" class="muted"></span>
                 </div>
             </section>
 
@@ -181,6 +185,32 @@
         </div>
     </div>
 
+    <div id="apple-tv-pair-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="apple-tv-pair-title">
+        <div class="modal apple-tv-pair-modal">
+            <div class="modal-head">
+                <div>
+                    <div id="apple-tv-pair-title" class="card-title">Pair Apple TV</div>
+                    <div id="apple-tv-pair-target" class="muted"></div>
+                </div>
+                <button id="apple-tv-pair-close" class="btn btn-sm modal-close" type="button" aria-label="Close Apple TV pairing">Close</button>
+            </div>
+            <div id="apple-tv-pin-panel" class="hidden">
+                <div class="pairing-ready"><span class="connection-dot"></span><strong>Look at your Apple TV</strong></div>
+                <p>A four-digit PIN should be visible on the television. Enter all four numbers below.</p>
+                <div class="field apple-tv-pin-field">
+                    <label for="apple-tv-pin">PIN shown on Apple TV</label>
+                    <input id="apple-tv-pin" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="4" pattern="[0-9]{4}" placeholder="0000">
+                    <div id="apple-tv-pin-error" class="field-validation" aria-live="polite"></div>
+                </div>
+            </div>
+            <div id="apple-tv-pair-status" class="pairing-status muted" aria-live="polite"></div>
+            <div class="btn-row apple-tv-pair-actions">
+                <button id="apple-tv-pair-submit" class="btn btn-primary hidden" type="button">Finish pairing</button>
+                <button id="apple-tv-pair-cancel" class="btn" type="button">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <div id="tuner-order-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="tuner-order-title">
         <div class="modal tuner-order-modal">
             <div class="modal-head">
@@ -200,6 +230,42 @@
         </div>
     </div>
 
+    <div id="tuner-preview-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="tuner-preview-title">
+        <div class="modal">
+            <div class="modal-head">
+                <span id="tuner-preview-number" class="tuner-number"></span>
+                <h3 id="tuner-preview-title">Tuner preview</h3>
+                <button id="tuner-preview-close" class="btn btn-sm modal-close" type="button">Close</button>
+            </div>
+            <video id="tuner-preview-video" class="hidden" controls muted></video>
+            <div id="tuner-preview-start" class="preview-start hidden">
+                <button id="tuner-preview-retry" class="btn btn-primary" type="button">Retry preview</button>
+            </div>
+            <p id="tuner-preview-hint" class="modal-hint"></p>
+            <div class="remote">
+                <div class="remote-dpad">
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="up" type="button" title="Up"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg></button>
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="left" type="button" title="Left"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 6 8 12 14 18"/></svg></button>
+                    <button class="btn dpad-center" data-tuner-preview-action="select" type="button" title="Select">OK</button>
+                    <button class="btn" data-tuner-preview-action="right" type="button" title="Right"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 6 16 12 10 18"/></svg></button>
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="down" type="button" title="Down"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 10 12 16 18 10"/></svg></button>
+                    <span></span>
+                </div>
+                <div class="remote-keys">
+                    <button class="btn btn-sm" data-tuner-preview-action="back" type="button">Back</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="home" type="button">Home</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="play" type="button">Play / Pause</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="wake" type="button">Wake</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="sleep" type="button">Sleep</button>
+                    <button class="btn btn-danger btn-sm" data-tuner-preview-action="reboot" type="button">Reboot</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 <script>
 const sectionKeys = {
     proxy: ['IPADDRESS', 'CHANNELSIP', 'TZ'],
@@ -211,11 +277,22 @@ const sectionKeys = {
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT']
 };
 let state = null;
+let tunerPreviewPlayer = null;
+let tunerPreviewNumber = null;
+let tunerPreviewStallTimer = null;
+let tunerPreviewRestartTimer = null;
+let tunerPreviewLastFrames = 0;
+let tunerPreviewStallTicks = 0;
+let tunerPreviewDeadline = 0;
+const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
 let wizard = false;
 let wizardStep = 0;
 let localScriptDirectory = null;
+let appleTVPairSession = '';
+let appleTVPairCard = null;
+let appleTVPairAbort = null;
 let tunerOrderCards = [];
 
 const byId = id => document.getElementById(id);
@@ -442,6 +519,7 @@ function renderTuners() {
     target.innerHTML = '';
     state.tuners.list.forEach((tuner, index) => target.appendChild(tunerCard(tuner, index)));
     const topologyLocked = Boolean(state.tuners.countLocked || state.tuners.topologyLocked);
+    byId('check-connections').disabled = state.tuners.list.length === 0;
     byId('no-tuners-hint').classList.toggle('hidden', state.tuners.list.length !== 0);
     byId('tuner-lock-hint').classList.toggle('hidden', !topologyLocked);
     byId('tuner-lock-hint').textContent = state.tuners.countLocked
@@ -458,8 +536,8 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const number = Number.isInteger(tuner.number) ? tuner.number : index;
     card.dataset.tunerNumber = String(number);
     if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
-        <div class="pair"><div class="field"><label data-device-label>Tuner IP <span class="muted">(device)</span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label>Encoder URL</label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
+        <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
@@ -469,7 +547,10 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         renumberTuners();
         const empty = byId('tuners').children.length === 0;
         byId('no-tuners-hint').classList.toggle('hidden', !empty);
+        byId('check-connections').disabled = empty;
     });
+    card.querySelector('[data-tuner-preview]').addEventListener('click', () => openTunerPreview(card));
+    card.querySelector('[data-pair-apple-tv]').addEventListener('click', () => openAppleTVPairing(card));
     card.querySelectorAll('[data-tuner]').forEach(input => input.addEventListener('input', () => {
         input.classList.remove('input-invalid');
         const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
@@ -514,8 +595,13 @@ function updateTunerDeviceLabels() {
     document.querySelectorAll('.tuner-card').forEach(card => {
         const label = card.querySelector('[data-device-label]');
         const input = card.querySelector('[data-tuner="tunerIP"]');
+        const pairButton = card.querySelector('[data-pair-apple-tv]');
         if (label) label.innerHTML = pyatv ? 'Apple TV address' : 'Tuner IP <span class="muted">(device)</span>';
         if (input) input.placeholder = pyatv ? '192.168.1.25' : 'hostname:5555';
+        if (pairButton) {
+            pairButton.classList.toggle('hidden', !pyatv);
+            pairButton.disabled = !input?.value.trim();
+        }
     });
 }
 
@@ -610,6 +696,134 @@ function applyTunerOrderPopover() {
 function closeTunerOrderEditor() {
     byId('tuner-order-modal').classList.remove('open');
     tunerOrderCards = [];
+}
+
+function openTunerPreview(card) {
+    tunerPreviewNumber = tunerNumber(card);
+    byId('tuner-preview-number').textContent = tunerPreviewNumber;
+    byId('tuner-preview-title').textContent = `Tuner ${tunerPreviewNumber} preview`;
+    byId('tuner-preview-modal').classList.add('open');
+    startTunerPreviewClicked();
+}
+
+function startTunerPreviewClicked() {
+    if (tunerPreviewNumber === null) return;
+    tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+    byId('tuner-preview-start').classList.add('hidden');
+    byId('tuner-preview-video').classList.remove('hidden');
+    startTunerPreview();
+}
+
+function startTunerPreview() {
+    stopTunerPreview();
+    const video = byId('tuner-preview-video');
+    const retry = byId('tuner-preview-start');
+    const hint = byId('tuner-preview-hint');
+    hint.textContent = 'Loading the encoder output from the currently running configuration…';
+    if (!window.mpegts || !mpegts.isSupported()) {
+        video.classList.add('hidden');
+        retry.classList.remove('hidden');
+        hint.textContent = 'This browser cannot display the tuner preview.';
+        return;
+    }
+    tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
+    tunerPreviewPlayer.attachMediaElement(video);
+    video.addEventListener('loadedmetadata', () => {
+        video.currentTime = video.duration;
+        hint.textContent = 'Showing the encoder output from the currently running configuration.';
+    }, {once:true});
+    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
+    tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
+    tunerPreviewPlayer.load();
+    tunerPreviewPlayer.play().catch(() => {});
+    startTunerPreviewWatchdog();
+}
+
+function stopTunerPreview() {
+    stopTunerPreviewWatchdog();
+    if (tunerPreviewPlayer) {
+        tunerPreviewPlayer.destroy();
+        tunerPreviewPlayer = null;
+    }
+}
+
+function startTunerPreviewWatchdog() {
+    tunerPreviewLastFrames = 0;
+    tunerPreviewStallTicks = 0;
+    tunerPreviewStallTimer = window.setInterval(() => {
+        if (!tunerPreviewPlayer || tunerPreviewNumber === null) return;
+        const video = byId('tuner-preview-video');
+        if (video.paused && !video.ended) {
+            tunerPreviewStallTicks = 0;
+            return;
+        }
+        const frames = tunerPreviewPlayer.statisticsInfo?.decodedFrames || 0;
+        if (frames === tunerPreviewLastFrames) {
+            tunerPreviewStallTicks++;
+            if (tunerPreviewStallTicks >= 3) {
+                restartTunerPreview();
+                return;
+            }
+        } else {
+            tunerPreviewStallTicks = 0;
+            tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+            byId('tuner-preview-hint').textContent = 'Showing the encoder output from the currently running configuration.';
+        }
+        tunerPreviewLastFrames = frames;
+    }, 2000);
+}
+
+function stopTunerPreviewWatchdog() {
+    if (tunerPreviewStallTimer) {
+        window.clearInterval(tunerPreviewStallTimer);
+        tunerPreviewStallTimer = null;
+    }
+    if (tunerPreviewRestartTimer) {
+        window.clearTimeout(tunerPreviewRestartTimer);
+        tunerPreviewRestartTimer = null;
+    }
+}
+
+function restartTunerPreviewSoon() {
+    if (tunerPreviewRestartTimer) return;
+    tunerPreviewRestartTimer = window.setTimeout(() => {
+        tunerPreviewRestartTimer = null;
+        restartTunerPreview();
+    }, 2000);
+}
+
+function restartTunerPreview() {
+    if (tunerPreviewNumber === null || document.hidden) return;
+    if (Date.now() > tunerPreviewDeadline) {
+        stopTunerPreview();
+        tunerPreviewDeadline = 0;
+        byId('tuner-preview-video').classList.add('hidden');
+        byId('tuner-preview-start').classList.remove('hidden');
+        byId('tuner-preview-hint').textContent = 'No video from the encoder. If the device was asleep, give it a moment and retry.';
+        return;
+    }
+    byId('tuner-preview-hint').textContent = 'Waiting for video from the encoder…';
+    startTunerPreview();
+}
+
+function closeTunerPreview() {
+    stopTunerPreview();
+    tunerPreviewDeadline = 0;
+    tunerPreviewNumber = null;
+    byId('tuner-preview-modal').classList.remove('open');
+}
+
+async function sendTunerPreviewKey(action) {
+    if (tunerPreviewNumber === null) return;
+    if (action === 'reboot' && !window.confirm('Reboot this device?')) return;
+    if (tunerPreviewDeadline) tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+    const hint = byId('tuner-preview-hint');
+    try {
+        const response = await fetch(`/api/tuner/${tunerPreviewNumber}/control/${action}`, {method:'POST'});
+        if (!response.ok) throw new Error();
+    } catch (_) {
+        hint.textContent = 'Control failed. This device may not be reachable over ADB.';
+    }
 }
 
 function selectedStreamerPath(root = document) {
@@ -755,6 +969,156 @@ function validateSettingsForm(section = '') {
     status.textContent = firstInvalid ? 'Fix the highlighted field before continuing.' : '';
     if (firstInvalid) firstInvalid.querySelector('input, select')?.focus();
     return !firstInvalid;
+}
+
+function setConnectionState(card, kind, stateName, message = '') {
+    const stateElement = card.querySelector(`[data-connection-state="${kind}"]`);
+    const messageElement = card.querySelector(`[data-connection-message="${kind}"]`);
+    const labels = {ready:'Ready', checking:'Checking…', authorize:'Approve on device', pair:'Pair first', error:'Check failed', empty:'Not configured', skipped:'Not checked'};
+    stateElement.className = `connection-state connection-state--${stateName}`;
+    stateElement.querySelector('span:last-child').textContent = labels[stateName] || 'Not checked';
+    stateElement.title = message;
+    messageElement.textContent = message;
+    if (kind === 'device') {
+        const pairButton = card.querySelector('[data-pair-apple-tv]');
+        if (pairButton) {
+            pairButton.disabled = stateName === 'checking' || !card.querySelector('[data-tuner="tunerIP"]')?.value.trim();
+        }
+    }
+}
+
+function openAppleTVPairing(card) {
+    const target = card.querySelector('[data-tuner="tunerIP"]').value.trim();
+    appleTVPairCard = card;
+    card.querySelector('[data-pair-apple-tv]').disabled = true;
+    appleTVPairSession = '';
+    byId('apple-tv-pair-target').textContent = `Apple TV: ${target}`;
+    byId('apple-tv-pin-panel').classList.add('hidden');
+    byId('apple-tv-pair-submit').classList.add('hidden');
+    byId('apple-tv-pair-cancel').disabled = false;
+    byId('apple-tv-pair-status').textContent = 'Contacting the Apple TV…';
+    byId('apple-tv-pin-error').textContent = '';
+    byId('apple-tv-pin').value = '';
+    byId('apple-tv-pair-modal').classList.add('open');
+    byId('apple-tv-pair-modal').dataset.target = target;
+    startAppleTVPairing();
+}
+
+async function startAppleTVPairing() {
+    const modal = byId('apple-tv-pair-modal');
+    const status = byId('apple-tv-pair-status');
+    const controller = new AbortController();
+    appleTVPairAbort = controller;
+    try {
+        const response = await fetch('/api/config/apple-tv-pairing/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({target:modal.dataset.target}), signal:controller.signal});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Could not start Apple TV pairing');
+        appleTVPairSession = payload.sessionId;
+        byId('apple-tv-pin-panel').classList.remove('hidden');
+        byId('apple-tv-pair-submit').classList.remove('hidden');
+        status.textContent = payload.message;
+        byId('apple-tv-pin').focus();
+    } catch (error) {
+        if (error.name !== 'AbortError') status.textContent = error.message;
+    } finally {
+        if (appleTVPairAbort === controller) appleTVPairAbort = null;
+    }
+}
+
+async function finishAppleTVPairing() {
+    const pin = byId('apple-tv-pin').value.trim();
+    const error = byId('apple-tv-pin-error');
+    if (!/^\d{4}$/.test(pin)) {
+        error.textContent = 'Enter all four numbers shown on the Apple TV.';
+        byId('apple-tv-pin').focus();
+        return;
+    }
+    error.textContent = '';
+    const button = byId('apple-tv-pair-submit');
+    const status = byId('apple-tv-pair-status');
+    button.disabled = true;
+    status.textContent = 'Finishing pairing…';
+    try {
+        const response = await fetch('/api/config/apple-tv-pairing/pin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession, pin})});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Apple TV pairing did not finish');
+        status.textContent = payload.message;
+        if (appleTVPairCard) setConnectionState(appleTVPairCard, 'device', 'ready', 'Apple TV is reachable and paired');
+        if (wizard) showNotice('Apple TV paired. Pair each remaining Apple TV, then restart ah4c to apply pyatv.', 'warning');
+        button.classList.add('hidden');
+        byId('apple-tv-pair-cancel').textContent = 'Done';
+    } catch (pairError) {
+        status.textContent = pairError.message;
+        button.disabled = false;
+    }
+}
+
+async function closeAppleTVPairing() {
+    appleTVPairAbort?.abort();
+    appleTVPairAbort = null;
+    if (appleTVPairSession) {
+        fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession})}).catch(() => {});
+    }
+    appleTVPairSession = '';
+    byId('apple-tv-pair-cancel').textContent = 'Cancel';
+    byId('apple-tv-pair-modal').classList.remove('open');
+    updateTunerDeviceLabels();
+}
+
+async function checkConnections() {
+    const cards = [...byId('tuners').children];
+    const button = byId('check-connections');
+    const summary = byId('connection-check-status');
+    if (!cards.length) {
+        summary.textContent = 'Add a tuner first.';
+        return false;
+    }
+    let firstInvalid = null;
+    cards.forEach(card => {
+        if (!validateTunerCard(card) && !firstInvalid) firstInvalid = card;
+    });
+    if (firstInvalid) {
+        summary.textContent = 'Fix the highlighted address before checking connections.';
+        firstInvalid.querySelector('.input-invalid')?.focus();
+        return false;
+    }
+    button.disabled = true;
+    summary.textContent = 'Checking the values currently shown…';
+    cards.forEach(card => {
+        setConnectionState(card, 'device', 'checking');
+        setConnectionState(card, 'encoder', 'checking');
+    });
+    const pyatv = document.querySelector('[data-setting="PYATV"]')?.value === 'true';
+    let cursor = 0;
+    let blockedMessage = '';
+    let allReady = true;
+    async function worker() {
+        while (cursor < cards.length) {
+            const index = cursor++;
+            const card = cards[index];
+            const tuner = Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]));
+            try {
+                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:tunerNumber(card), tuner, usePyatv:pyatv})});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Connection check failed');
+                setConnectionState(card, 'device', payload.device.state, payload.device.message);
+                const encoder = !tuner.encoderURL.trim() && tuner.cmd.trim()
+                    ? {state:'ready', message:'CMD is configured; there is no encoder address to check'}
+                    : payload.encoder;
+                setConnectionState(card, 'encoder', encoder.state, encoder.message);
+                if (payload.device.state !== 'ready' || encoder.state !== 'ready') allReady = false;
+            } catch (error) {
+                blockedMessage = error.message;
+                allReady = false;
+                setConnectionState(card, 'device', 'skipped', error.message);
+                setConnectionState(card, 'encoder', 'skipped', error.message);
+            }
+        }
+    }
+    await Promise.all(Array.from({length:Math.min(3, cards.length)}, () => worker()));
+    button.disabled = false;
+    summary.textContent = blockedMessage || 'Connection check finished.';
+    return allReady && !blockedMessage;
 }
 
 function renderExtra() {
@@ -999,6 +1363,7 @@ byId('add-tuner').addEventListener('click', () => {
     renumberTuners();
     updateTunerDeviceLabels();
     byId('no-tuners-hint').classList.add('hidden');
+    byId('check-connections').disabled = false;
 });
 byId('edit-tuner-order').addEventListener('click', openTunerOrderEditor);
 byId('tuner-order-apply').addEventListener('click', applyTunerOrderPopover);
@@ -1007,11 +1372,36 @@ byId('tuner-order-close').addEventListener('click', closeTunerOrderEditor);
 byId('tuner-order-modal').addEventListener('click', event => {
     if (event.target === byId('tuner-order-modal')) closeTunerOrderEditor();
 });
+byId('tuner-preview-close').addEventListener('click', closeTunerPreview);
+byId('tuner-preview-retry').addEventListener('click', startTunerPreviewClicked);
+document.querySelectorAll('[data-tuner-preview-action]').forEach(button => {
+    button.addEventListener('click', () => sendTunerPreviewKey(button.dataset.tunerPreviewAction));
+});
+byId('tuner-preview-modal').addEventListener('click', event => {
+    if (event.target === byId('tuner-preview-modal')) closeTunerPreview();
+});
+byId('check-connections').addEventListener('click', checkConnections);
+byId('apple-tv-pair-submit').addEventListener('click', finishAppleTVPairing);
+byId('apple-tv-pair-cancel').addEventListener('click', closeAppleTVPairing);
+byId('apple-tv-pair-close').addEventListener('click', closeAppleTVPairing);
+byId('apple-tv-pin').addEventListener('input', event => {
+    event.target.value = event.target.value.replace(/\D/g, '').slice(0, 4);
+    byId('apple-tv-pin-error').textContent = '';
+});
+byId('apple-tv-pin').addEventListener('keydown', event => {
+    if (event.key === 'Enter') finishAppleTVPairing();
+});
+byId('apple-tv-pair-modal').addEventListener('click', event => {
+    if (event.target === byId('apple-tv-pair-modal')) closeAppleTVPairing();
+});
 document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     if (byId('restart-prompt-modal').classList.contains('open')) closeRestartPrompt();
+    if (byId('apple-tv-pair-modal').classList.contains('open')) closeAppleTVPairing();
     if (byId('tuner-order-modal').classList.contains('open')) closeTunerOrderEditor();
+    if (byId('tuner-preview-modal').classList.contains('open')) closeTunerPreview();
 });
+window.addEventListener('pagehide', stopTunerPreview);
 byId('add-extra').addEventListener('click', () => addExtraRow());
 async function handleSaveClick() {
     const saveButtons = [...document.querySelectorAll('[data-save-settings]')];

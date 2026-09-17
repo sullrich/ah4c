@@ -75,6 +75,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	r.PUT("/api/config", putConfigHandler)
 	r.POST("/api/config/restart", restartConfigHandler)
 	registerScriptConfigRoutes(r)
+	registerConnectionConfigRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
