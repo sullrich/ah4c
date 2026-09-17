@@ -194,6 +194,7 @@
         <div class="modal restart-prompt-modal">
             <div id="restart-prompt-title" class="card-title">Restart container?</div>
             <p id="restart-prompt-message"></p>
+            <div id="restart-prompt-warning" class="restart-tune-warning hidden" role="alert"></div>
             <div class="btn-row">
                 <button id="restart-prompt-confirm" class="btn btn-primary" type="button">Restart container</button>
                 <button id="restart-prompt-cancel" class="btn" type="button">Not now</button>
@@ -1096,13 +1097,40 @@ function restartReasonLabels() {
 function showRestartPrompt() {
     const reasons = restartReasonLabels();
     const detail = reasons.length ? ` to apply ${readableList(reasons)}` : ' to apply these changes';
+    const confirmButton = byId('restart-prompt-confirm');
+    byId('restart-prompt-title').textContent = 'Restart container?';
     byId('restart-prompt-message').textContent = state.dockerManaged
         ? `Settings saved. Restart the container${detail}.`
         : `Settings saved. Restart the container manually${detail}.`;
-    byId('restart-prompt-confirm').classList.toggle('hidden', !state.dockerManaged);
+    byId('restart-prompt-warning').classList.add('hidden');
+    confirmButton.dataset.force = 'false';
+    confirmButton.textContent = 'Restart container';
+    confirmButton.classList.add('btn-primary');
+    confirmButton.classList.remove('btn-danger');
+    confirmButton.classList.toggle('hidden', !state.dockerManaged);
     byId('restart-prompt-cancel').textContent = state.dockerManaged ? 'Not now' : 'Close';
     byId('restart-prompt-modal').classList.add('open');
-    (state.dockerManaged ? byId('restart-prompt-confirm') : byId('restart-prompt-cancel')).focus();
+    (state.dockerManaged ? confirmButton : byId('restart-prompt-cancel')).focus();
+}
+
+function showRestartTuneWarning(payload) {
+    const tuners = Array.isArray(payload.tuners) ? payload.tuners : [];
+    const activity = tuners.length
+        ? `${tuners.length === 1 ? 'Tuner' : 'Tuners'} ${tuners.join(', ')} ${tuners.length === 1 ? 'is' : 'are'} currently in use.`
+        : 'A recording or live TV stream is starting.';
+    const confirmButton = byId('restart-prompt-confirm');
+    byId('restart-prompt-title').textContent = 'A tuner is in use';
+    byId('restart-prompt-message').textContent = 'The container was not restarted.';
+    byId('restart-prompt-warning').textContent = `${activity} Restarting now will interrupt the recording or live TV stream.`;
+    byId('restart-prompt-warning').classList.remove('hidden');
+    confirmButton.dataset.force = 'true';
+    confirmButton.textContent = 'Restart anyway';
+    confirmButton.classList.remove('btn-primary');
+    confirmButton.classList.add('btn-danger');
+    confirmButton.classList.remove('hidden');
+    byId('restart-prompt-cancel').textContent = 'Keep watching';
+    byId('restart-prompt-modal').classList.add('open');
+    byId('restart-prompt-cancel').focus();
 }
 
 function closeRestartPrompt() {
@@ -1128,22 +1156,14 @@ async function restart(force = false) {
     const response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
     const payload = await response.json();
     if (response.status === 409 && !force) {
-        const tuners = Array.isArray(payload.tuners) ? payload.tuners : [];
-        const activity = tuners.length
-            ? `${tuners.length === 1 ? 'Tuner' : 'Tuners'} ${tuners.join(', ')} ${tuners.length === 1 ? 'is' : 'are'} currently in use.`
-            : 'A recording or live TV stream is about to start.';
-        const confirmed = confirm(`${activity}\n\nRestarting the container now will interrupt ${tuners.length > 1 ? 'them' : 'it'}. Restart anyway?`);
-        if (!confirmed) {
-            showNotice('Restart canceled. The active recording or live TV stream was not interrupted.', 'warning');
-            return;
-        }
-        await restart(true);
+        showRestartTuneWarning(payload);
         return;
     }
     if (!response.ok) {
         showNotice(payload.error + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
         return;
     }
+    closeRestartPrompt();
     showNotice('Restarting the container…', 'warning');
     setTimeout(waitForRestart, 1200);
 }
@@ -1204,8 +1224,13 @@ function showWizardStep(step) {
 
 byId('wizard-start').addEventListener('click', () => showWizardStep(1));
 byId('restart-prompt-confirm').addEventListener('click', async () => {
-    closeRestartPrompt();
-    await restart();
+    const button = byId('restart-prompt-confirm');
+    button.disabled = true;
+    try {
+        await restart(button.dataset.force === 'true');
+    } finally {
+        button.disabled = false;
+    }
 });
 byId('restart-prompt-cancel').addEventListener('click', closeRestartPrompt);
 byId('restart-prompt-modal').addEventListener('click', event => {
@@ -1300,8 +1325,8 @@ async function handleSaveClick() {
     }
 }
 document.querySelectorAll('[data-save-settings]').forEach(button => button.addEventListener('click', handleSaveClick));
-byId('restart-settings').addEventListener('click', restart);
-byId('restart-top').addEventListener('click', restart);
+byId('restart-settings').addEventListener('click', () => restart());
+byId('restart-top').addEventListener('click', () => restart());
 loadSettings().catch(error => showNotice(error.message, 'danger'));
 </script>
 </body>

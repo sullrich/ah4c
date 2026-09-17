@@ -1147,6 +1147,15 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 .apple-tv-pair-modal { width: min(520px, 100%); }
 .restart-prompt-modal { width: min(500px, 100%); }
 .restart-prompt-modal p { color: var(--text-muted); line-height: 1.55; }
+.restart-tune-warning {
+  margin: .8rem 0;
+  padding: .7rem .8rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(224, 108, 94, 0.45);
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+}
 .apple-tv-pair-modal .card-title { margin-bottom: .15rem; }
 .apple-tv-pair-modal p { color: var(--text-muted); line-height: 1.55; }
 .pairing-ready {
