@@ -155,28 +155,23 @@ func serverBaseURL(value, defaultPort string) (string, error) {
 	return parsed.Scheme + "://" + net.JoinHostPort(parsed.Hostname(), port), nil
 }
 
-func m3uTemplateAddress(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("ah4c address is empty")
-	}
-	if !strings.Contains(value, "://") {
-		if err := validateBareHostPort(value); err != nil {
-			return "", err
-		}
-		return value, nil
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return "", fmt.Errorf("invalid ah4c address")
-	}
-	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("ah4c address must not include a path")
-	}
-	if err := validateURLPort(parsed); err != nil {
+func m3uTemplateAddress(value string, templateAddsPort bool) (string, error) {
+	base, err := serverBaseURL(value, "7654")
+	if err != nil {
 		return "", err
 	}
-	return parsed.Host, nil
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Hostname() == "" {
+		return "", fmt.Errorf("invalid ah4c address")
+	}
+	if !templateAddsPort {
+		return parsed.Host, nil
+	}
+	host := parsed.Hostname()
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return host, nil
 }
 
 func putChannelsM3USource(ctx context.Context, client *http.Client, dvrBase, sourceName, m3uURL string) error {

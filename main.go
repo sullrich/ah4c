@@ -731,10 +731,12 @@ func run() error {
 	r.GET("/m3u/:channel", func(c *gin.Context) {
 		r.LoadHTMLGlob("m3u/*.m3u")
 		channel := c.Param("channel")
+		filePath := "m3u/" + channel
 		// Check if the file exists
-		if _, errread := os.Stat("m3u/" + channel); errread == nil {
+		if templateContents, errread := os.ReadFile(filePath); errread == nil {
 			// Get the proxy IP address used to rewrite m3u ip addresses
-			IPADDRESS, err := m3uTemplateAddress(os.Getenv("IPADDRESS"))
+			templateAddsPort := bytes.Contains(templateContents, []byte("{{ .IPADDRESS }}:")) || bytes.Contains(templateContents, []byte("{{.IPADDRESS}}:"))
+			IPADDRESS, err := m3uTemplateAddress(os.Getenv("IPADDRESS"), templateAddsPort)
 			if err != nil {
 				r.LoadHTMLGlob("html/*")
 				logger("[M3U] refusing to render %s without a valid IPADDRESS: %v", channel, err)
