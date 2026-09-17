@@ -8,7 +8,7 @@ services:
     # These are Docker host settings. They cannot be configured in settings.json.
     runtime: ${DOCKER_RUNTIME:-runc}
     devices:
-      - ${GPU_DEVICE:-/dev/null} # Set GPU_DEVICE=/dev/dri in the environment file for Intel integrated graphics or an AMD GPU.
+      - ${GPU_DEVICE:-/dev/null} # Intel or AMD graphics only: uncomment GPU_DEVICE=/dev/dri in ah4c-minimal.env.
     ports:
       - ${HOST_PORT:-7654}:7654
 
