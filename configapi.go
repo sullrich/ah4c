@@ -564,6 +564,8 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 		tuner := &next.Tuners[index]
 		tuner.TunerIP = strings.TrimSpace(tuner.TunerIP)
 		tuner.EncoderURL = strings.TrimSpace(tuner.EncoderURL)
+		tuner.CMD = strings.TrimSpace(tuner.CMD)
+		tuner.TEECMD = strings.TrimSpace(tuner.TEECMD)
 		for field, value := range map[string]string{"Tuner IP": tuner.TunerIP, "Encoder URL": tuner.EncoderURL, "CMD": tuner.CMD, "TEECMD": tuner.TEECMD} {
 			if strings.ContainsAny(value, "\r\n") {
 				return Settings{}, fmt.Errorf("tuner %d %s must be one line", index, field)
