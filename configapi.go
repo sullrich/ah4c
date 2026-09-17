@@ -74,7 +74,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	r.GET("/api/config", getConfigHandler)
 	r.PUT("/api/config", putConfigHandler)
 	r.POST("/api/config/restart", restartConfigHandler)
-	r.GET("/api/config/streamers", streamersConfigHandler)
+	registerScriptConfigRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
@@ -193,10 +193,6 @@ func restartConfigHandler(c *gin.Context) {
 		}
 		os.Exit(0)
 	}()
-}
-
-func streamersConfigHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, discoverLocalStreamers())
 }
 
 func validScriptPathPart(value string) bool {
@@ -799,6 +795,10 @@ func activeTunerNumbers() []int {
 		}
 	}
 	return active
+}
+
+func configOperationsAllowed() bool {
+	return len(activeTunerNumbers()) == 0 && !tunesPending()
 }
 
 func restartTuneConflict() ([]int, bool) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -590,6 +591,15 @@ func parseLockSet(value string) map[string]bool {
 	return out
 }
 
+func installSelectedScriptsRequested() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "-install-selected-scripts" {
+			return true
+		}
+	}
+	return false
+}
+
 func printModeRequested() bool {
 	for _, arg := range os.Args[1:] {
 		if arg == "-print-env" {
@@ -715,6 +725,25 @@ func envengineStartup() {
 	envEngineMu.Unlock()
 	if supervised {
 		logMaterialization(sets, locked, nil)
+	}
+	repairScriptPackageTransactions("scripts")
+	if installSelectedScriptsRequested() {
+		selection := canonicalStreamerSelection(os.Getenv("STREAMER_APP"))
+		if selection == "" {
+			fmt.Fprintln(os.Stderr, "[SCRIPTS] no STREAMER_APP configured; no scripts requested")
+			os.Exit(0)
+		}
+		target := filepath.Join(strings.Split(selection, "/")...)
+		if scriptPackageComplete(target) && !strings.EqualFold(os.Getenv("UPDATE_SCRIPTS"), "true") {
+			fmt.Fprintf(os.Stderr, "[SCRIPTS] using stored %s package\n", selection)
+			os.Exit(0)
+		}
+		if err := installScriptPackage(context.Background(), selection); err != nil {
+			fmt.Fprintf(os.Stderr, "[SCRIPTS] %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "[SCRIPTS] installed %s from sullrich/ah4c\n", selection)
+		os.Exit(0)
 	}
 	withWatchdog = envBoolTrueOrOne(os.Getenv("CC_WATCHDOG"))
 	warnIfConfigNotPersistent()

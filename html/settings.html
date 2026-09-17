@@ -70,8 +70,47 @@
 
             <section class="card settings-section" data-section="streamer">
                 <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
-                <p class="section-help">Choose the bundled scripts ah4c should use to open your streaming app, switch channels, and stop playback. Advanced users may enter an existing local folder path.</p>
+                <p class="section-help"><strong>Optional during initial setup:</strong> ah4c uses a small set of scripts to open your streaming app, switch to the requested channel, and stop playback when finished. You do not need to read or edit them. The official choices come from the <a href="https://github.com/sullrich/ah4c/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts folder in sullrich/ah4c on GitHub</a>.</p>
+                <div class="btn-row compact-row">
+                    <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Browse local scripts</button>
+                    <button id="query-streamers" class="btn btn-sm" type="button">Check GitHub for scripts</button>
+                    <span id="streamer-query-status" class="muted"></span>
+                </div>
+                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. <strong>Check GitHub for scripts</strong> reads only the available folder names; it does not download every script. ah4c downloads only the choice you select, and a GitHub outage never prevents it from using a complete stored copy.</p>
                 <div id="section-streamer" class="settings-grid"></div>
+                <div id="local-script-browser" class="local-script-browser hidden">
+                    <div class="local-script-browser-head">
+                        <div>
+                            <strong>Local scripts on this server</strong>
+                            <div id="local-script-path" class="muted">Scripts folder</div>
+                        </div>
+                        <button id="close-local-scripts" class="btn btn-sm" type="button">Close</button>
+                    </div>
+                    <div class="btn-row compact-row">
+                        <button id="local-script-up" class="btn btn-sm hidden" type="button">Back</button>
+                        <button id="refresh-local-scripts" class="btn btn-sm" type="button">Refresh folder</button>
+                        <button id="use-local-script" class="btn btn-sm btn-primary hidden" type="button">Use this choice</button>
+                    </div>
+                    <div id="local-script-list" class="local-script-list"></div>
+                    <div id="local-script-requirement-status" class="hidden"></div>
+                    <div class="script-requirements">
+                        <strong>Required files</strong>
+                        <div><code>prebmitune.sh</code><span>Prepares the device before tuning.</span></div>
+                        <div><code>bmitune.sh</code><span>Changes the app to the requested channel.</span></div>
+                        <div><code>stopbmitune.sh</code><span>Cleans up when the tune ends.</span></div>
+                    </div>
+                    <p class="setting-description">Advanced users can keep custom controls in one folder or organize them by device and app. Helper files are allowed.</p>
+                    <details class="local-script-create">
+                        <summary>Advanced: upload custom control files</summary>
+                        <p class="setting-description">This is only for people providing their own controls. Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
+                        <div class="local-script-create-grid">
+                            <div class="field"><label for="local-script-device">Main folder</label><input id="local-script-device" type="text" placeholder="my-controls"></div>
+                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
+                        </div>
+                        <div class="field local-script-files"><label for="local-script-files">Control and helper files</label><input id="local-script-files" type="file" multiple></div>
+                        <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Upload files</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
+                    </details>
+                </div>
             </section>
 
             <section class="card settings-section" data-section="tuners">
@@ -173,8 +212,10 @@ const sectionKeys = {
 };
 let state = null;
 let localStreamerChoices = [];
+let remoteStreamerChoices = [];
 let wizard = false;
 let wizardStep = 0;
+let localScriptDirectory = null;
 let tunerOrderCards = [];
 
 const byId = id => document.getElementById(id);
@@ -184,14 +225,133 @@ async function loadSettings() {
     const response = await fetch('/api/config');
     state = await response.json();
     wizard = !state.wizardDisabled && (new URLSearchParams(location.search).get('wizard') === '1' || state.wizard);
-    await loadStreamers();
+    await loadStreamers(false);
     render();
 }
 
-async function loadStreamers() {
-    const response = await fetch('/api/config/streamers');
-    if (!response.ok) throw new Error('Could not list bundled streaming-app scripts.');
-    localStreamerChoices = await response.json();
+async function loadStreamers(remote) {
+    const status = byId('streamer-query-status');
+    const typedChoice = selectedStreamerPath();
+    if (status && remote) status.textContent = 'Checking sullrich/ah4c on GitHub for scripts…';
+    try {
+        const query = new URLSearchParams({details:'true'});
+        if (remote) query.set('remote', 'true');
+        const response = await fetch('/api/config/streamers?' + query);
+        const payload = await response.json();
+        if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
+        if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
+        if (!response.ok) {
+            if (status) status.textContent = 'GitHub is unavailable right now. Showing local and previously saved scripts.';
+            const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
+            if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+            return;
+        }
+        if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`;
+        const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
+        if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+    } catch (error) {
+        if (status) status.textContent = error.message;
+    }
+}
+
+async function browseLocalScripts(path = '') {
+    const browser = byId('local-script-browser');
+    const list = byId('local-script-list');
+    browser.classList.remove('hidden');
+    list.innerHTML = '<div class="muted">Reading the local scripts folder…</div>';
+    try {
+        const response = await fetch('/api/config/local-scripts?path=' + encodeURIComponent(path));
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Could not read the local scripts folder');
+        localScriptDirectory = payload;
+        byId('local-script-path').textContent = payload.path ? `Scripts folder / ${payload.path}` : 'Scripts folder';
+        byId('local-script-up').classList.toggle('hidden', !payload.path);
+        byId('use-local-script').classList.toggle('hidden', !payload.selectable);
+        byId('use-local-script').disabled = state.catalog.find(item => item.key === 'STREAMER_APP')?.locked;
+        const requirementStatus = byId('local-script-requirement-status');
+        requirementStatus.className = payload.missing?.length ? 'script-requirement-warning' : 'hidden';
+        requirementStatus.textContent = payload.missing?.length ? `This folder cannot be used yet. Missing: ${payload.missing.join(', ')}` : '';
+        list.innerHTML = '';
+        payload.entries.forEach(entry => {
+            const row = document.createElement(entry.directory ? 'button' : 'div');
+            row.className = 'local-script-entry' + (entry.directory ? ' local-script-entry--folder' : '');
+            if (entry.directory) row.type = 'button';
+            row.innerHTML = `<span>${escapeHTML(entry.name)}</span><span class="muted">${entry.directory ? 'Open folder' : 'File'}</span>`;
+            if (entry.directory) row.addEventListener('click', () => browseLocalScripts(entry.path));
+            list.appendChild(row);
+        });
+        if (!payload.entries.length) list.innerHTML = '<div class="muted">This folder is empty.</div>';
+        return true;
+    } catch (error) {
+        localScriptDirectory = null;
+        list.innerHTML = `<div class="config-notice config-notice--danger">${escapeHTML(error.message)}</div>`;
+        return false;
+    }
+}
+
+async function checkLocalScripts() {
+    await loadStreamers(false);
+    if (!await browseLocalScripts()) return;
+    const count = localStreamerChoices.length;
+    byId('streamer-query-status').textContent = count === 1 ? 'Found 1 complete local script choice.' : `Found ${count} complete local script choices.`;
+}
+
+async function uploadLocalScripts() {
+    const device = byId('local-script-device').value.trim();
+    const app = byId('local-script-app').value.trim();
+    const files = [...byId('local-script-files').files];
+    const status = byId('local-script-upload-status');
+    const button = byId('upload-local-scripts');
+    const validPart = value => value && !value.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(value);
+    if (!validPart(device) || (app && !validPart(app))) {
+        status.textContent = 'Enter a package name, and optionally an app folder, using letters, numbers, dots, underscores or hyphens.';
+        return;
+    }
+    if (!files.length) {
+        status.textContent = 'Choose all three required files: prebmitune.sh, bmitune.sh, and stopbmitune.sh.';
+        return;
+    }
+    const names = new Set(files.map(file => file.name));
+    const required = ['bmitune.sh', 'prebmitune.sh', 'stopbmitune.sh'];
+    const missing = required.filter(name => !names.has(name));
+    if (missing.length) {
+        status.textContent = `Nothing was uploaded. Add the missing required ${missing.length === 1 ? 'file' : 'files'}: ${missing.join(', ')}.`;
+        return;
+    }
+    const form = new FormData();
+    form.append('device', device);
+    form.append('app', app);
+    files.forEach(file => form.append('files', file, file.name));
+    const buttonLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Uploading…';
+    status.textContent = '';
+    try {
+        const response = await fetch('/api/config/local-scripts', {method:'POST', body:form});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'The files could not be uploaded.');
+        byId('local-script-files').value = '';
+        chooseLocalScript(payload.selection);
+        status.textContent = 'Files uploaded.';
+        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged.`;
+    } catch (error) {
+        status.textContent = error.message;
+    } finally {
+        button.disabled = false;
+        button.textContent = buttonLabel;
+    }
+}
+
+function chooseLocalScript(path) {
+    const select = document.querySelector('[data-setting="STREAMER_APP"]');
+    if (!select || select.disabled) return;
+    if (!localStreamerChoices.includes(path)) localStreamerChoices.push(path);
+    const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
+    if (updateScripts && !updateScripts.disabled) updateScripts.value = 'false';
+    const spec = state.catalog.find(item => item.key === 'STREAMER_APP');
+    if (spec) renderFieldInto({...spec, value:path}, byId('section-streamer'), true);
+    byId('local-script-browser').classList.add('hidden');
+    byId('streamer-query-status').textContent = `Selected local folder ${path}. ah4c will keep this folder unchanged. Save settings to apply it.`;
 }
 
 function render() {
@@ -239,9 +399,14 @@ function renderFieldInto(spec, target, replace = false) {
     let control;
     if (spec.key === 'STREAMER_APP') {
         const local = [...new Set(localStreamerChoices)].sort();
-        const localOptions = local.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
-        const savedOption = spec.value && !local.includes(spec.value) ? `<option value="${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option>` : '';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Choose scripts for your streaming app…</option>${localOptions}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${local.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter an existing scripts folder" ${disabled}>`;
+        const remote = [...new Set(remoteStreamerChoices)].sort();
+        const known = [...new Set([...local, ...remote])];
+        const updateValue = state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
+        const preferGitHub = String(updateValue).toLowerCase() === 'true';
+        const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Choose scripts for your streaming app…</option>${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -256,6 +421,16 @@ function renderFieldInto(spec, target, replace = false) {
     }
     const source = spec.locked ? `<span class="badge config-lock" title="${title}">set by environment</span>` : '';
     wrap.innerHTML = `<div class="setting-label"><label>${escapeHTML(spec.label)}</label>${source}</div>${control}<div class="setting-description">${escapeHTML(spec.desc)}${spec.type === 'seconds' ? ' (seconds)' : ''}</div>${spec.scriptVaries ? `<div class="setting-script-note">This setting depends on the selected streaming app. Leave it blank unless that app's instructions tell you what to enter.</div>` : ''}<div class="field-validation" data-validation-for="${spec.key}" aria-live="polite"></div>`;
+    if (spec.key === 'STREAMER_APP') {
+        wrap.querySelector('select')?.addEventListener('change', event => {
+            const choice = decodeStreamerChoice(event.target.value);
+            const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
+            if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
+            if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
+            if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
+            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
+        });
+    }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
     if (spec.key === 'PYATV') wrap.querySelector('select')?.addEventListener('input', updateTunerDeviceLabels);
     validateCatalogField(spec, wrap);
@@ -808,6 +983,15 @@ byId('restart-prompt-modal').addEventListener('click', event => {
 byId('wizard-back').addEventListener('click', () => {
     if (wizardStep <= 1) startWizardIntro(); else showWizardStep(wizardStep - 1);
 });
+byId('query-streamers').addEventListener('click', () => loadStreamers(true));
+byId('browse-local-scripts').addEventListener('click', checkLocalScripts);
+byId('close-local-scripts').addEventListener('click', () => byId('local-script-browser').classList.add('hidden'));
+byId('local-script-up').addEventListener('click', () => browseLocalScripts(localScriptDirectory?.parent || ''));
+byId('refresh-local-scripts').addEventListener('click', () => browseLocalScripts(localScriptDirectory?.path || ''));
+byId('use-local-script').addEventListener('click', () => {
+    if (localScriptDirectory?.selection) chooseLocalScript(localScriptDirectory.selection);
+});
+byId('upload-local-scripts').addEventListener('click', uploadLocalScripts);
 byId('add-tuner').addEventListener('click', () => {
     if (state.tuners.countLocked) return;
     const number = byId('tuners').children.length;

@@ -230,6 +230,9 @@ checkVersions() {
 main() {
 
   eval "$(./ah4c -print-env)"
+  ./ah4c -install-selected-scripts || echo "WARNING: Could not download the selected scripts; preserving any stored package"
+  # The existing copy-if-missing path remains an offline fallback for packages bundled in this image.
+  export UPDATE_SCRIPTS=false
 
   fixTunerDNS $(expandVars TUNER)
   fixEncoderDNS $(expandVars ENCODER)
