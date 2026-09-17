@@ -452,6 +452,20 @@ select:focus {
 .setting-field input:disabled, .setting-field select:disabled, .tuner-card input:disabled { cursor: not-allowed; background-color: var(--surface-hover); color: var(--text-muted); }
 .config-lock { color: var(--warning); border-color: rgba(217,165,74,.35); margin-left: auto; }
 .custom-streamer { margin-top: 0.4rem; }
+.compact-row { margin-top: 0.55rem; }
+.local-script-browser { margin-top: .75rem; padding: .8rem; background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius); }
+.local-script-browser-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+.local-script-browser-head strong { font-size: .82rem; font-weight: 600; }
+.local-script-list { display: grid; gap: .35rem; max-height: 18rem; margin-top: .65rem; padding-right: .15rem; overflow-y: auto; }
+.local-script-entry { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; min-height: 34px; padding: .45rem .65rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--text); font-family: var(--mono); font-size: .78rem; text-align: left; }
+button.local-script-entry { cursor: pointer; }
+button.local-script-entry:hover { border-color: var(--border); background: var(--surface-hover); }
+.local-script-entry .muted { font-family: var(--font); font-size: .7rem; }
+.script-requirements { display: grid; gap: .35rem; margin-top: .75rem; padding-top: .7rem; border-top: 1px solid var(--border-soft); }
+.script-requirements > strong { font-size: .76rem; font-weight: 600; }
+.script-requirements > div { display: grid; grid-template-columns: minmax(130px, auto) 1fr; gap: .65rem; color: var(--text-muted); font-size: .74rem; }
+.script-requirements code { color: var(--text); }
+.script-requirement-warning { margin-top: .65rem; padding: .55rem .65rem; color: var(--danger); background: var(--danger-soft); border: 1px solid rgba(224,108,94,.35); border-radius: var(--radius-sm); font-size: .74rem; }
 .config-notice { display: flex; align-items: center; gap: 0.8rem; justify-content: space-between; padding: 0.7rem 0.9rem; border: 1px solid var(--info); border-radius: var(--radius); margin-bottom: 0.9rem; background: var(--surface); }
 .config-notice--warning { border-color: var(--warning); }
 .config-notice--danger { border-color: var(--danger); color: var(--danger); }
