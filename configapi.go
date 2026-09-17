@@ -938,6 +938,11 @@ func restoreLockedTunerSettings(next *Settings, old Settings, locked map[string]
 func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings, error) {
 	next := emptySettings()
 	next.Tuners = old.Tuners
+	for key, value := range old.Vars {
+		if _, submitted := request.Vars[key]; !submitted {
+			next.Vars[key] = value
+		}
+	}
 	if request.Tuners != nil {
 		next.Tuners = append([]TunerSpec(nil), (*request.Tuners)...)
 	}

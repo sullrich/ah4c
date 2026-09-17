@@ -33,8 +33,8 @@
     <main class="page settings-page">
         <div id="notice" class="config-notice hidden"></div>
         <div id="restart-banner" class="config-notice config-notice--warning hidden">
-            <span id="restart-reasons">Restart required to apply startup settings.</span>
-            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart safely</button>
+            <span id="restart-reasons">Restart the container to apply startup settings.</span>
+            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart container</button>
         </div>
 
         <section id="wizard-intro" class="card wizard-panel hidden">
@@ -184,7 +184,7 @@
             <div class="settings-actions">
                 <button id="wizard-back" class="btn hidden" type="button">Back</button>
                 <button id="save-settings" class="btn btn-primary" type="button">Save settings</button>
-                <button id="restart-settings" class="btn hidden" type="button">Restart safely</button>
+                <button id="restart-settings" class="btn hidden" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
             </div>
         </div>
@@ -237,10 +237,10 @@
 
 <script>
 const sectionKeys = {
-    proxy: ['IPADDRESS', 'CHANNELSIP', 'CHANNELS_M3U'],
+    proxy: ['IPADDRESS', 'CHANNELSIP'],
     streamer: ['STREAMER_APP', 'UPDATE_SCRIPTS'],
     tuners: ['PYATV'],
-    playback: ['NULL_FRAME_INSERTION', 'PLAYBACK_DETECTION', 'PLAYBACK_STATIC_TIMEOUT', 'PLAYBACK_DELAY', 'ENCODER_CODEC', 'ALLOW_DEBUG_VIDEO_PREVIEW'],
+    playback: ['NULL_FRAME_INSERTION', 'PLAYBACK_DETECTION', 'PLAYBACK_STATIC_TIMEOUT', 'PLAYBACK_DELAY', 'ENCODER_CODEC'],
     alerts: ['ALERT_SMTP_SERVER', 'ALERT_AUTH_SERVER', 'ALERT_EMAIL_FROM', 'ALERT_EMAIL_PASS', 'ALERT_EMAIL_TO', 'ALERT_EMAIL_USE_SENDMAIL', 'ALERT_WEBHOOK_URL'],
     scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD', 'HEARTBEAT_INTERVAL'],
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT', 'TZ', 'CC_WATCHDOG']
@@ -767,7 +767,6 @@ function catalogValidationMessage(spec, value) {
         return value.includes('@') ? '' : 'Enter one e-mail address, such as name@example.com.';
     }
     if (spec.key === 'FASTCHANNELS_URL' || spec.key === 'ALERT_WEBHOOK_URL') return httpURLMessage(value);
-    if (spec.key === 'CHANNELS_M3U') return /^[^/\\]+\.m3u$/i.test(value) ? '' : 'Choose an M3U filename ending in .m3u.';
     if (spec.key === 'PLAYBACK_DELAY') return playbackDelayMessage(value);
     if (!spec.scriptVaries && (spec.type === 'int' || spec.type === 'seconds') && !/^-?\d+$/.test(value)) return 'Enter a whole number.';
     return '';
@@ -828,7 +827,6 @@ function validateSettingsForm(section = '') {
     let firstInvalid = null;
     state.catalog.forEach(spec => {
         if (keys && !keys.has(spec.key)) return;
-        if (wizard && spec.key === 'CHANNELS_M3U') return;
         const wrap = document.querySelector(`[data-key="${spec.key}"]`);
         let valid = validateCatalogField(spec, wrap);
         if (wizard && section === 'proxy' && (spec.key === 'IPADDRESS' || spec.key === 'CHANNELSIP') && !catalogValue(spec, wrap)) {
@@ -1075,16 +1073,16 @@ async function saveSettings(restartAfter = false) {
 function updateRestartUI() {
     byId('restart-banner').classList.toggle('hidden', !state.restartNeeded);
     byId('restart-settings').classList.toggle('hidden', !state.restartNeeded);
-    const text = state.dockerManaged ? 'Restart safely' : 'Restart ah4c manually';
+    const text = state.dockerManaged ? 'Restart container' : 'Restart container manually';
     byId('restart-settings').textContent = text;
     byId('restart-top').textContent = text;
     const reasons = state.restartRequired?.length ? `: ${state.restartRequired.join(', ')}` : '';
-    byId('restart-reasons').textContent = `Restart required to apply${reasons}.`;
+    byId('restart-reasons').textContent = `Restart the container to apply${reasons}.`;
 }
 
 async function restart() {
     if (!state.dockerManaged) {
-        showNotice('Settings are saved. Restart ah4c manually to apply startup changes.', 'warning');
+        showNotice('Settings are saved. Restart the container manually to apply startup changes.', 'warning');
         return;
     }
     const response = await fetch('/api/config/restart', {method:'POST'});
@@ -1093,7 +1091,7 @@ async function restart() {
         showNotice(payload.error + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
         return;
     }
-    showNotice('Restarting ah4c…', 'warning');
+    showNotice('Restarting the container…', 'warning');
     setTimeout(waitForRestart, 1200);
 }
 
