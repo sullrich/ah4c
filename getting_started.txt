@@ -13,8 +13,7 @@ What you will need
 * Setup the encoder (connect to its default IP address and then change the IP to a address on your local network)
 * Plug the encoder into Fire device.  Navigate to the encoders webGUI and verify you see Fire device in preview.
 * Clone the androidhdmi-for-channels repo to the machine you wish to run it on
-* Docker users only need to set HOST_DIR (plus TZ or HOST_PORT when their defaults do not suit), start the container, and open http://<ah4c-host>:7654/. The first-run Settings wizard collects the streamer script and saves it under /opt/config. Tuner and encoder details are optional during setup and can be added later from Settings.
-* For a non-Docker run, either use the same Settings wizard or modify the legacy env file and set your ENCODERX_URL(s), TUNERX_IP(s), STREAMER_APP, and number of encoders.
+* Modify the env file and set your ENCODERX_URL(s) and TUNERX_IP(s).  Set the number of encoders you have.
 * Start the androidhdmi-for-channels proxy by running ./start.sh - I currently use screen to detach from the running process to keep in background. https://formulae.brew.sh/formula/screen
 * Setup the custom channel in channels using the custom_channel.txt.  Be sure to modify the IP address in custom_channel.txt to the IP address of the running androidhdmi-for-channels proxy:
 	ChannelsDVR > Add Source

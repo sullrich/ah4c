@@ -96,12 +96,12 @@
                         <div><code>bmitune.sh</code><span>Changes the app to the requested channel.</span></div>
                         <div><code>stopbmitune.sh</code><span>Cleans up when the tune ends.</span></div>
                     </div>
-                    <p class="setting-description">Packages may live directly under Scripts, such as <code>scripts/david</code>, or two folders deep, such as <code>scripts/my-device/my-app</code>. You can include any number of helper files and call them from the three required scripts.</p>
+                    <p class="setting-description">Packages may live directly under Scripts, such as <code>scripts/my-package</code>, or two folders deep, such as <code>scripts/my-device/my-app</code>. You can include any number of helper files and call them from the three required scripts.</p>
                     <details class="local-script-create">
                         <summary>Upload local scripts</summary>
                         <p class="setting-description">Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required scripts are included.</p>
                         <div class="local-script-create-grid">
-                            <div class="field"><label for="local-script-device">Package or device folder</label><input id="local-script-device" type="text" placeholder="david"></div>
+                            <div class="field"><label for="local-script-device">Package or device folder</label><input id="local-script-device" type="text" placeholder="my-package"></div>
                             <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
                         </div>
                         <div class="field local-script-files"><label for="local-script-files">Script and helper files</label><input id="local-script-files" type="file" multiple></div>
