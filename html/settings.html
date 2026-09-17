@@ -1080,13 +1080,26 @@ function updateRestartUI() {
     byId('restart-reasons').textContent = `Restart the container to apply${reasons}.`;
 }
 
-async function restart() {
+async function restart(force = false) {
     if (!state.dockerManaged) {
         showNotice('Settings are saved. Restart the container manually to apply startup changes.', 'warning');
         return;
     }
-    const response = await fetch('/api/config/restart', {method:'POST'});
+    const response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
     const payload = await response.json();
+    if (response.status === 409 && !force) {
+        const tuners = Array.isArray(payload.tuners) ? payload.tuners : [];
+        const activity = tuners.length
+            ? `${tuners.length === 1 ? 'Tuner' : 'Tuners'} ${tuners.join(', ')} ${tuners.length === 1 ? 'is' : 'are'} currently in use.`
+            : 'A recording or live TV stream is about to start.';
+        const confirmed = confirm(`${activity}\n\nRestarting the container now will interrupt ${tuners.length > 1 ? 'them' : 'it'}. Restart anyway?`);
+        if (!confirmed) {
+            showNotice('Restart canceled. The active recording or live TV stream was not interrupted.', 'warning');
+            return;
+        }
+        await restart(true);
+        return;
+    }
     if (!response.ok) {
         showNotice(payload.error + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
         return;
