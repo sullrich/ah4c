@@ -1,8 +1,8 @@
 services:
   ah4c:
-    image: mackid1993/ah4c:${TAG:-latest}
-    container_name: ah4c-test
-    hostname: ah4c-test
+    image: bnhf/ah4c:${TAG:-latest}
+    container_name: ah4c
+    hostname: ah4c
     restart: unless-stopped
 
     # These are Docker host settings. They cannot be configured in settings.json.

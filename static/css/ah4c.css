@@ -393,6 +393,15 @@ select:focus {
 
 .settings-page { max-width: 1180px; }
 .settings-section + .settings-section { margin-top: 0.9rem; }
+.settings-section-title { justify-content: space-between; }
+.settings-section-title > span { min-width: 0; }
+.settings-section-title .section-save {
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.wizard-mode .section-save { display: none; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 0.8rem 1rem; }
 .settings-grid--compact { grid-template-columns: minmax(0, 420px); margin-bottom: .9rem; }
 .setting-field { min-width: 0; }
@@ -445,12 +454,7 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
 }
 .settings-page > #notice > span { flex: 1; min-width: 0; line-height: 1.45; }
-.settings-page > #notice .toast-actions { display: flex; flex: 0 0 auto; gap: .45rem; }
 .settings-page > #notice .toast-close { flex: 0 0 auto; }
-@media (max-width: 560px) {
-  .settings-page > #notice:not(.hidden) { flex-wrap: wrap; }
-  .settings-page > #notice > span { flex-basis: 100%; }
-}
 .storage-blocker { display: block; color: var(--text); }
 .storage-blocker > strong { display: block; margin-bottom: .45rem; color: var(--danger); font-size: .9rem; }
 .storage-blocker p { margin: .4rem 0; color: var(--text-muted); }
@@ -1141,6 +1145,8 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 .modal-hint { font-size: 0.74rem; color: var(--text-faint); margin: 0.4rem 0 0; }
 
 .apple-tv-pair-modal { width: min(520px, 100%); }
+.restart-prompt-modal { width: min(500px, 100%); }
+.restart-prompt-modal p { color: var(--text-muted); line-height: 1.55; }
 .apple-tv-pair-modal .card-title { margin-bottom: .15rem; }
 .apple-tv-pair-modal p { color: var(--text-muted); line-height: 1.55; }
 .pairing-ready {

@@ -60,13 +60,13 @@
 
         <div id="settings-content" class="hidden">
             <section class="card settings-section" data-section="proxy">
-                <div class="card-title">Addresses &amp; time zone</div>
+                <div class="card-title settings-section-title"><span>Addresses &amp; time zone</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Tip:</strong> These addresses may be entered with or without a port. When no port is entered, ah4c assumes <code>7654</code> for this ah4c server and <code>8089</code> for Channels DVR. If either service uses a different port, include it in the address. For Channels DVR, open Channels in another browser tab and copy the address from its address bar. During initial setup, ah4c also suggests the time zone reported by this browser; change it if the server is somewhere else.</p>
                 <div id="section-proxy" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="streamer">
-                <div class="card-title">Streaming app scripts</div>
+                <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Optional during initial setup:</strong> ah4c uses a small set of scripts to open your streaming app, switch to the requested channel, and stop playback when finished. You do not need to read or edit them. The official choices come from the <a href="https://github.com/sullrich/ah4c/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts folder in sullrich/ah4c on GitHub</a>.</p>
                 <div class="btn-row compact-row">
                     <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Browse local scripts</button>
@@ -111,7 +111,7 @@
             </section>
 
             <section class="card settings-section" data-section="tuners">
-                <div class="card-title">Tuners <span class="hint">— order determines tuner number</span></div>
+                <div class="card-title settings-section-title"><span>Tuners <span class="hint">— order determines tuner number</span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
@@ -127,7 +127,7 @@
             </section>
 
             <section class="card settings-section" data-section="playback">
-                <div class="card-title">Playback &amp; recording</div>
+                <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <div id="section-playback" class="settings-grid"></div>
             </section>
 
@@ -153,23 +153,23 @@
             </section>
 
             <section class="card settings-section" data-section="alerts">
-                <div class="card-title">Alerts</div>
+                <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <div id="section-alerts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="scripts">
-                <div class="card-title">Streaming app options</div>
+                <div class="card-title settings-section-title"><span>Streaming app options</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help">These options depend on the streaming app you selected. Leave them blank unless that app's instructions tell you what to enter.</p>
                 <div id="section-scripts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="startup">
-                <div class="card-title">Startup &amp; content</div>
+                <div class="card-title settings-section-title"><span>Startup &amp; content</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <div id="section-startup" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="extra">
-                <div class="card-title">Additional variables</div>
+                <div class="card-title settings-section-title"><span>Additional variables</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help">Free-form environment variables for custom scripts. Names must use uppercase letters, numbers and underscores.</p>
                 <div id="extra-vars"></div>
                 <div class="btn-row"><button id="add-extra" class="btn btn-sm" type="button">Add variable</button></div>
@@ -183,12 +183,23 @@
 
             <div class="settings-actions">
                 <button id="wizard-back" class="btn hidden" type="button">Back</button>
-                <button id="save-settings" class="btn btn-primary" type="button">Save settings</button>
+                <button id="save-settings" class="btn btn-primary" data-save-settings type="button">Save settings</button>
                 <button id="restart-settings" class="btn hidden" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
             </div>
         </div>
     </main>
+
+    <div id="restart-prompt-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="restart-prompt-title">
+        <div class="modal restart-prompt-modal">
+            <div id="restart-prompt-title" class="card-title">Restart container?</div>
+            <p id="restart-prompt-message"></p>
+            <div class="btn-row">
+                <button id="restart-prompt-confirm" class="btn btn-primary" type="button">Restart container</button>
+                <button id="restart-prompt-cancel" class="btn" type="button">Not now</button>
+            </div>
+        </div>
+    </div>
 
     <div id="apple-tv-pair-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="apple-tv-pair-title">
         <div class="modal apple-tv-pair-modal">
@@ -1065,6 +1076,8 @@ async function saveSettings(restartAfter = false) {
         location.href = '/';
     } else if (state.restartNeeded) {
         showRestartPrompt();
+    } else {
+        showNotice('Settings saved.', '');
     }
     return true;
 }
@@ -1083,10 +1096,17 @@ function restartReasonLabels() {
 function showRestartPrompt() {
     const reasons = restartReasonLabels();
     const detail = reasons.length ? ` to apply ${readableList(reasons)}` : ' to apply these changes';
-    showNotice(`Settings saved. Restart the container${detail}.`, 'warning', {
-        label: state.dockerManaged ? 'Restart container' : 'Restart container manually',
-        handler: restart,
-    });
+    byId('restart-prompt-message').textContent = state.dockerManaged
+        ? `Settings saved. Restart the container${detail}.`
+        : `Settings saved. Restart the container manually${detail}.`;
+    byId('restart-prompt-confirm').classList.toggle('hidden', !state.dockerManaged);
+    byId('restart-prompt-cancel').textContent = state.dockerManaged ? 'Not now' : 'Close';
+    byId('restart-prompt-modal').classList.add('open');
+    (state.dockerManaged ? byId('restart-prompt-confirm') : byId('restart-prompt-cancel')).focus();
+}
+
+function closeRestartPrompt() {
+    byId('restart-prompt-modal').classList.remove('open');
 }
 
 function updateRestartUI() {
@@ -1136,28 +1156,17 @@ async function waitForRestart() {
     setTimeout(waitForRestart, 1000);
 }
 
-function showNotice(message, kind = '', action = null) {
+function showNotice(message, kind = '') {
     const notice = byId('notice');
     const text = document.createElement('span');
     text.textContent = message;
-    const actions = document.createElement('div');
-    actions.className = 'toast-actions';
-    if (action) {
-        const actionButton = document.createElement('button');
-        actionButton.type = 'button';
-        actionButton.className = 'btn btn-sm btn-primary';
-        actionButton.textContent = action.label;
-        actionButton.addEventListener('click', () => action.handler());
-        actions.appendChild(actionButton);
-    }
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'btn btn-sm toast-close';
     close.textContent = 'Close';
     close.setAttribute('aria-label', 'Dismiss message');
     close.addEventListener('click', () => notice.classList.add('hidden'));
-    actions.appendChild(close);
-    notice.replaceChildren(text, actions);
+    notice.replaceChildren(text, close);
     notice.className = 'config-notice' + (kind ? ` config-notice--${kind}` : '');
 }
 
@@ -1194,6 +1203,14 @@ function showWizardStep(step) {
 }
 
 byId('wizard-start').addEventListener('click', () => showWizardStep(1));
+byId('restart-prompt-confirm').addEventListener('click', async () => {
+    closeRestartPrompt();
+    await restart();
+});
+byId('restart-prompt-cancel').addEventListener('click', closeRestartPrompt);
+byId('restart-prompt-modal').addEventListener('click', event => {
+    if (event.target === byId('restart-prompt-modal')) closeRestartPrompt();
+});
 byId('wizard-back').addEventListener('click', () => {
     if (wizardStep <= 1) startWizardIntro(); else showWizardStep(wizardStep - 1);
 });
@@ -1236,6 +1253,7 @@ byId('apple-tv-pair-modal').addEventListener('click', event => {
 });
 document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
+    if (byId('restart-prompt-modal').classList.contains('open')) closeRestartPrompt();
     if (byId('apple-tv-pair-modal').classList.contains('open')) closeAppleTVPairing();
     if (byId('tuner-order-modal').classList.contains('open')) closeTunerOrderEditor();
 });
@@ -1243,11 +1261,15 @@ byId('preroll-file').addEventListener('change', renderPreroll);
 byId('upload-preroll').addEventListener('click', uploadPreroll);
 byId('delete-preroll').addEventListener('click', deletePreroll);
 byId('add-extra').addEventListener('click', () => addExtraRow());
-byId('save-settings').addEventListener('click', async () => {
-    const saveButton = byId('save-settings');
-    if (saveButton.dataset.busy === 'true') return;
-    saveButton.dataset.busy = 'true';
-    saveButton.disabled = true;
+async function handleSaveClick() {
+    const saveButtons = [...document.querySelectorAll('[data-save-settings]')];
+    if (saveButtons.some(button => button.dataset.busy === 'true')) return;
+    saveButtons.forEach(button => {
+        button.dataset.busy = 'true';
+        button.disabled = true;
+        button.dataset.idleLabel = button.textContent;
+        button.textContent = 'Saving…';
+    });
     try {
         if (!state.persistent) {
             if (wizard) startWizardIntro();
@@ -1270,10 +1292,14 @@ byId('save-settings').addEventListener('click', async () => {
         }
         await saveSettings(wizard && wizardStep === 3);
     } finally {
-        saveButton.dataset.busy = 'false';
-        saveButton.disabled = false;
+        saveButtons.forEach(button => {
+            button.dataset.busy = 'false';
+            button.disabled = false;
+            button.textContent = button.dataset.idleLabel || 'Save changes';
+        });
     }
-});
+}
+document.querySelectorAll('[data-save-settings]').forEach(button => button.addEventListener('click', handleSaveClick));
 byId('restart-settings').addEventListener('click', restart);
 byId('restart-top').addEventListener('click', restart);
 loadSettings().catch(error => showNotice(error.message, 'danger'));
