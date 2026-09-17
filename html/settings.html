@@ -672,11 +672,11 @@ function startTunerPreview() {
     }
     tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
     tunerPreviewPlayer.attachMediaElement(video);
-    video.addEventListener('loadedmetadata', () => {
+    video.onloadedmetadata = () => {
         video.currentTime = video.duration;
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
-    }, {once:true});
-    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
+    };
+    video.onended = restartTunerPreviewSoon;
     tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
     tunerPreviewPlayer.load();
     tunerPreviewPlayer.play().catch(() => {});
@@ -772,7 +772,13 @@ async function sendTunerPreviewKey(action) {
 
 function selectedStreamerPath(root = document) {
     const custom = root.querySelector('[data-custom-streamer]')?.value.trim();
-    return custom || root.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
+    const selected = root.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
+    return custom || decodeStreamerChoice(selected).path;
+}
+
+function decodeStreamerChoice(value) {
+    const match = /^(local|github|saved)::(.*)$/.exec(value || '');
+    return match ? {source:match[1], path:match[2]} : {source:'', path:value || ''};
 }
 
 function parsedServerAddress(value, allowProtocol = true) {
@@ -939,6 +945,8 @@ function openAppleTVPairing(card) {
     byId('apple-tv-pair-target').textContent = `Apple TV: ${target}`;
     byId('apple-tv-pin-panel').classList.add('hidden');
     byId('apple-tv-pair-submit').classList.add('hidden');
+    byId('apple-tv-pair-submit').disabled = false;
+    byId('apple-tv-pair-cancel').textContent = 'Cancel';
     byId('apple-tv-pair-cancel').disabled = false;
     byId('apple-tv-pair-status').textContent = 'Contacting the Apple TV…';
     byId('apple-tv-pin-error').textContent = '';
@@ -1368,12 +1376,19 @@ async function handleSaveClick() {
             return;
         }
         if (wizard && wizardStep > 0 && wizardStep < 3) { showWizardStep(wizardStep + 1); return; }
+        if (wizard && wizardStep === 3 && byId('tuners').children.length && !await checkConnections()) {
+            const status = byId('save-status');
+            status.classList.add('validation-error');
+            status.textContent = 'Setup was not saved. Fix each connection above, then choose Save setup again.';
+            showNotice('Setup was not saved because one or more tuner connections need attention. Apple TV users can use Pair on the affected tuner.', 'danger');
+            return;
+        }
         await saveSettings(wizard && wizardStep === 3);
     } finally {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = button.dataset.idleLabel || 'Save changes';
+            button.textContent = wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
         });
     }
 }
