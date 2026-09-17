@@ -3,7 +3,6 @@
 
 # Caption runtime state: settings, downloaded speech models, engine and drivers
 /captions/
-/config/
 
 # Local-only caption test suite
 /captions_test.go
