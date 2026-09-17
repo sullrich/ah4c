@@ -127,6 +127,9 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 	if len(files) == 0 {
 		return "", fmt.Errorf("choose the script files to upload")
 	}
+	if len(files) > maxPackageFiles {
+		return "", fmt.Errorf("the package has more than %d files", maxPackageFiles)
+	}
 	seen := make(map[string]bool, len(files))
 	total := int64(0)
 	for _, file := range files {
