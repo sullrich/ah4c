@@ -936,8 +936,8 @@ var gpuGate = make(chan struct{}, 2)
 // speed. A wedged decode without the watchdog costs one worker until restart —
 // the reply deadline keeps every stream alive and pressure brings up a second
 // copy — which is a fair price for full speed the rest of the time.
-// CC_WATCHDOG=1 turns the polling back on.
-var withWatchdog = os.Getenv("CC_WATCHDOG") == "1"
+// CC_WATCHDOG=true (or the legacy value 1) turns the polling back on.
+var withWatchdog = envBoolTrueOrOne(os.Getenv("CC_WATCHDOG"))
 
 // What bounds one dispatch, and in which unit.
 //

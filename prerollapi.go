@@ -181,11 +181,6 @@ func deletePrerollConfigHandler(c *gin.Context) {
 
 func inspectPrerollFile(root string) (prerollFileStatus, error) {
 	status := prerollFileStatus{RestartNeeded: prerollRestartNeeded()}
-	if !prerollStoragePersistent(root) {
-		status.Directory = true
-		status.Message = "Add a persistent folder mounted at /opt/preroll before uploading pre-roll media"
-		return status, nil
-	}
 	info, err := os.Stat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		status.Directory = true
@@ -225,19 +220,7 @@ func inspectPrerollFile(root string) (prerollFileStatus, error) {
 	return status, nil
 }
 
-func prerollStoragePersistent(root string) bool {
-	if !runningInContainer() {
-		return true
-	}
-	return requiredMountPersistent(persistentMountRequirement{
-		Label: "Pre-roll files", CheckPath: root, ContainerPath: "/opt/preroll",
-	})
-}
-
 func requirePrerollDirectory(root string) error {
-	if !prerollStoragePersistent(root) {
-		return fmt.Errorf("add a persistent folder mounted at /opt/preroll before uploading pre-roll media")
-	}
 	info, err := os.Stat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(root, 0o755); err != nil {

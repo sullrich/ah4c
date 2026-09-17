@@ -101,6 +101,16 @@
                         <div><code>stopbmitune.sh</code><span>Cleans up when the tune ends.</span></div>
                     </div>
                     <p class="setting-description">Advanced users can keep custom controls in one folder or organize them by device and app. Helper files are allowed.</p>
+                    <details class="local-script-create">
+                        <summary>Advanced: upload custom control files</summary>
+                        <p class="setting-description">This is only for people providing their own controls. Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
+                        <div class="local-script-create-grid">
+                            <div class="field"><label for="local-script-device">Main folder</label><input id="local-script-device" type="text" placeholder="my-controls"></div>
+                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
+                        </div>
+                        <div class="field local-script-files"><label for="local-script-files">Control and helper files</label><input id="local-script-files" type="file" multiple></div>
+                        <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Upload files</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
+                    </details>
                 </div>
             </section>
 
@@ -478,6 +488,52 @@ async function checkLocalScripts() {
     byId('streamer-query-status').textContent = count === 1 ? 'Found 1 complete local script choice.' : `Found ${count} complete local script choices.`;
 }
 
+async function uploadLocalScripts() {
+    const device = byId('local-script-device').value.trim();
+    const app = byId('local-script-app').value.trim();
+    const files = [...byId('local-script-files').files];
+    const status = byId('local-script-upload-status');
+    const button = byId('upload-local-scripts');
+    const validPart = value => value && !value.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(value);
+    if (!validPart(device) || (app && !validPart(app))) {
+        status.textContent = 'Enter a package name, and optionally an app folder, using letters, numbers, dots, underscores or hyphens.';
+        return;
+    }
+    if (!files.length) {
+        status.textContent = 'Choose all three required files: prebmitune.sh, bmitune.sh, and stopbmitune.sh.';
+        return;
+    }
+    const names = new Set(files.map(file => file.name));
+    const required = ['bmitune.sh', 'prebmitune.sh', 'stopbmitune.sh'];
+    const missing = required.filter(name => !names.has(name));
+    if (missing.length) {
+        status.textContent = `Nothing was uploaded. Add the missing required ${missing.length === 1 ? 'file' : 'files'}: ${missing.join(', ')}.`;
+        return;
+    }
+    const form = new FormData();
+    form.append('device', device);
+    form.append('app', app);
+    files.forEach(file => form.append('files', file, file.name));
+    const buttonLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Uploading…';
+    status.textContent = '';
+    try {
+        const response = await fetch('/api/config/local-scripts', {method:'POST', body:form});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'The files could not be uploaded.');
+        byId('local-script-files').value = '';
+        chooseLocalScript(payload.selection);
+        status.textContent = 'Files uploaded.';
+        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged.`;
+    } catch (error) {
+        status.textContent = error.message;
+    } finally {
+        button.disabled = false;
+        button.textContent = buttonLabel;
+    }
+}
+
 function chooseLocalScript(path) {
     const select = document.querySelector('[data-setting="STREAMER_APP"]');
     if (!select || select.disabled) return;
@@ -787,11 +843,11 @@ function startTunerPreview() {
     }
     tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
     tunerPreviewPlayer.attachMediaElement(video);
-    video.onloadedmetadata = () => {
+    video.addEventListener('loadedmetadata', () => {
         video.currentTime = video.duration;
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
-    };
-    video.onended = restartTunerPreviewSoon;
+    }, {once:true});
+    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
     tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
     tunerPreviewPlayer.load();
     tunerPreviewPlayer.play().catch(() => {});
@@ -1422,6 +1478,7 @@ byId('refresh-local-scripts').addEventListener('click', () => browseLocalScripts
 byId('use-local-script').addEventListener('click', () => {
     if (localScriptDirectory?.selection) chooseLocalScript(localScriptDirectory.selection);
 });
+byId('upload-local-scripts').addEventListener('click', uploadLocalScripts);
 byId('add-tuner').addEventListener('click', () => {
     if (state.tuners.countLocked) return;
     const number = byId('tuners').children.length;
@@ -1506,7 +1563,7 @@ async function handleSaveClick() {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
+            button.textContent = button.id === 'save-settings' && wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
         });
     }
 }
