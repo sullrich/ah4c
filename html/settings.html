@@ -115,7 +115,7 @@
             </section>
 
             <section class="card settings-section" data-section="tuners">
-                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
@@ -635,6 +635,7 @@ function renderTuners() {
     state.tuners.list.forEach((tuner, index) => target.appendChild(tunerCard(tuner, index)));
     const topologyLocked = Boolean(state.tuners.countLocked || state.tuners.topologyLocked);
     byId('check-connections').disabled = state.tuners.list.length === 0;
+    byId('tuner-environment-info').classList.toggle('hidden', !topologyLocked);
     byId('no-tuners-hint').classList.toggle('hidden', state.tuners.list.length !== 0);
     byId('tuner-lock-hint').classList.toggle('hidden', !topologyLocked);
     byId('tuner-lock-hint').textContent = state.tuners.countLocked
