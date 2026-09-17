@@ -733,12 +733,8 @@ func envengineStartup() {
 			fmt.Fprintln(os.Stderr, "[SCRIPTS] no STREAMER_APP configured; no scripts requested")
 			os.Exit(0)
 		}
-		target := filepath.Join(strings.Split(selection, "/")...)
-		if scriptPackageComplete(target) && !strings.EqualFold(os.Getenv("UPDATE_SCRIPTS"), "true") {
-			fmt.Fprintf(os.Stderr, "[SCRIPTS] using stored %s package\n", selection)
-			os.Exit(0)
-		}
-		if err := installScriptPackage(context.Background(), selection); err != nil {
+		update := strings.EqualFold(os.Getenv("UPDATE_SCRIPTS"), "true")
+		if err := installSelectedScriptPackages(context.Background(), selection, update); err != nil {
 			fmt.Fprintf(os.Stderr, "[SCRIPTS] %v\n", err)
 			os.Exit(1)
 		}

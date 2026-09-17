@@ -173,6 +173,9 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	logger("Starting TEECMD %s", r.t.teecmd)
 	// Execute command and assign stdin stdout stderr
 	cmdparts := strings.Fields(r.t.teecmd)
+	if len(cmdparts) == 0 {
+		return fmt.Errorf("TEECMD is empty")
+	}
 	cmd := exec.Command(cmdparts[0], cmdparts[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -380,6 +383,11 @@ func tune(idx, channel string, early *earlyTune) (io.ReadCloser, error) {
 			if t.cmd != "" {
 				logger("Attempting application tune for device %s %v", t.cmd, idx)
 				cmdAndArgs := parseCommand(t.cmd)
+				if len(cmdAndArgs) == 0 {
+					logger("[ERR] CMD is empty for tuner %d", i)
+					t.active = false
+					continue
+				}
 				cmd := exec.Command(cmdAndArgs[0], cmdAndArgs[1:]...)
 				pipeReader, pipeWriter := io.Pipe()
 				cmd.Stdout = pipeWriter
