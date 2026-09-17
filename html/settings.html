@@ -482,7 +482,7 @@ async function browseLocalScripts(path = '') {
 }
 
 async function checkLocalScripts() {
-    await Promise.all([loadStreamers(false), loadPreroll()]);
+    await loadStreamers(false);
     if (!await browseLocalScripts()) return;
     const count = localStreamerChoices.length;
     byId('streamer-query-status').textContent = count === 1 ? 'Found 1 complete local script choice.' : `Found ${count} complete local script choices.`;
