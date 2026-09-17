@@ -594,6 +594,11 @@ func validateCatalogValue(spec VarSpec, value string) error {
 	if spec.Key == "STREAMER_APP" && value != "" && !validStreamerSelection(value) {
 		return fmt.Errorf("must use scripts/package or scripts/device/app")
 	}
+	if spec.Key == "CHANNELS_M3U" && value != "" {
+		if _, err := validM3UFile(value); err != nil {
+			return err
+		}
+	}
 	switch spec.Key {
 	case "IPADDRESS":
 		if _, err := serverBaseURL(value, "7654"); err != nil {

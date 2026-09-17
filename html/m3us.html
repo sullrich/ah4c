@@ -31,6 +31,16 @@
 	</div>
 
     <div class="page">
+        <div class="card" id="m3u-file-manager">
+            <div class="card-title">Manage channel-list files</div>
+            <p class="section-help" style="margin-top:0;">Upload an <code>.m3u</code> file into AH4C's persistent M3U folder. Existing files with the same name can be replaced after confirmation.</p>
+            <div class="m3u-upload-row">
+                <input id="m3u-upload-file" type="file" accept=".m3u,application/x-mpegURL,audio/x-mpegurl">
+                <button class="btn btn-primary" id="upload-m3u" type="button">Upload M3U</button>
+            </div>
+            <div id="m3u-file-status" class="m3u-action-status muted" role="status"></div>
+        </div>
+
         <div class="card" id="m3u-setup" data-proxy-address="{{.proxyAddress}}" data-channels-dvr="{{.channelsDVR}}" data-selected-m3u="{{.selectedM3U}}">
             <div class="card-title">Add your channels to Channels DVR</div>
             {{if .m3us}}
@@ -84,11 +94,14 @@
             <p class="section-help">These are the channel lists stored in ah4c. Editing one changes what Channels DVR receives the next time it refreshes that list.</p>
             <div class="menu-grid">
                 {{range .m3us}}
-                <a href="/editm3u/{{.}}" class="menu-item">
-                    <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
-                    <span class="menu-label mono">{{.}}</span>
-                    <span class="menu-desc">Open and edit this channel list</span>
-                </a>
+                <div class="m3u-file-item" data-m3u-file="{{.}}">
+                    <a href="/editm3u/{{.}}" class="menu-item">
+                        <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
+                        <span class="menu-label mono">{{.}}</span>
+                        <span class="menu-desc">Open and edit this channel list</span>
+                    </a>
+                    <button class="btn btn-danger btn-sm" data-delete-m3u="{{.}}" type="button">Delete</button>
+                </div>
                 {{end}}
             </div>
         </div>
@@ -193,6 +206,66 @@
                 button.disabled = !normalizedBase(setup.dataset.proxyAddress, '7654');
             }
         }
+
+        async function uploadM3U() {
+            const input = document.getElementById('m3u-upload-file');
+            const button = document.getElementById('upload-m3u');
+            const status = document.getElementById('m3u-file-status');
+            const file = input.files?.[0];
+            if (!file) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'Choose an .m3u file first.';
+                return;
+            }
+            if (!file.name.toLowerCase().endsWith('.m3u')) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'The filename must end in .m3u.';
+                return;
+            }
+            const replacing = [...document.querySelectorAll('[data-m3u-file]')].some(item => item.dataset.m3uFile === file.name);
+            if (replacing && !confirm(`Replace ${file.name}?`)) return;
+            button.disabled = true;
+            status.className = 'm3u-action-status muted';
+            status.textContent = replacing ? `Replacing ${file.name}…` : `Uploading ${file.name}…`;
+            try {
+                const form = new FormData();
+                form.append('file', file, file.name);
+                const response = await fetch('/api/m3u/files', {method:'POST', body:form});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'M3U upload failed.');
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = `${payload.file} was ${payload.replaced ? 'replaced' : 'uploaded'}. Reloading…`;
+                location.reload();
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function deleteM3U(file) {
+            if (!confirm(`Delete ${file}? This removes the complete channel-list file.`)) return;
+            const status = document.getElementById('m3u-file-status');
+            status.className = 'm3u-action-status muted';
+            status.textContent = `Deleting ${file}…`;
+            try {
+                const response = await fetch('/api/m3u/files/' + encodeURIComponent(file), {method:'DELETE'});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'M3U deletion failed.');
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = `${file} was deleted. Reloading…`;
+                location.reload();
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            }
+        }
+
+        document.getElementById('upload-m3u').addEventListener('click', uploadM3U);
+        document.querySelectorAll('[data-delete-m3u]').forEach(button => {
+            button.addEventListener('click', () => deleteM3U(button.dataset.deleteM3u));
+        });
 
         if (choice) {
             const saved = setup.dataset.selectedM3u;

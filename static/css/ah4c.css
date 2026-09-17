@@ -502,11 +502,19 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .settings-actions { display: flex; align-items: center; gap: .7rem; padding: 1rem 1.15rem; margin-top: .9rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); }
 .settings-actions .btn { flex: 0 0 auto; white-space: nowrap; }
 #save-status { flex: 1 1 16rem; min-width: 0; }
+.m3u-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
+.m3u-upload-row input[type="file"] { width: 100%; padding: .42rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: .76rem; }
+.m3u-upload-row input[type="file"]::file-selector-button { margin-right: .6rem; padding: .3rem .55rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+.m3u-file-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: stretch; }
+.m3u-file-item .menu-item { min-width: 0; }
+.m3u-file-item > .btn { align-self: center; }
+
 .m3u-readout { min-height: 35px; padding: .45rem .65rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
 .m3u-choice-summary { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin-top: 1rem; padding: .75rem .85rem; background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
 .m3u-choice-summary > div { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
 .m3u-choice-label { color: var(--text-muted); font-size: .74rem; }
 .m3u-choice-summary strong { overflow: hidden; text-overflow: ellipsis; }
+.m3u-action-status { min-height: 1.4rem; margin-top: .65rem; font-size: .76rem; }
 .m3u-copy-details { margin-top: .9rem; padding-top: .75rem; border-top: 1px solid var(--border-soft); }
 .m3u-copy-details summary { color: var(--text-muted); font-size: .76rem; cursor: pointer; }
 .m3u-copy-row { display: grid; grid-template-columns: 1fr auto; gap: .5rem; align-items: center; margin-top: .55rem; }
@@ -531,6 +539,9 @@ details.card > summary::-webkit-details-marker { display: none; }
   .preroll-manager { grid-template-columns: 1fr; }
   .m3u-choice-summary { align-items: flex-start; flex-direction: column; }
   .m3u-copy-row { grid-template-columns: 1fr; }
+  .m3u-upload-row { grid-template-columns: 1fr; }
+  .m3u-file-item { grid-template-columns: 1fr; }
+  .m3u-file-item > .btn { justify-self: start; }
 }
 
 @media (max-width: 760px) {

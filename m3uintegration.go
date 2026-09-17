@@ -34,8 +34,151 @@ type channelsM3USource struct {
 	XMLTVRefresh string `json:"xmltv_refresh"`
 }
 
+const maxM3UUploadBytes int64 = 16 << 20
+
 func registerM3UIntegrationRoutes(r *gin.Engine) {
 	r.POST("/api/m3u/add-to-channels", addM3UToChannelsHandler)
+	r.POST("/api/m3u/files", uploadM3UFileHandler)
+	r.DELETE("/api/m3u/files/:file", deleteM3UFileHandler)
+}
+
+func uploadM3UFileHandler(c *gin.Context) {
+	if !configOperationsAllowed() {
+		c.JSON(http.StatusConflict, gin.H{"error": "Wait until the current tune finishes before uploading a channel list."})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxM3UUploadBytes+(1<<20))
+	header, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Choose an M3U channel-list file to upload."})
+		return
+	}
+	name := filepath.Base(filepath.ToSlash(header.Filename))
+	name, err = validM3UFile(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := os.MkdirAll("m3u", 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not prepare the M3U folder: %v", err)})
+		return
+	}
+	target := filepath.Join("m3u", name)
+	replaced := false
+	if info, statErr := os.Lstat(target); statErr == nil {
+		if !info.Mode().IsRegular() {
+			c.JSON(http.StatusConflict, gin.H{"error": "The destination exists but is not a regular file."})
+			return
+		}
+		replaced = true
+	} else if !os.IsNotExist(statErr) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not inspect the destination: %v", statErr)})
+		return
+	}
+	source, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Could not read the upload: %v", err)})
+		return
+	}
+	defer source.Close()
+	temporary, err := os.CreateTemp("m3u", ".m3u-upload-*")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not stage the upload: %v", err)})
+		return
+	}
+	temporaryName := temporary.Name()
+	committed := false
+	defer func() {
+		temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryName)
+		}
+	}()
+	written, copyErr := io.Copy(temporary, io.LimitReader(source, maxM3UUploadBytes+1))
+	if copyErr != nil || written > maxM3UUploadBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "The M3U file is larger than the 16 MB upload limit or could not be read."})
+		return
+	}
+	if err := temporary.Sync(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not finish the upload: %v", err)})
+		return
+	}
+	if err := temporary.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not finish the upload: %v", err)})
+		return
+	}
+	if err := os.Chmod(temporaryName, 0o644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not set M3U file permissions: %v", err)})
+		return
+	}
+	if err := os.Rename(temporaryName, target); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not activate the uploaded M3U: %v", err)})
+		return
+	}
+	committed = true
+	logger("[M3U] uploaded %s (%s)", target, byteCount(written))
+	c.JSON(http.StatusCreated, gin.H{"status": "ok", "file": name, "replaced": replaced, "size": written})
+}
+
+func deleteM3UFileHandler(c *gin.Context) {
+	if !configOperationsAllowed() {
+		c.JSON(http.StatusConflict, gin.H{"error": "Wait until the current tune finishes before deleting a channel list."})
+		return
+	}
+	name, err := validM3UFile(c.Param("file"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target := filepath.Join("m3u", name)
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "That channel list is not available."})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	if !info.Mode().IsRegular() {
+		c.JSON(http.StatusConflict, gin.H{"error": "The selected path is not a regular M3U file."})
+		return
+	}
+	envEngineMu.RLock()
+	lockedSelection := envLocked["CHANNELS_M3U"] && os.Getenv("CHANNELS_M3U") == name
+	envEngineMu.RUnlock()
+	if lockedSelection {
+		c.JSON(http.StatusConflict, gin.H{"error": "This channel list is selected by the container environment. Change CHANNELS_M3U before deleting it."})
+		return
+	}
+	if err := os.Remove(target); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not delete the M3U file: %v", err)})
+		return
+	}
+	forgetRememberedM3U(name)
+	logger("[M3U] deleted %s", target)
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "file": name})
+}
+
+func forgetRememberedM3U(file string) {
+	configAPIMu.Lock()
+	defer configAPIMu.Unlock()
+	envEngineMu.RLock()
+	settings := copySettings(envSettings)
+	locked := envLocked["CHANNELS_M3U"]
+	envEngineMu.RUnlock()
+	if locked || settings.Vars["CHANNELS_M3U"] != file {
+		return
+	}
+	delete(settings.Vars, "CHANNELS_M3U")
+	if err := saveSettings(settings); err != nil {
+		logger("[M3U] deleted %s but could not clear its saved selection: %v", file, err)
+		return
+	}
+	envEngineMu.Lock()
+	envSettings = settings
+	envEngineMu.Unlock()
+	_ = os.Unsetenv("CHANNELS_M3U")
 }
 
 func addM3UToChannelsHandler(c *gin.Context) {
