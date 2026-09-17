@@ -201,16 +201,25 @@ func restartConfigHandler(c *gin.Context) {
 }
 
 func streamersConfigHandler(c *gin.Context) {
-	streamers := discoverStreamers()
+	local := discoverLocalStreamers()
+	remote := loadStreamerCache()
 	if c.Query("remote") == "true" {
-		remote, err := queryUpstreamStreamers()
+		queried, err := queryUpstreamStreamers()
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "streamers": streamers})
+			if c.Query("details") == "true" {
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "local": local, "remote": remote})
+			} else {
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "streamers": mergeStreamers(local, remote)})
+			}
 			return
 		}
-		streamers = mergeStreamers(streamers, remote)
+		remote = queried
 	}
-	c.JSON(http.StatusOK, streamers)
+	if c.Query("details") == "true" {
+		c.JSON(http.StatusOK, gin.H{"local": local, "remote": remote})
+		return
+	}
+	c.JSON(http.StatusOK, mergeStreamers(local, remote))
 }
 
 type localScriptEntry struct {
@@ -887,8 +896,15 @@ func activeTunerNumbers() []int {
 }
 
 func discoverStreamers() []string {
+	return mergeStreamers(discoverLocalStreamers(), loadStreamerCache())
+}
+
+func discoverLocalStreamers() []string {
+	return discoverLocalStreamersAt("scripts")
+}
+
+func discoverLocalStreamersAt(root string) []string {
 	seen := map[string]bool{}
-	root := "scripts"
 	devices, err := os.ReadDir(root)
 	if err == nil {
 		for _, device := range devices {
@@ -908,9 +924,6 @@ func discoverStreamers() []string {
 				}
 			}
 		}
-	}
-	for _, value := range loadStreamerCache() {
-		seen[value] = true
 	}
 	result := make([]string, 0, len(seen))
 	for value := range seen {

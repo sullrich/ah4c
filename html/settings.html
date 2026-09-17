@@ -62,7 +62,7 @@
 
             <section class="card settings-section" data-section="streamer">
                 <div class="card-title">Streamer script</div>
-                <p class="section-help"><strong>Optional during initial setup:</strong> The script package you choose here becomes <code>STREAMER_APP</code>; there is no second app setting and you do not need to supply that environment variable yourself. Leave it blank until you are ready. <strong>Check for scripts</strong> gets the valid package list from GitHub without downloading any scripts. After you select and save one, the container downloads only that package.</p>
+                <p class="section-help"><strong>Optional during initial setup:</strong> The script package you choose here becomes <code>STREAMER_APP</code>; there is no second app setting and you do not need to supply that environment variable yourself. Local folders are labeled in the same dropdown and are used as-is with <strong>Update scripts</strong> set to No. <strong>Check for scripts</strong> gets the available GitHub package list without downloading any scripts.</p>
                 <div id="section-streamer" class="settings-grid"></div>
                 <div class="btn-row compact-row">
                     <button id="query-streamers" class="btn btn-sm" type="button">Check for scripts</button>
@@ -180,7 +180,8 @@ const sectionKeys = {
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT', 'TZ', 'CC_WATCHDOG']
 };
 let state = null;
-let streamerChoices = [];
+let localStreamerChoices = [];
+let remoteStreamerChoices = [];
 let wizard = false;
 let wizardStep = 0;
 let localScriptDirectory = null;
@@ -295,17 +296,19 @@ async function loadStreamers(remote) {
     const typedChoice = document.querySelector('[data-custom-streamer]')?.value.trim() || document.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
     if (status && remote) status.textContent = 'Checking GitHub for scripts…';
     try {
-        const response = await fetch('/api/config/streamers' + (remote ? '?remote=true' : ''));
+        const query = new URLSearchParams({details:'true'});
+        if (remote) query.set('remote', 'true');
+        const response = await fetch('/api/config/streamers?' + query);
         const payload = await response.json();
+        if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
+        if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
         if (!response.ok) {
-            if (Array.isArray(payload.streamers)) streamerChoices = payload.streamers;
             if (status) status.textContent = 'GitHub could not be reached. Showing local and previously saved scripts.';
             const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
             if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
             return;
         }
-        streamerChoices = payload;
-        if (status && remote) status.textContent = `Found ${payload.length} script packages. No scripts were downloaded.`;
+        if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} script packages. No scripts were downloaded.`;
         const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
         if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
     } catch (error) {
@@ -349,13 +352,20 @@ async function browseLocalScripts(path = '') {
 function chooseLocalScript(path) {
     const select = document.querySelector('[data-setting="STREAMER_APP"]');
     if (!select || select.disabled) return;
-    if (![...select.options].some(option => option.value === path)) {
-        select.add(new Option(path, path));
+    if (!localStreamerChoices.includes(path)) localStreamerChoices.push(path);
+    let option = [...select.options].find(candidate => candidate.value === path);
+    if (!option) {
+        option = new Option(`Local folder — ${path}`, path);
+        select.add(option);
+    } else {
+        option.textContent = `Local folder — ${path}`;
     }
     select.value = path;
     document.querySelector('[data-custom-streamer]').value = '';
+    const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
+    if (updateScripts && !updateScripts.disabled) updateScripts.value = 'false';
     byId('local-script-browser').classList.add('hidden');
-    byId('streamer-query-status').textContent = `Selected local package ${path}. Save settings to apply it.`;
+    byId('streamer-query-status').textContent = `Selected local folder ${path}. Update scripts was set to No so GitHub will not replace it. Save settings to apply it.`;
 }
 
 function render() {
@@ -391,8 +401,13 @@ function renderFieldInto(spec, target, replace = false) {
     const title = spec.locked ? 'set by environment — remove that environment variable to manage it here' : '';
     let control;
     if (spec.key === 'STREAMER_APP') {
-        const choices = [...new Set([...streamerChoices, spec.value].filter(Boolean))].sort();
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Select a script…</option>${choices.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('')}</select><input class="custom-streamer" type="text" data-custom-streamer value="${choices.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Or enter scripts/device/provider" ${disabled}>`;
+        const local = [...new Set(localStreamerChoices)].sort();
+        const remote = [...new Set(remoteStreamerChoices)].filter(value => !local.includes(value)).sort();
+        const known = [...local, ...remote];
+        const localOptions = local.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>Local folder — ${escapeHTML(value)}</option>`).join('');
+        const remoteOptions = remote.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Select a script…</option>${localOptions ? `<optgroup label="Local scripts folders">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="Available from GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Or enter scripts/device/provider" ${disabled}>`;
     } else if (spec.type === 'bool') {
         control = `<select data-setting="${spec.key}" ${disabled}><option value="false" ${String(spec.value).toLowerCase() !== 'true' ? 'selected' : ''}>No</option><option value="true" ${String(spec.value).toLowerCase() === 'true' ? 'selected' : ''}>Yes</option></select>`;
     } else if (spec.type === 'enum' && spec.enum?.length) {
@@ -402,6 +417,14 @@ function renderFieldInto(spec, target, replace = false) {
         control = `<input type="${type}" data-setting="${spec.key}" value="${escapeHTML(spec.value)}" placeholder="${escapeHTML(spec.placeholder || '')}" ${disabled}>`;
     }
     wrap.innerHTML = `<div class="setting-label"><label>${escapeHTML(spec.label)}</label>${spec.locked ? `<span class="badge config-lock" title="${title}">set by environment</span>` : `<span class="setting-source">${escapeHTML(spec.source)}</span>`}</div>${control}<div class="setting-description">${escapeHTML(spec.desc)}${spec.type === 'seconds' ? ' (seconds)' : ''}</div>${spec.scriptVaries ? `<div class="setting-script-note">varies by script — see your STREAMER_APP's scripts for accepted values</div>` : ''}`;
+    if (spec.key === 'STREAMER_APP') {
+        wrap.querySelector('select')?.addEventListener('change', event => {
+            if (!localStreamerChoices.includes(event.target.value)) return;
+            const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
+            if (updateScripts && !updateScripts.disabled) updateScripts.value = 'false';
+            if (byId('streamer-query-status')) byId('streamer-query-status').textContent = 'Local folder selected. Update scripts was set to No so GitHub will not replace it.';
+        });
+    }
     if (replace && existing) existing.replaceWith(wrap); else target.appendChild(wrap);
 }
 

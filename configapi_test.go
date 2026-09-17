@@ -229,6 +229,29 @@ func TestReadLocalScriptDirectoryRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalStreamersOnlyListsCompletePackages(t *testing.T) {
+	root := t.TempDir()
+	complete := filepath.Join(root, "my-device", "my-app")
+	incomplete := filepath.Join(root, "other-device", "other-app")
+	for _, directory := range []string{complete, incomplete} {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range requiredStreamerFiles {
+		if err := os.WriteFile(filepath.Join(complete, name), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(incomplete, "bmitune.sh"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got := discoverLocalStreamersAt(root)
+	if len(got) != 1 || got[0] != "scripts/my-device/my-app" {
+		t.Fatalf("discoverLocalStreamersAt() = %#v", got)
+	}
+}
+
 func TestConnectionAddressParsing(t *testing.T) {
 	for _, tc := range []struct {
 		value string
