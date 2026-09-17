@@ -652,7 +652,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const number = Number.isInteger(tuner.number) ? tuner.number : index;
     card.dataset.tunerNumber = String(number);
     if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button" ${String(tuner.encoderURL || '').trim() ? '' : 'disabled title="Add an encoder URL to enable preview"'}>Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
@@ -672,8 +672,17 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
         if (output) output.textContent = '';
         updateTunerDeviceLabels();
+        if (input.dataset.tuner === 'encoderURL') updateTunerPreviewButton(card);
     }));
+    updateTunerPreviewButton(card);
     return card;
+}
+
+function updateTunerPreviewButton(card) {
+    const button = card.querySelector('[data-tuner-preview]');
+    const configured = Boolean(card.querySelector('[data-tuner="encoderURL"]')?.value.trim());
+    button.disabled = !configured;
+    button.title = configured ? '' : 'Add an encoder URL to enable preview';
 }
 
 function canDeleteTunerCard(card) {
