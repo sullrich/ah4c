@@ -61,7 +61,7 @@ var varCatalog = []VarSpec{
 	{Key: "IPADDRESS", Label: "This ah4c address", Desc: "The network address other devices use to reach ah4c.", Placeholder: "192.168.1.50:7654", Type: varString, Applies: applyLive},
 	{Key: "CHANNELSIP", Label: "Channels DVR address", Desc: "Open Channels DVR in a browser and copy the server address and port from the address bar.", Placeholder: "192.168.1.20:8089", Type: varString, Applies: applyLive},
 	{Key: "CHANNELS_M3U", Label: "Channel list in Channels DVR", Desc: "The last M3U successfully added to Channels DVR. The Channel M3Us page is the easiest place to change it.", Placeholder: "all.m3u", Type: varString, Applies: applyLive},
-	{Key: "STREAMER_APP", Label: "Streamer app", Desc: "Optional local or GitHub script package used when a tuner needs to control a streaming device. You can leave this blank and choose one later.", Placeholder: "scripts/my-package", Type: varEnum, Applies: applyRestart},
+	{Key: "STREAMER_APP", Label: "Streaming app", Desc: "Choose the streaming service and device ah4c should control. This tells ah4c how to open the right app and channel. Leave it blank if you are not ready to add a tuner yet.", Placeholder: "scripts/my-package", Type: varEnum, Applies: applyRestart},
 	{Key: "PYATV", Label: "Use pyatv", Desc: "Use Apple TV tuners through pyatv instead of adb-based tuners. Changing this requires a restart.", Type: varBool, Applies: applyRestart},
 	{Key: "FASTCHANNELS_URL", Label: "FastChannels URL", Desc: "Base URL of the FastChannels container used by its ah4c tuning integration.", Placeholder: "http://fastchannels:8000", Type: varURL, Applies: applyLive, ScriptVaries: true},
 	{Key: "ALERT_SMTP_SERVER", Label: "SMTP server", Desc: "SMTP server and port used for failure alerts.", Placeholder: "smtp.gmail.com:587", Type: varString, Applies: applyLive},
@@ -73,7 +73,7 @@ var varCatalog = []VarSpec{
 	{Key: "ALERT_WEBHOOK_URL", Label: "Alert webhook URL", Desc: "URL to GET when tuning fails; $reason is replaced with the encoded failure message.", Type: varURL, Applies: applyLive},
 	{Key: "LIVETV_ATTEMPTS", Label: "Live TV attempts", Desc: "Maximum attempts at finding a channel with Fire TV Live Guide tuning.", Placeholder: "3", Type: varInt, Applies: applyLive, ScriptVaries: true},
 	{Key: "CREATE_M3US", Label: "Create device M3Us", Desc: "Create device-specific M3Us for Amazon Prime Premium channels at startup.", Type: varBool, Applies: applyRestart},
-	{Key: "UPDATE_SCRIPTS", Label: "Update scripts", Desc: "When enabled, replace only the chosen package with the latest copy from sullrich/ah4c at startup. This also works when STREAMER_APP is set in the environment.", Type: varBool, Applies: applyRestart},
+	{Key: "UPDATE_SCRIPTS", Label: "Automatically update this choice", Desc: "Yes checks online for an updated copy when ah4c starts. No keeps the copy already stored on this server. If the online service is unavailable, ah4c keeps using the stored copy.", Type: varBool, Applies: applyRestart},
 	{Key: "UPDATE_M3US", Label: "Update sample M3Us", Desc: "Replace bundled sample M3Us at startup.", Type: varBool, Applies: applyRestart},
 	{Key: "USER_SCRIPT", Label: "Custom startup script", Desc: "Path to a custom script run alongside ah4c at container startup.", Type: varPath, Applies: applyRestart},
 	{Key: "TZ", Label: "Time zone", Desc: "Local time zone used for logs and scheduled behavior.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
@@ -724,7 +724,7 @@ type persistentMountRequirement struct {
 func requiredPersistentMounts() []persistentMountRequirement {
 	return []persistentMountRequirement{
 		{Label: "Settings", CheckPath: filepath.Dir(settingsFilePath()), ContainerPath: "/opt/config", InvalidMountRoot: "/ah4c/config"},
-		{Label: "Streaming-app scripts", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts", InvalidMountRoot: "/ah4c/scripts"},
+		{Label: "Streaming-app controls", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts", InvalidMountRoot: "/ah4c/scripts"},
 		{Label: "Channel lists", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u", InvalidMountRoot: "/ah4c/m3u"},
 		{Label: "Android connection keys", CheckPath: "/root/.android", ContainerPath: "/root/.android", InvalidMountRoot: "/ah4c/adb"},
 		{Label: "Closed-caption files", CheckPath: "/opt/captions", ContainerPath: "/opt/captions", InvalidMountRoot: "/ah4c/captions"},
