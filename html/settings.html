@@ -585,10 +585,14 @@ function renderTuners() {
     const target = byId('tuners');
     target.innerHTML = '';
     state.tuners.list.forEach((tuner, index) => target.appendChild(tunerCard(tuner, index)));
-    byId('add-tuner').disabled = state.tuners.locked;
+    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
+    byId('add-tuner').disabled = topologyLocked;
     byId('check-connections').disabled = state.tuners.list.length === 0;
     byId('no-tuners-hint').classList.toggle('hidden', state.tuners.list.length !== 0);
-    byId('tuner-lock-hint').classList.toggle('hidden', !state.tuners.locked);
+    byId('tuner-lock-hint').classList.toggle('hidden', !topologyLocked);
+    byId('tuner-lock-hint').textContent = state.tuners.locked
+        ? 'The tuner count is set by the environment, so the complete tuner section is read-only.'
+        : 'One or more tuner values are set by the environment. To protect tuner numbering, adding, deleting, and reordering tuners are disabled. Fields not set by the environment can still be edited.';
     renumberTuners();
     updateTunerDeviceLabels();
 }
@@ -597,11 +601,13 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const card = document.createElement('div');
     card.className = 'tuner-card';
     const lock = tuner.locked || {};
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${index}</span><h3>Tuner ${index}</h3><span class="spacer"></span><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button" ${state.tuners.locked ? 'disabled' : ''}>Delete</button></div>
+    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${index}</span><h3>Tuner ${index}</h3><span class="spacer"></span><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button" ${topologyLocked ? 'disabled title="Tuner numbering is controlled by the environment"' : ''}>Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
+        if (state.tuners.locked || state.tuners.topologyLocked) return;
         card.remove();
         renumberTuners();
         const empty = byId('tuners').children.length === 0;
@@ -635,12 +641,13 @@ function updateTunerDeviceLabels() {
 
 function renumberTuners() {
     const cards = [...byId('tuners').children];
+    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
     cards.forEach((card, index) => {
         card.querySelector('.tuner-number').textContent = index;
         card.querySelector('h3').textContent = `Tuner ${index}`;
-        card.querySelector('.delete-tuner').disabled = state.tuners.locked;
+        card.querySelector('.delete-tuner').disabled = topologyLocked;
     });
-    byId('edit-tuner-order').disabled = state.tuners.locked || cards.length < 2;
+    byId('edit-tuner-order').disabled = topologyLocked || cards.length < 2;
 }
 
 function openTunerOrderEditor() {
@@ -1247,6 +1254,7 @@ byId('use-local-script').addEventListener('click', () => {
 });
 byId('upload-local-scripts').addEventListener('click', uploadLocalScripts);
 byId('add-tuner').addEventListener('click', () => {
+    if (state.tuners.locked || state.tuners.topologyLocked) return;
     byId('tuners').appendChild(tunerCard(undefined, byId('tuners').children.length));
     renumberTuners();
     updateTunerDeviceLabels();

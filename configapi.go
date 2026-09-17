@@ -124,7 +124,7 @@ func putConfigHandler(c *gin.Context) {
 	locked := copyBoolMap(envLocked)
 	envEngineMu.RUnlock()
 
-	rejected := lockedRequestKeys(request, locked)
+	rejected := lockedRequestKeys(request, old, locked)
 	if len(rejected) > 0 {
 		c.JSON(http.StatusConflict, gin.H{"error": "settings are owned by the environment", "locked": rejected})
 		return
@@ -841,7 +841,16 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		}
 		items = append(items, gin.H{"tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
 	}
-	return gin.H{"locked": allLocked, "list": items}
+	return gin.H{"locked": allLocked, "topologyLocked": tunerTopologyLocked(locked), "list": items}
+}
+
+func tunerTopologyLocked(locked map[string]bool) bool {
+	for key, isLocked := range locked {
+		if isLocked && tunerKeyPattern.MatchString(key) {
+			return true
+		}
+	}
+	return false
 }
 
 func currentEnvTuners() int {
@@ -881,7 +890,7 @@ func copyBoolMap(source map[string]bool) map[string]bool {
 	return result
 }
 
-func lockedRequestKeys(request configSaveRequest, locked map[string]bool) []string {
+func lockedRequestKeys(request configSaveRequest, old Settings, locked map[string]bool) []string {
 	var rejected []string
 	for key := range request.Vars {
 		if locked[key] {
@@ -896,6 +905,9 @@ func lockedRequestKeys(request configSaveRequest, locked map[string]bool) []stri
 	if request.Tuners != nil && locked["NUMBER_TUNERS"] {
 		rejected = append(rejected, "NUMBER_TUNERS")
 	} else if request.Tuners != nil {
+		if tunerTopologyLocked(locked) && len(*request.Tuners) != len(old.Tuners) {
+			rejected = append(rejected, "tuner count")
+		}
 		for i, tuner := range *request.Tuners {
 			n := strconv.Itoa(i + 1)
 			for key, value := range map[string]string{
