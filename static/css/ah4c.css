@@ -442,7 +442,6 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .storage-mount-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: center; padding: .48rem .6rem; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
 .storage-mount-list span { color: var(--text); font-weight: 500; }
 .storage-mount-list code { color: var(--accent); }
-.storage-blocker .btn { margin-top: .35rem; }
 .validation-error { color: var(--danger); }
 .empty-state { margin: .65rem 0 .75rem; padding: .75rem .85rem; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: .76rem; }
 .empty-state strong { color: var(--text); }

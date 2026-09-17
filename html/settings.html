@@ -49,8 +49,7 @@
                 <p>ah4c is missing one or more permanent storage folders. Without them, your settings or downloaded files could disappear when the container is updated or replaced.</p>
                 <p><strong>What to do:</strong> Open ah4c in your container manager, stop the container, and add a permanent host folder for every item listed below. The container folder shown must match exactly.</p>
                 <ul id="wizard-missing-mounts" class="storage-mount-list"></ul>
-                <p>Recreate or restart the container after adding the folders, then return here.</p>
-                <button id="wizard-storage-recheck" class="btn btn-sm" type="button">Check storage again</button>
+                <p><strong>Required:</strong> Recreate or restart the container after adding the folders. Then open Settings again to continue setup.</p>
             </div>
             <div class="btn-row"><button id="wizard-start" class="btn btn-primary" type="button">Start setup</button></div>
         </section>
@@ -1115,7 +1114,6 @@ function showWizardStep(step) {
 }
 
 byId('wizard-start').addEventListener('click', () => showWizardStep(1));
-byId('wizard-storage-recheck').addEventListener('click', () => location.reload());
 byId('wizard-back').addEventListener('click', () => {
     if (wizardStep <= 1) startWizardIntro(); else showWizardStep(wizardStep - 1);
 });
