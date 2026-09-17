@@ -19,6 +19,7 @@
 			<a href="/status/andlogs">Activity &amp; Logs</a>
 			<a href="/logs">Logs</a>
 			<a href="/captions">Closed Captions</a>
+			<a href="/settings">Settings</a>
 			<a href="/m3us">Channel M3Us</a>
 			<a href="/allm3u" class="active">Create all.m3u</a>
 			<a href="/routes">API Routes</a>
@@ -34,12 +35,17 @@
         <div class="card">
             <div class="card-title">Combine channel M3Us</div>
             <p class="footnote">
-                Pick one or more channel M3Us, and choose the <span class="mono">scripts/&lt;device&gt;/&lt;provider&gt;</span>
-                set each one should tune through. Every play URL gets <span class="mono">device~provider~</span> inserted
-                ahead of its channel, so <span class="mono">scripts/all/all</span> can dispatch each tune to the right
-                script set. The container's <span class="mono">STREAMER_APP</span> must be set to <span class="mono">scripts/all/all</span>
-                for the combined file to work.
+                Choose the channel lists you want to combine, then tell ah4c which device and TV service each list uses.
+                The finished <span class="mono">all.m3u</span> can tune every selected service from one Channels DVR source.
             </p>
+            <div class="config-notice {{if ne .streamerApp "scripts/all/all"}}config-notice--warning{{end}}" style="margin-top:.8rem; margin-bottom:.8rem;">
+                <span>{{if eq .streamerApp "scripts/all/all"}}Combined-list tuning is ready.{{else}}To use a combined list, choose <span class="mono">scripts/all/all</span> as the Streamer app in Settings.{{end}}</span>
+                {{if ne .streamerApp "scripts/all/all"}}<a class="btn btn-sm" href="/settings">Open Settings</a>{{end}}
+            </div>
+            <div class="btn-row" style="margin-top:0; margin-bottom:.8rem;">
+                <button class="btn btn-sm" id="check-scripts" type="button">Check for available scripts</button>
+                <span class="muted" id="script-check-status">This checks the list only. It does not download scripts.</span>
+            </div>
 
             {{if not .sources}}
             <p class="footnote">No source M3Us found in the m3u directory.</p>
@@ -80,12 +86,15 @@
         </div>
 
         <div class="btn-row">
-            <button class="btn btn-success" onclick="generate()">Generate</button>
-            <button class="btn btn-danger" onclick="cancel()">Cancel</button>
+            <button class="btn" id="download-scripts" type="button">Download selected scripts</button>
+            <button class="btn btn-primary" id="generate-all" type="button">Create all.m3u</button>
+            <button class="btn" onclick="cancel()">Back to home</button>
         </div>
+        <div id="allm3u-status" class="m3u-action-status muted" role="status"></div>
     </div>
     <script>
         const deviceProviders = {{.devicesJSON}};
+        const packageStatuses = {{.packageStatusesJSON}};
 
         document.querySelectorAll('.src-device').forEach(function (sel) {
             sel.addEventListener('change', function () { populateProviders(sel); });
@@ -94,6 +103,7 @@
         function populateProviders(deviceSelect) {
             const providerSelect = deviceSelect.closest('tr').querySelector('.src-provider');
             const providers = deviceProviders[deviceSelect.value] || [];
+            const currentProvider = providerSelect.value;
             providerSelect.innerHTML = '';
             if (!deviceSelect.value) {
                 providerSelect.innerHTML = '<option value="">Select device first</option>';
@@ -102,12 +112,20 @@
             providers.forEach(function (p) {
                 const opt = document.createElement('option');
                 opt.value = p;
-                opt.textContent = p;
+                const path = 'scripts/' + deviceSelect.value + '/' + p;
+                const status = packageStatuses[path] || 'remote';
+                const description = status === 'ready'
+                    ? ' — ready locally'
+                    : status === 'incomplete'
+                        ? ' — local folder is missing required files'
+                        : ' — available to download';
+                opt.textContent = p + description;
                 providerSelect.appendChild(opt);
             });
+            if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
         }
 
-        function generate() {
+        function selectedSources() {
             const rows = document.querySelectorAll('#sourcesTable tbody tr');
             const sources = [];
             for (const row of rows) {
@@ -116,13 +134,110 @@
                 const device = row.querySelector('.src-device').value;
                 const provider = row.querySelector('.src-provider').value;
                 if (!device || !provider) {
-                    alert('Choose a device and provider for ' + file);
-                    return;
+                    throw new Error('Choose a device and TV service for ' + file + '.');
                 }
                 sources.push({ file: file, device: device, provider: provider });
             }
             if (sources.length === 0) {
-                alert('Select at least one M3U to combine');
+                throw new Error('Select at least one channel list to combine.');
+            }
+            return sources;
+        }
+
+        async function checkScripts() {
+            const button = document.getElementById('check-scripts');
+            const status = document.getElementById('script-check-status');
+            button.disabled = true;
+            status.textContent = 'Checking GitHub for the available script list…';
+            try {
+                const response = await fetch('/api/config/streamers?remote=true');
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'GitHub could not be reached.');
+                mergeAvailableScripts(payload.streamers || payload);
+                status.textContent = 'Script list updated. No scripts were downloaded.';
+            } catch (error) {
+                status.textContent = error.message + ' Installed scripts are still available.';
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function mergeAvailableScripts(streamers) {
+            if (!Array.isArray(streamers)) return;
+            streamers.forEach(function (path) {
+                const parts = String(path).split('/');
+                if (parts.length !== 3 || parts[0] !== 'scripts' || !parts[1] || !parts[2]) return;
+                if (!deviceProviders[parts[1]]) deviceProviders[parts[1]] = [];
+                if (!deviceProviders[parts[1]].includes(parts[2])) {
+                    deviceProviders[parts[1]].push(parts[2]);
+                    deviceProviders[parts[1]].sort();
+                }
+            });
+            const devices = Object.keys(deviceProviders).sort();
+            document.querySelectorAll('.src-device').forEach(function (deviceSelect) {
+                const currentDevice = deviceSelect.value;
+                devices.forEach(function (device) {
+                    if (![...deviceSelect.options].some(option => option.value === device)) {
+                        deviceSelect.add(new Option(device, device));
+                    }
+                });
+                deviceSelect.value = currentDevice;
+                populateProviders(deviceSelect);
+            });
+        }
+
+        async function downloadSelectedScripts() {
+            const status = document.getElementById('allm3u-status');
+            const button = document.getElementById('download-scripts');
+            let sources;
+            try { sources = selectedSources(); } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+                return;
+            }
+            const packages = [...new Set(sources.map(source => 'scripts/' + source.device + '/' + source.provider))];
+            const incompleteLocal = packages.filter(path => packageStatuses[path] === 'incomplete');
+            if (incompleteLocal.length) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = incompleteLocal.join(', ') + ' already exists locally but is missing one or more required files. The local folder was not replaced.';
+                return;
+            }
+            const downloads = packages.filter(path => (packageStatuses[path] || 'remote') === 'remote');
+            if (!downloads.length) {
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = 'The selected scripts are already ready locally. Nothing was downloaded.';
+                return;
+            }
+            button.disabled = true;
+            try {
+                for (let index = 0; index < downloads.length; index++) {
+                    const path = downloads[index];
+                    status.className = 'm3u-action-status muted';
+                    status.textContent = 'Downloading ' + path + ' (' + (index + 1) + ' of ' + downloads.length + ')…';
+                    const response = await fetch('/allm3u/install-script', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
+                    });
+                    const payload = await response.json();
+                    if (!response.ok) throw new Error(payload.error || 'Could not download ' + path + '.');
+                    packageStatuses[path] = 'ready';
+                }
+                document.querySelectorAll('.src-device').forEach(populateProviders);
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = 'The selected scripts are ready. No other script packages were downloaded.';
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message + ' Any previously installed scripts were kept.';
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function generate() {
+            const status = document.getElementById('allm3u-status');
+            let sources;
+            try { sources = selectedSources(); } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
                 return;
             }
             const output = document.getElementById('outputFile').value.trim() || 'all.m3u';
@@ -133,16 +248,22 @@
             })
             .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
             .then(function (result) {
-                if (!result.ok) { alert('Error: ' + result.data.error); return; }
-                alert('Generated ' + result.data.file + ' with ' + result.data.channels + ' channel(s).');
+                if (!result.ok) throw new Error(result.data.error);
                 window.location.href = '/m3us';
             })
-            .catch(function (err) { alert('Error: ' + err); });
+            .catch(function (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            });
         }
 
         function cancel() {
             window.location.href = "/";
         }
+
+        document.getElementById('check-scripts').addEventListener('click', checkScripts);
+        document.getElementById('download-scripts').addEventListener('click', downloadSelectedScripts);
+        document.getElementById('generate-all').addEventListener('click', generate);
     </script>
 </body>
 </html>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -29,22 +30,70 @@ type allM3URequest struct {
 	Sources []allM3USource `json:"sources"`
 }
 
+type scriptInstallRequest struct {
+	Path string `json:"path"`
+}
+
 // scriptDeviceProviders scans scripts/<device>/<provider> and returns the
 // device/provider pairs the "all/all" dispatcher (scripts/all/all/bmitune.sh)
-// knows how to route to. It reads both the live scripts/ volume (only ever
-// has what a given container has copied down, per docker-start.sh's
-// copy-if-missing rule) and /tmp/scripts, the full set baked into the image
-// at build time, so the dropdown offers everything in the repo rather than
-// only what happens to be on disk already.
+// can route to from the live scripts bind mount.
 func scriptDeviceProviders() map[string][]string {
 	result := map[string][]string{}
 	mergeScriptDeviceProviders(result, "scripts")
-	mergeScriptDeviceProviders(result, "/tmp/scripts")
 	for device, providers := range result {
 		sort.Strings(providers)
 		result[device] = providers
 	}
 	return result
+}
+
+// allM3UDeviceProviders adds the cached list from the last explicit "Check for
+// scripts" action. Listing a package never downloads it; the page marks which
+// packages are local and offers an explicit, selected-package download.
+func allM3UDeviceProviders() map[string][]string {
+	result := scriptDeviceProviders()
+	for _, selection := range discoverStreamers() {
+		parts := strings.Split(selection, "/")
+		if len(parts) != 3 || parts[0] != "scripts" {
+			continue
+		}
+		if !slices.Contains(result[parts[1]], parts[2]) {
+			result[parts[1]] = append(result[parts[1]], parts[2])
+		}
+	}
+	for device, providers := range result {
+		sort.Strings(providers)
+		result[device] = providers
+	}
+	return result
+}
+
+func scriptPackageStatuses(devices map[string][]string) map[string]string {
+	return scriptPackageStatusesAt("scripts", devices)
+}
+
+func scriptPackageStatusesAt(root string, devices map[string][]string) map[string]string {
+	result := map[string]string{}
+	for device, providers := range devices {
+		for _, provider := range providers {
+			selection := filepath.ToSlash(filepath.Join("scripts", device, provider))
+			path := filepath.Join(root, device, provider)
+			switch {
+			case scriptPackageComplete(path):
+				result[selection] = "ready"
+			case scriptPackageDirectoryExists(path):
+				result[selection] = "incomplete"
+			default:
+				result[selection] = "remote"
+			}
+		}
+	}
+	return result
+}
+
+func scriptPackageDirectoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // mergeScriptDeviceProviders adds every device/provider pair found under
@@ -55,7 +104,7 @@ func mergeScriptDeviceProviders(into map[string][]string, root string) {
 		return
 	}
 	for _, d := range entries {
-		if !d.IsDir() {
+		if !d.IsDir() || !validScriptPathPart(d.Name()) {
 			continue
 		}
 		subEntries, err := os.ReadDir(filepath.Join(root, d.Name()))
@@ -63,7 +112,7 @@ func mergeScriptDeviceProviders(into map[string][]string, root string) {
 			continue
 		}
 		for _, s := range subEntries {
-			if s.IsDir() && !slices.Contains(into[d.Name()], s.Name()) {
+			if s.IsDir() && validScriptPathPart(s.Name()) && !slices.Contains(into[d.Name()], s.Name()) {
 				into[d.Name()] = append(into[d.Name()], s.Name())
 			}
 		}
@@ -99,7 +148,8 @@ func allM3USources() []string {
 func registerAllM3URoutes(r *gin.Engine) {
 	r.GET("/allm3u", func(c *gin.Context) {
 		r.LoadHTMLGlob("html/*")
-		devices := scriptDeviceProviders()
+		devices := allM3UDeviceProviders()
+		packageStatuses := scriptPackageStatuses(devices)
 		deviceNames := make([]string, 0, len(devices))
 		for d := range devices {
 			deviceNames = append(deviceNames, d)
@@ -110,11 +160,52 @@ func registerAllM3URoutes(r *gin.Engine) {
 			c.String(http.StatusInternalServerError, "Failed to list scripts: %v", err)
 			return
 		}
-		c.HTML(http.StatusOK, "allm3u.html", gin.H{
+		packageStatusesJSON, err := json.Marshal(packageStatuses)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Failed to read local script status: %v", err)
+			return
+		}
+		page := gin.H{
 			"sources":     allM3USources(),
 			"devices":     deviceNames,
 			"devicesJSON": template.JS(devicesJSON),
-		})
+		}
+		page["packageStatusesJSON"] = template.JS(packageStatusesJSON)
+		page["streamerApp"] = os.Getenv("STREAMER_APP")
+		c.HTML(http.StatusOK, "allm3u.html", page)
+	})
+
+	r.POST("/allm3u/install-script", func(c *gin.Context) {
+		var req scriptInstallRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !validStreamerSelection(req.Path) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "script package must use scripts/device/app"})
+			return
+		}
+		if !connectionChecksAllowed() {
+			c.JSON(http.StatusConflict, gin.H{"error": "script downloads wait until no tune is starting or active"})
+			return
+		}
+		select {
+		case scriptInstallSlots <- struct{}{}:
+			defer func() { <-scriptInstallSlots }()
+		case <-c.Request.Context().Done():
+			return
+		}
+		if err := installScriptPackage(c.Request.Context(), req.Path); err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, errScriptInstallTune) {
+				status = http.StatusConflict
+			}
+			logger("[SCRIPTS] could not install selected package %s: %v", req.Path, err)
+			c.JSON(status, gin.H{"error": err.Error()})
+			return
+		}
+		logger("[SCRIPTS] downloaded selected package %s", req.Path)
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path})
 	})
 
 	r.POST("/allm3u/generate", func(c *gin.Context) {
@@ -133,7 +224,6 @@ func registerAllM3URoutes(r *gin.Engine) {
 			return
 		}
 
-		valid := scriptDeviceProviders()
 		var body strings.Builder
 		body.WriteString("#EXTM3U\n")
 		fmt.Fprintf(&body, "%s (%d source m3u(s)) - edits here are lost on regenerate\n\n", allM3UMarker, len(req.Sources))
@@ -145,9 +235,18 @@ func registerAllM3URoutes(r *gin.Engine) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("not an m3u file: %s", src.File)})
 				return
 			}
-			providers, ok := valid[src.Device]
-			if !ok || !slices.Contains(providers, src.Provider) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("no scripts/%s/%s found", src.Device, src.Provider)})
+			if !validScriptPathPart(src.Device) || !validScriptPathPart(src.Provider) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device or provider name"})
+				return
+			}
+			selection := filepath.ToSlash(filepath.Join("scripts", src.Device, src.Provider))
+			packagePath := filepath.Join("scripts", src.Device, src.Provider)
+			if !scriptPackageComplete(packagePath) {
+				if scriptPackageDirectoryExists(packagePath) {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s is a local folder but is missing bmitune.sh, prebmitune.sh, or stopbmitune.sh", selection)})
+				} else {
+					c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s is not stored locally yet; use Download selected scripts first", selection)})
+				}
 				return
 			}
 			data, err := os.ReadFile(filepath.Join("m3u", file))

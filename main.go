@@ -648,6 +648,7 @@ func run() error {
 	r := gin.New()
 	r.SetTrustedProxies(nil)
 	r.Use(CustomLogger())
+	registerConfigRoutes(r)
 	r.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/static") {
 			c.Header("Cache-Control", "no-store")
@@ -730,10 +731,18 @@ func run() error {
 	r.GET("/m3u/:channel", func(c *gin.Context) {
 		r.LoadHTMLGlob("m3u/*.m3u")
 		channel := c.Param("channel")
+		filePath := "m3u/" + channel
 		// Check if the file exists
-		if _, errread := os.Stat("m3u/" + channel); errread == nil {
+		if templateContents, errread := os.ReadFile(filePath); errread == nil {
 			// Get the proxy IP address used to rewrite m3u ip addresses
-			IPADDRESS := os.Getenv("IPADDRESS")
+			templateAddsPort := bytes.Contains(templateContents, []byte("{{ .IPADDRESS }}:")) || bytes.Contains(templateContents, []byte("{{.IPADDRESS}}:"))
+			IPADDRESS, err := m3uTemplateAddress(os.Getenv("IPADDRESS"), templateAddsPort)
+			if err != nil {
+				r.LoadHTMLGlob("html/*")
+				logger("[M3U] refusing to render %s without a valid IPADDRESS: %v", channel, err)
+				c.String(http.StatusServiceUnavailable, "Set the ah4c address in Settings before using a channel list.")
+				return
+			}
 			c.HTML(http.StatusOK, channel, gin.H{
 				"IPADDRESS": IPADDRESS,
 			})
@@ -745,7 +754,7 @@ func run() error {
 	})
 	// Show registered env variables
 	r.GET("/env", func(c *gin.Context) {
-		env := os.Environ()
+		env := maskedEnviron()
 		var envData string
 		for _, val := range env {
 			envData += val + "\n"
@@ -1132,7 +1141,10 @@ func run() error {
 			}
 		}
 
-		c.HTML(http.StatusOK, "m3us.html", gin.H{"m3us": m3us})
+		c.HTML(http.StatusOK, "m3us.html", gin.H{
+			"m3us": m3us, "proxyAddress": os.Getenv("IPADDRESS"),
+			"channelsDVR": os.Getenv("CHANNELSIP"), "selectedM3U": os.Getenv("CHANNELS_M3U"),
+		})
 	})
 
 	r.GET("/editm3u/:file", func(c *gin.Context) {
@@ -1208,29 +1220,7 @@ func run() error {
 		})
 	})
 
-	r.GET("/config", func(c *gin.Context) {
-		configData := parseEnvFile("./env")
-		c.HTML(200, "config.html", configData)
-	})
-
-	r.POST("/configsave", func(c *gin.Context) {
-		// Print all form data
-		c.Request.ParseForm()
-		// Load current configuration data
-		configData := parseEnvFile("./env")
-		// Update global variables
-		for i, envVariable := range configData.EnvVariables {
-			configData.EnvVariables[i].Value = c.PostForm(envVariable.Key)
-		}
-		// Update tuner variables
-		for i := 0; i < len(configData.Tuners); i++ {
-			configData.Tuners[i].Cmd = c.PostForm("CMD" + configData.Tuners[i].Number)
-			configData.Tuners[i].EncoderUrl = c.PostForm("ENCODER" + configData.Tuners[i].Number + "_URL")
-			configData.Tuners[i].TunerIp = c.PostForm("TUNER" + configData.Tuners[i].Number + "_IP")
-		}
-		c.Redirect(http.StatusMovedPermanently, "/config")
-		saveConfigToFile("./env", configData)
-	})
+	r.GET("/config", func(c *gin.Context) { c.Redirect(http.StatusMovedPermanently, "/settings") })
 
 	// Report stats every 30 minutes
 	if envdebug {
@@ -1273,14 +1263,14 @@ func loadenv() {
 	}
 	// Get the proxy IP address used to rewrite m3u ip addresses
 	IPADDRESS := os.Getenv("IPADDRESS")
-	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "TRUE" {
+	if strings.EqualFold(os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"), "true") {
 		allowPreview = true
 	}
 	logger("[ENV] IPADDRESS                  %s", IPADDRESS)
 	logger("[ENV] ALERT_SMTP_SERVER          %s", os.Getenv("ALERT_SMTP_SERVER"))
 	logger("[ENV] ALERT_AUTH_SERVER          %s", os.Getenv("ALERT_AUTH_SERVER"))
 	logger("[ENV] ALERT_EMAIL_FROM           %s", os.Getenv("ALERT_EMAIL_FROM"))
-	logger("[ENV] ALERT_EMAIL_PASS           %s", os.Getenv("ALERT_EMAIL_PASS"))
+	logger("[ENV] ALERT_EMAIL_PASS           %s", maskedEnvValue("ALERT_EMAIL_PASS"))
 	logger("[ENV] ALERT_EMAIL_TO             %s", os.Getenv("ALERT_EMAIL_TO"))
 	logger("[ENV] ALERT_WEBHOOK_URL          %s", os.Getenv("ALERT_WEBHOOK_URL"))
 	logger("[ENV] ALLOW_DEBUG_VIDEO_PREVIEW  %s", os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"))
@@ -1291,12 +1281,12 @@ func loadenv() {
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
-	numTuners, errtuners := strconv.Atoi(numTunersStr)
+	numTuners, errtuners := tunerCount(numTunersStr)
 	if errtuners != nil {
-		panic("Could not find an environment variable named NUMBER_TUNERS")
+		logger("[CONFIG] NUMBER_TUNERS %q %v; starting with zero tuners so Settings remains available", numTunersStr, errtuners)
 	}
 	// Get directory of scripts
-	streamerApp := os.Getenv("STREAMER_APP")
+	streamerApp := canonicalStreamerSelection(os.Getenv("STREAMER_APP"))
 	// Loop over the number of tuners and create each one
 	for i := 1; i <= numTuners; i++ {
 		iStr := strconv.Itoa(i)
@@ -1333,6 +1323,7 @@ func loadenv() {
 
 // Almighty main function
 func main() {
+	envengineStartup()
 	logger("[START] ah4c %s is starting", buildVersion())
 	loadenv()
 	tuneHoldStartup()
@@ -1390,7 +1381,7 @@ func sendEmail(message string) {
 	to := os.Getenv("ALERT_EMAIL_TO")
 	smtpServer := os.Getenv("ALERT_SMTP_SERVER")
 	authServer := os.Getenv("ALERT_AUTH_SERVER")
-	useSendmail := os.Getenv("ALERT_EMAIL_USE_SENDMAIL") == "TRUE"
+	useSendmail := strings.EqualFold(os.Getenv("ALERT_EMAIL_USE_SENDMAIL"), "true")
 	if from == "" || to == "" {
 		return
 	}
