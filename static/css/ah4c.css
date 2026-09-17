@@ -510,9 +510,11 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .m3u-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
 .m3u-upload-row input[type="file"] { width: 100%; padding: .42rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: .76rem; }
 .m3u-upload-row input[type="file"]::file-selector-button { margin-right: .6rem; padding: .3rem .55rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
-.m3u-file-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: stretch; }
-.m3u-file-item .menu-item { min-width: 0; }
-.m3u-file-item > .btn { align-self: center; }
+.m3u-file-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; min-width: 0; }
+.m3u-file-link { display: flex; min-width: 0; flex-direction: column; gap: .15rem; color: inherit; }
+.m3u-file-link:hover { color: inherit; }
+.m3u-file-link .menu-label { overflow-wrap: anywhere; word-break: break-word; }
+.m3u-file-item > .btn { align-self: start; }
 
 .m3u-readout { min-height: 35px; padding: .45rem .65rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
 .m3u-choice-summary { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin-top: 1rem; padding: .75rem .85rem; background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
@@ -548,8 +550,6 @@ details.card > summary::-webkit-details-marker { display: none; }
   .m3u-choice-summary { align-items: flex-start; flex-direction: column; }
   .m3u-copy-row { grid-template-columns: 1fr; }
   .m3u-upload-row { grid-template-columns: 1fr; }
-  .m3u-file-item { grid-template-columns: 1fr; }
-  .m3u-file-item > .btn { justify-self: start; }
 }
 
 @media (max-width: 760px) {

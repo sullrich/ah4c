@@ -94,8 +94,8 @@
             <p class="section-help">These are the channel lists stored in ah4c. Editing one changes what Channels DVR receives the next time it refreshes that list.</p>
             <div class="menu-grid">
                 {{range .m3us}}
-                <div class="m3u-file-item" data-m3u-file="{{.}}">
-                    <a href="/editm3u/{{.}}" class="menu-item">
+                <div class="m3u-file-item menu-item" data-m3u-file="{{.}}">
+                    <a href="/editm3u/{{.}}" class="m3u-file-link">
                         <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
                         <span class="menu-label mono">{{.}}</span>
                         <span class="menu-desc">Open and edit this channel list</span>
