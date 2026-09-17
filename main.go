@@ -734,7 +734,13 @@ func run() error {
 		// Check if the file exists
 		if _, errread := os.Stat("m3u/" + channel); errread == nil {
 			// Get the proxy IP address used to rewrite m3u ip addresses
-			IPADDRESS := os.Getenv("IPADDRESS")
+			IPADDRESS, err := m3uTemplateAddress(os.Getenv("IPADDRESS"))
+			if err != nil {
+				r.LoadHTMLGlob("html/*")
+				logger("[M3U] refusing to render %s without a valid IPADDRESS: %v", channel, err)
+				c.String(http.StatusServiceUnavailable, "Set the ah4c address in Settings before using a channel list.")
+				return
+			}
 			c.HTML(http.StatusOK, channel, gin.H{
 				"IPADDRESS": IPADDRESS,
 			})

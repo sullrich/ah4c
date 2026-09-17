@@ -72,12 +72,9 @@ func addM3UToChannelsHandler(c *gin.Context) {
 		return
 	}
 	proxyAddress := strings.TrimSpace(os.Getenv("IPADDRESS"))
-	if proxyAddress == "" {
-		proxyAddress = c.Request.Host
-	}
 	proxyBase, err := serverBaseURL(proxyAddress, "7654")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Set a valid Proxy address in Settings before adding a channel list."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Set the ah4c address in Settings before adding a channel list."})
 		return
 	}
 	m3uURL := proxyBase + "/m3u/" + url.PathEscape(file)
@@ -156,6 +153,30 @@ func serverBaseURL(value, defaultPort string) (string, error) {
 		port = defaultPort
 	}
 	return parsed.Scheme + "://" + net.JoinHostPort(parsed.Hostname(), port), nil
+}
+
+func m3uTemplateAddress(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("ah4c address is empty")
+	}
+	if !strings.Contains(value, "://") {
+		if err := validateBareHostPort(value); err != nil {
+			return "", err
+		}
+		return value, nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid ah4c address")
+	}
+	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("ah4c address must not include a path")
+	}
+	if err := validateURLPort(parsed); err != nil {
+		return "", err
+	}
+	return parsed.Host, nil
 }
 
 func putChannelsM3USource(ctx context.Context, client *http.Client, dvrBase, sourceName, m3uURL string) error {

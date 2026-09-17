@@ -102,26 +102,37 @@
 
         function normalizedBase(value, defaultPort) {
             value = String(value || '').trim();
-            if (!value) return window.location.origin;
+            if (!value) return '';
             if (!value.includes('://')) value = 'http://' + value;
             try {
                 const parsed = new URL(value);
                 if (!parsed.port) parsed.port = defaultPort;
                 return parsed.origin;
             } catch (_) {
-                return window.location.origin;
+                return '';
             }
         }
 
         function updateChoice() {
             if (!choice) return;
             const file = choice.value;
+            const base = normalizedBase(setup.dataset.proxyAddress, '7654');
+            const unavailable = !base;
             document.getElementById('selected-m3u-name').textContent = file;
-            document.getElementById('m3u-address').value = normalizedBase(setup.dataset.proxyAddress, '7654') + '/m3u/' + encodeURIComponent(file);
+            document.getElementById('m3u-address').value = unavailable ? '' : base + '/m3u/' + encodeURIComponent(file);
+            document.getElementById('add-to-channels').disabled = unavailable;
+            document.getElementById('copy-m3u').disabled = unavailable;
+            document.getElementById('copy-m3u-second').disabled = unavailable;
+            if (unavailable) {
+                const status = document.getElementById('m3u-action-status');
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'Set “This ah4c address” in Settings before adding or copying a channel list.';
+            }
         }
 
         async function copyAddress() {
             const input = document.getElementById('m3u-address');
+            if (!input.value) return;
             try {
                 await navigator.clipboard.writeText(input.value);
             } catch (_) {
@@ -156,7 +167,7 @@
                 status.className = 'm3u-action-status connection-state--error';
                 status.textContent = error.message;
             } finally {
-                button.disabled = false;
+                button.disabled = !normalizedBase(setup.dataset.proxyAddress, '7654');
             }
         }
 
