@@ -1103,7 +1103,7 @@ function collectPayload() {
         let value = input.value;
         if (spec.key === 'STREAMER_APP') {
             const custom = document.querySelector('[data-custom-streamer]')?.value.trim();
-            value = custom || value;
+            value = custom || decodeStreamerChoice(value).path;
         }
         vars[spec.key] = value;
     });
