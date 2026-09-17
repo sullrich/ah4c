@@ -55,13 +55,13 @@
         </section>
 
         <div id="wizard-steps" class="wizard-steps hidden">
-            <span data-step="1">1. Proxy</span><span data-step="2">2. Script</span><span data-step="3">3. Tuners</span>
+            <span data-step="1">1. Addresses &amp; time</span><span data-step="2">2. Script</span><span data-step="3">3. Tuners</span>
         </div>
 
         <div id="settings-content" class="hidden">
             <section class="card settings-section" data-section="proxy">
-                <div class="card-title">ah4c &amp; Channels DVR</div>
-                <p class="section-help"><strong>Tip:</strong> These addresses may be entered with or without a port. When no port is entered, ah4c assumes <code>7654</code> for this ah4c server and <code>8089</code> for Channels DVR. If either service uses a different port, include it in the address. For Channels DVR, open Channels in another browser tab and copy the address from its address bar.</p>
+                <div class="card-title">Addresses &amp; time zone</div>
+                <p class="section-help"><strong>Tip:</strong> These addresses may be entered with or without a port. When no port is entered, ah4c assumes <code>7654</code> for this ah4c server and <code>8089</code> for Channels DVR. If either service uses a different port, include it in the address. For Channels DVR, open Channels in another browser tab and copy the address from its address bar. During initial setup, ah4c also suggests the time zone reported by this browser; change it if the server is somewhere else.</p>
                 <div id="section-proxy" class="settings-grid"></div>
             </section>
 
@@ -96,16 +96,16 @@
                         <div><code>bmitune.sh</code><span>Changes the app to the requested channel.</span></div>
                         <div><code>stopbmitune.sh</code><span>Cleans up when the tune ends.</span></div>
                     </div>
-                    <p class="setting-description">Packages live two folders deep, such as <code>scripts/my-device/my-app</code>. You can include any number of helper files and call them from the three required scripts.</p>
+                    <p class="setting-description">Packages may live directly under Scripts, such as <code>scripts/david</code>, or two folders deep, such as <code>scripts/my-device/my-app</code>. You can include any number of helper files and call them from the three required scripts.</p>
                     <details class="local-script-create">
-                        <summary>Create and upload a script package</summary>
-                        <p class="setting-description">Name the device and app folders, then select all three required scripts and any helper files. The completed package is created together so an interrupted upload cannot leave half a package.</p>
+                        <summary>Upload local scripts</summary>
+                        <p class="setting-description">Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required scripts are included.</p>
                         <div class="local-script-create-grid">
-                            <div class="field"><label for="local-script-device">Device folder</label><input id="local-script-device" type="text" placeholder="firetv"></div>
-                            <div class="field"><label for="local-script-app">App folder</label><input id="local-script-app" type="text" placeholder="my-service"></div>
+                            <div class="field"><label for="local-script-device">Package or device folder</label><input id="local-script-device" type="text" placeholder="david"></div>
+                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
                         </div>
                         <div class="field local-script-files"><label for="local-script-files">Script and helper files</label><input id="local-script-files" type="file" multiple></div>
-                        <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Create package</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
+                        <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Upload scripts</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
                     </details>
                 </div>
             </section>
@@ -363,7 +363,7 @@ async function deletePreroll() {
 
 async function loadStreamers(remote) {
     const status = byId('streamer-query-status');
-    const typedChoice = document.querySelector('[data-custom-streamer]')?.value.trim() || document.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
+    const typedChoice = selectedStreamerPath();
     if (status && remote) status.textContent = 'Checking GitHub for scripts…';
     try {
         const query = new URLSearchParams({details:'true'});
@@ -435,38 +435,42 @@ async function uploadLocalScripts() {
     const status = byId('local-script-upload-status');
     const button = byId('upload-local-scripts');
     const validPart = value => value && !value.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(value);
-    if (!validPart(device) || !validPart(app)) {
-        status.textContent = 'Enter device and app folder names using letters, numbers, dots, underscores or hyphens.';
+    if (!validPart(device) || (app && !validPart(app))) {
+        status.textContent = 'Enter a package name, and optionally an app folder, using letters, numbers, dots, underscores or hyphens.';
         return;
     }
     if (!files.length) {
-        status.textContent = 'Choose the three required scripts and any helper files.';
+        status.textContent = 'Choose all three required scripts: prebmitune.sh, bmitune.sh, and stopbmitune.sh.';
         return;
     }
     const names = new Set(files.map(file => file.name));
     const required = ['bmitune.sh', 'prebmitune.sh', 'stopbmitune.sh'];
     const missing = required.filter(name => !names.has(name));
     if (missing.length) {
-        status.textContent = `Missing required files: ${missing.join(', ')}`;
+        status.textContent = `Nothing was uploaded. Add the missing required ${missing.length === 1 ? 'file' : 'files'}: ${missing.join(', ')}.`;
         return;
     }
     const form = new FormData();
     form.append('device', device);
     form.append('app', app);
     files.forEach(file => form.append('files', file, file.name));
+    const buttonLabel = button.textContent;
     button.disabled = true;
-    status.textContent = 'Creating package…';
+    button.textContent = 'Uploading…';
+    status.textContent = '';
     try {
         const response = await fetch('/api/config/local-scripts', {method:'POST', body:form});
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Could not create the script package');
+        if (!response.ok) throw new Error(payload.error || 'The scripts could not be uploaded.');
         byId('local-script-files').value = '';
         chooseLocalScript(payload.selection);
-        byId('streamer-query-status').textContent = `Created and selected ${payload.selection}. Update scripts is No so GitHub will not replace it.`;
+        status.textContent = 'Scripts uploaded.';
+        byId('streamer-query-status').textContent = `Selected ${payload.selection} from your local scripts folder. Update scripts is No so GitHub will not replace it.`;
     } catch (error) {
         status.textContent = error.message;
     } finally {
         button.disabled = false;
+        button.textContent = buttonLabel;
     }
 }
 
@@ -474,18 +478,10 @@ function chooseLocalScript(path) {
     const select = document.querySelector('[data-setting="STREAMER_APP"]');
     if (!select || select.disabled) return;
     if (!localStreamerChoices.includes(path)) localStreamerChoices.push(path);
-    let option = [...select.options].find(candidate => candidate.value === path);
-    if (!option) {
-        option = new Option(`Local folder — ${path}`, path);
-        select.add(option);
-    } else {
-        option.textContent = `Local folder — ${path}`;
-    }
-    select.value = path;
-    document.querySelector('[data-custom-streamer]').value = '';
-    select.dispatchEvent(new Event('input', {bubbles:true}));
     const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
     if (updateScripts && !updateScripts.disabled) updateScripts.value = 'false';
+    const spec = state.catalog.find(item => item.key === 'STREAMER_APP');
+    if (spec) renderFieldInto({...spec, value:path}, byId('section-streamer'), true);
     byId('local-script-browser').classList.add('hidden');
     byId('streamer-query-status').textContent = `Selected local folder ${path}. Update scripts was set to No so GitHub will not replace it. Save settings to apply it.`;
 }
@@ -495,6 +491,7 @@ function render() {
     byId('settings-content').classList.remove('hidden');
     if (state.persistWarning && !wizard) showNotice(state.persistWarning, 'danger');
     renderCatalog();
+    placeWizardTimezone();
     renderTuners();
     renderExtra();
     renderHost();
@@ -513,6 +510,18 @@ function renderCatalog() {
     });
 }
 
+function placeWizardTimezone() {
+    if (!wizard) return;
+    const wrap = document.querySelector('[data-key="TZ"]');
+    const target = byId('section-proxy');
+    if (!wrap || !target) return;
+    target.appendChild(wrap);
+    const input = wrap.querySelector('[data-setting="TZ"]');
+    if (!input || input.disabled || input.value.trim()) return;
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (detected) input.value = detected;
+}
+
 function renderFieldInto(spec, target, replace = false) {
     if (!target) return;
     const existing = target.querySelector(`[data-key="${spec.key}"]`);
@@ -524,12 +533,14 @@ function renderFieldInto(spec, target, replace = false) {
     let control;
     if (spec.key === 'STREAMER_APP') {
         const local = [...new Set(localStreamerChoices)].sort();
-        const remote = [...new Set(remoteStreamerChoices)].filter(value => !local.includes(value)).sort();
-        const known = [...local, ...remote];
-        const localOptions = local.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>Local folder — ${escapeHTML(value)}</option>`).join('');
-        const remoteOptions = remote.map(value => `<option value="${escapeHTML(value)}" ${value === spec.value ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
-        const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Select a script…</option>${localOptions ? `<optgroup label="Local scripts folders">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="Available from GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Or enter scripts/device/provider" ${disabled}>`;
+        const remote = [...new Set(remoteStreamerChoices)].sort();
+        const known = [...new Set([...local, ...remote])];
+        const updateValue = state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
+        const preferGitHub = String(updateValue).toLowerCase() === 'true';
+        const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Select a script…</option>${localOptions ? `<optgroup label="Local scripts folders">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="Available from GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Or enter scripts/package" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -546,10 +557,12 @@ function renderFieldInto(spec, target, replace = false) {
     wrap.innerHTML = `<div class="setting-label"><label>${escapeHTML(spec.label)}</label>${source}</div>${control}<div class="setting-description">${escapeHTML(spec.desc)}${spec.type === 'seconds' ? ' (seconds)' : ''}</div>${spec.scriptVaries ? `<div class="setting-script-note">varies by script — see your STREAMER_APP's scripts for accepted values</div>` : ''}<div class="field-validation" data-validation-for="${spec.key}" aria-live="polite"></div>`;
     if (spec.key === 'STREAMER_APP') {
         wrap.querySelector('select')?.addEventListener('change', event => {
-            if (!localStreamerChoices.includes(event.target.value)) return;
+            const choice = decodeStreamerChoice(event.target.value);
             const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
-            if (updateScripts && !updateScripts.disabled) updateScripts.value = 'false';
-            if (byId('streamer-query-status')) byId('streamer-query-status').textContent = 'Local folder selected. Update scripts was set to No so GitHub will not replace it.';
+            if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
+            if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
+            if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. Update scripts was set to No so GitHub will not replace it.';
+            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. Update scripts was set to Yes so the selected package is downloaded at startup.';
         });
     }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
@@ -688,7 +701,13 @@ function closeTunerOrderEditor() {
 
 function selectedStreamerPath(root = document) {
     const custom = root.querySelector('[data-custom-streamer]')?.value.trim();
-    return custom || root.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
+    const selected = root.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
+    return custom || decodeStreamerChoice(selected).path;
+}
+
+function decodeStreamerChoice(value) {
+    const match = /^(local|github|saved)::(.*)$/.exec(value || '');
+    return match ? {source:match[1], path:match[2]} : {source:'', path:value || ''};
 }
 
 function parsedServerAddress(value, allowProtocol = true) {
@@ -731,7 +750,7 @@ function catalogValidationMessage(spec, value) {
     if (/\r|\n/.test(value)) return 'Use one line only.';
     if (spec.key === 'STREAMER_APP') {
         const canonical = value.trim().replace(/^\.\//, '').replace(/\/+$/, '');
-        return /^scripts\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(canonical) ? '' : 'Use a path in the form scripts/device/app.';
+        return /^scripts\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(canonical) ? '' : 'Use scripts/package or scripts/device/app.';
     }
     if (spec.key === 'IPADDRESS' || spec.key === 'CHANNELSIP') {
         try { parsedServerAddress(value, true); return ''; } catch (_) {
@@ -804,6 +823,7 @@ function validateExtraRow(row) {
 
 function validateSettingsForm(section = '') {
     const keys = section ? new Set(sectionKeys[section] || []) : null;
+    if (wizard && section === 'proxy') keys.add('TZ');
     let firstInvalid = null;
     state.catalog.forEach(spec => {
         if (keys && !keys.has(spec.key)) return;
@@ -1004,7 +1024,7 @@ function collectPayload() {
         let value = input.value;
         if (spec.key === 'STREAMER_APP') {
             const custom = document.querySelector('[data-custom-streamer]')?.value.trim();
-            if (custom) value = custom;
+            value = custom || decodeStreamerChoice(value).path;
         }
         vars[spec.key] = value;
     });
@@ -1033,7 +1053,7 @@ async function saveSettings(restartAfter = false) {
     state = payload;
     status.classList.remove('validation-error');
     status.textContent = 'Saved.';
-    renderCatalog(); renderTuners(); renderExtra(); renderHost(); updateRestartUI();
+    renderCatalog(); placeWizardTimezone(); renderTuners(); renderExtra(); renderHost(); updateRestartUI();
     if (restartAfter && state.restartNeeded) {
         await restart();
     } else if (restartAfter) {

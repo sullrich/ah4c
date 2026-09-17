@@ -381,6 +381,26 @@ func TestReadLocalScriptDirectoryReportsMissingEntryPoints(t *testing.T) {
 	}
 }
 
+func TestReadLocalScriptDirectoryAcceptsOneLevelPackage(t *testing.T) {
+	root := t.TempDir()
+	packageDir := filepath.Join(root, "david")
+	if err := os.MkdirAll(packageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range requiredStreamerFiles {
+		if err := os.WriteFile(filepath.Join(packageDir, name), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listing, err := readLocalScriptDirectory(root, "david")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !listing.Selectable || listing.Selection != "scripts/david" || listing.Parent != "" {
+		t.Fatalf("one-level package listing = %#v", listing)
+	}
+}
+
 func localScriptUploadRequest(t *testing.T, device, app string, files map[string]string) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
@@ -445,6 +465,25 @@ func TestLocalScriptUploadCreatesCompletePackageAtomically(t *testing.T) {
 	}
 }
 
+func TestLocalScriptUploadCreatesOneLevelPackage(t *testing.T) {
+	root := t.TempDir()
+	oldRoot := localScriptsRootOverride
+	localScriptsRootOverride = root
+	t.Cleanup(func() { localScriptsRootOverride = oldRoot })
+	router := configAPITestSetup(t, emptySettings(), map[string]bool{})
+	files := map[string]string{
+		"bmitune.sh": "#!/bin/sh\n", "prebmitune.sh": "#!/bin/sh\n", "stopbmitune.sh": "#!/bin/sh\n",
+	}
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, localScriptUploadRequest(t, "david", "", files))
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"selection":"scripts/david"`) {
+		t.Fatalf("one-level script upload = %d %s", created.Code, created.Body.String())
+	}
+	if !scriptPackageComplete(filepath.Join(root, "david")) {
+		t.Fatal("one-level package was not created")
+	}
+}
+
 func TestLocalScriptUploadRejectsIncompletePackage(t *testing.T) {
 	root := t.TempDir()
 	oldRoot := localScriptsRootOverride
@@ -478,22 +517,25 @@ func TestReadLocalScriptDirectoryRejectsEscapes(t *testing.T) {
 func TestDiscoverLocalStreamersOnlyListsCompletePackages(t *testing.T) {
 	root := t.TempDir()
 	complete := filepath.Join(root, "my-device", "my-app")
+	direct := filepath.Join(root, "david")
 	incomplete := filepath.Join(root, "other-device", "other-app")
-	for _, directory := range []string{complete, incomplete} {
+	for _, directory := range []string{complete, direct, incomplete} {
 		if err := os.MkdirAll(directory, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, name := range requiredStreamerFiles {
-		if err := os.WriteFile(filepath.Join(complete, name), []byte("#!/bin/sh\n"), 0755); err != nil {
-			t.Fatal(err)
+		for _, directory := range []string{complete, direct} {
+			if err := os.WriteFile(filepath.Join(directory, name), []byte("#!/bin/sh\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := os.WriteFile(filepath.Join(incomplete, "bmitune.sh"), []byte("#!/bin/sh\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	got := discoverLocalStreamersAt(root)
-	if len(got) != 1 || got[0] != "scripts/my-device/my-app" {
+	if len(got) != 2 || got[0] != "scripts/david" || got[1] != "scripts/my-device/my-app" {
 		t.Fatalf("discoverLocalStreamersAt() = %#v", got)
 	}
 }

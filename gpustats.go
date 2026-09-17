@@ -318,7 +318,7 @@ func readIntelGPU() {
 // nothing either way, which is indistinguishable from a chip that reports
 // nothing at all.
 //
-// It is a container permission change and nobody would guess it, so it is said plainly
+// It is a compose file change and nobody would guess it, so it is said plainly
 // and said once. Everything else here degrades quietly on purpose; this one
 // cannot be fixed by anything in this program.
 func noteIntelFailure(errBuf *strings.Builder) {
@@ -328,7 +328,7 @@ func noteIntelFailure(errBuf *strings.Builder) {
 	}
 	intelToldOnce.Do(func() {
 		logger("[STATS] Intel GPU statistics need the perf interface, which this container is not allowed to use: %s", strings.TrimSpace(msg))
-		logger("[STATS] Give the container the PERFMON capability, and set kernel.perf_event_paranoid to 2 or lower on the host. Captioning on the GPU is unaffected either way; this is only the graph.")
+		logger("[STATS] Add cap_add: [PERFMON] to the compose file, and set kernel.perf_event_paranoid to 2 or lower on the host. Captioning on the GPU is unaffected either way; this is only the graph.")
 	})
 }
 

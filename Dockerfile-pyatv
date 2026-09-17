@@ -60,15 +60,16 @@ RUN ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x86_64" || echo "arm64") \
 ENV LIBVA_DRIVER_NAME=iHD
 
 # Set up working directories
-RUN mkdir -p /opt/scripts /tmp/m3u /opt/html /opt/static
+RUN mkdir -p /opt/scripts /tmp/scripts /tmp/m3u /opt/html /opt/static
 
 WORKDIR /opt
 
 # Copy built binary from builder
 COPY --from=builder /opt/ah4c /opt/ah4c
 
-# Copy runtime files and static assets
+# Copy necessary scripts and static files
 COPY docker-start-pyatv.sh /opt/
+COPY scripts /tmp/scripts/
 COPY m3u/* /tmp/m3u/
 COPY html/* /opt/html/
 RUN sed -i '/href="\/config"/d; /href="\/env"/d' /opt/html/index.html

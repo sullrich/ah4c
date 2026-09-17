@@ -60,6 +60,37 @@ func TestInstallScriptPackageDownloadsOnlySelectedPackage(t *testing.T) {
 	}
 }
 
+func TestInstallOneLevelScriptPackage(t *testing.T) {
+	files := map[string]string{
+		"bmitune.sh": "#!/bin/sh\n", "prebmitune.sh": "#!/bin/sh\n", "stopbmitune.sh": "#!/bin/sh\n",
+	}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/contents/scripts/david" {
+			entries := make([]githubContentsEntry, 0, len(files))
+			for name := range files {
+				entries = append(entries, githubContentsEntry{Name: name, Type: "file", DownloadURL: server.URL + "/raw/" + name})
+			}
+			_ = json.NewEncoder(w).Encode(entries)
+			return
+		}
+		if data, ok := files[filepath.Base(r.URL.Path)]; ok {
+			_, _ = w.Write([]byte(data))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	if err := installScriptPackageFrom(context.Background(), "scripts/david", root, server.URL+"/contents", server.Client(), func() bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if !scriptPackageComplete(filepath.Join(root, "david")) {
+		t.Fatal("one-level package was not installed")
+	}
+}
+
 func TestInstallScriptPackagePreservesWorkingPackageOnFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]githubContentsEntry{{Name: "bmitune.sh", Type: "file", DownloadURL: "http://127.0.0.1:1/unreachable"}})
@@ -127,5 +158,22 @@ func TestRepairScriptPackageTransactions(t *testing.T) {
 	}
 	if _, err := os.Stat(stage); !os.IsNotExist(err) {
 		t.Fatalf("stale update stage still exists: %v", err)
+	}
+}
+
+func TestRepairOneLevelScriptPackageTransaction(t *testing.T) {
+	root := t.TempDir()
+	backup := filepath.Join(root, ".david.backup")
+	if err := os.MkdirAll(backup, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range requiredStreamerFiles {
+		if err := os.WriteFile(filepath.Join(backup, name), []byte(name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repairScriptPackageTransactions(root)
+	if !scriptPackageComplete(filepath.Join(root, "david")) {
+		t.Fatal("one-level backup was not restored")
 	}
 }

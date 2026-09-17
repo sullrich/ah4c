@@ -32,8 +32,8 @@ type githubContentsEntry struct {
 	DownloadURL string `json:"download_url"`
 }
 
-// installScriptPackage downloads one explicitly selected scripts/device/app
-// package. It stages every file beside the destination and swaps the complete
+// installScriptPackage downloads one explicitly selected scripts/package or
+// scripts/device/app package. It stages every file beside the destination and swaps the complete
 // directory into place, so a network failure cannot damage a working package.
 func installScriptPackage(ctx context.Context, selection string) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -44,7 +44,7 @@ func installScriptPackage(ctx context.Context, selection string) error {
 func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) error {
 	selection = canonicalStreamerSelection(selection)
 	if !validStreamerSelection(selection) {
-		return fmt.Errorf("script package must use scripts/device/app")
+		return fmt.Errorf("script package must use scripts/package or scripts/device/app")
 	}
 	parts := strings.Split(selection, "/")
 	if !allowed() {
@@ -73,7 +73,11 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	defer cancelOperation()
 	ctx = operationCtx
 
-	contentsURL := strings.TrimRight(contentsBaseURL, "/") + "/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[2]) + "?ref=main"
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	contentsURL := strings.TrimRight(contentsBaseURL, "/") + "/" + strings.Join(escaped, "/") + "?ref=main"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentsURL, nil)
 	if err != nil {
 		return err
@@ -114,21 +118,25 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	if err != nil {
 		return fmt.Errorf("could not verify the local scripts folder: %w", err)
 	}
-	parent := filepath.Join(root, parts[1])
-	if info, statErr := os.Lstat(parent); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("the selected device folder cannot be a symbolic link")
-	} else if statErr != nil && !os.IsNotExist(statErr) {
-		return fmt.Errorf("could not inspect the selected device folder: %w", statErr)
+	parent := root
+	packageName := parts[len(parts)-1]
+	if len(parts) == 3 {
+		parent = filepath.Join(root, parts[1])
+		if info, statErr := os.Lstat(parent); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("the selected device folder cannot be a symbolic link")
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return fmt.Errorf("could not inspect the selected device folder: %w", statErr)
+		}
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return fmt.Errorf("could not prepare the local scripts folder: %w", err)
+		}
+		parent, err = filepath.EvalSymlinks(parent)
+		if err != nil || filepath.Dir(parent) != root {
+			return fmt.Errorf("could not verify the selected device folder")
+		}
 	}
-	if err := os.MkdirAll(parent, 0755); err != nil {
-		return fmt.Errorf("could not prepare the local scripts folder: %w", err)
-	}
-	parent, err = filepath.EvalSymlinks(parent)
-	if err != nil || filepath.Dir(parent) != root {
-		return fmt.Errorf("could not verify the selected device folder")
-	}
-	target := filepath.Join(parent, parts[2])
-	stage, err := os.MkdirTemp(parent, "."+parts[2]+".update.")
+	target := filepath.Join(parent, packageName)
+	stage, err := os.MkdirTemp(parent, "."+packageName+".update.")
 	if err != nil {
 		return fmt.Errorf("could not prepare the script update: %w", err)
 	}
@@ -167,7 +175,7 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 		return errScriptInstallTune
 	}
 
-	backup := filepath.Join(parent, "."+parts[2]+".backup")
+	backup := filepath.Join(parent, "."+packageName+".backup")
 	if err := os.RemoveAll(backup); err != nil {
 		return fmt.Errorf("could not remove an old script backup: %w", err)
 	}
@@ -202,42 +210,47 @@ func repairScriptPackageTransactions(scriptsRoot string) {
 	if err != nil {
 		return
 	}
+	repairScriptPackageTransactionsIn(scriptsRoot, "scripts")
 	for _, device := range devices {
 		if !device.IsDir() || !validScriptPathPart(device.Name()) {
 			continue
 		}
 		parent := filepath.Join(scriptsRoot, device.Name())
-		entries, err := os.ReadDir(parent)
-		if err != nil {
+		repairScriptPackageTransactionsIn(parent, "scripts/"+device.Name())
+	}
+}
+
+func repairScriptPackageTransactionsIn(parent, displayParent string) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			name := strings.TrimPrefix(entry.Name(), ".")
-			if packageName, found := strings.CutSuffix(name, ".backup"); found && validScriptPathPart(packageName) {
-				backup := filepath.Join(parent, entry.Name())
-				target := filepath.Join(parent, packageName)
-				if _, targetErr := os.Lstat(target); os.IsNotExist(targetErr) && scriptPackageComplete(backup) {
-					if err := os.Rename(backup, target); err != nil {
-						logger("[SCRIPTS] could not restore %s/%s: %v", device.Name(), packageName, err)
-					} else {
-						logger("[SCRIPTS] restored scripts/%s/%s after an interrupted update", device.Name(), packageName)
-					}
-				} else if targetErr == nil && scriptPackageComplete(target) {
-					if err := os.RemoveAll(backup); err != nil {
-						logger("[SCRIPTS] could not remove stale backup %s: %v", backup, err)
-					}
+		name := strings.TrimPrefix(entry.Name(), ".")
+		if packageName, found := strings.CutSuffix(name, ".backup"); found && validScriptPathPart(packageName) {
+			backup := filepath.Join(parent, entry.Name())
+			target := filepath.Join(parent, packageName)
+			if _, targetErr := os.Lstat(target); os.IsNotExist(targetErr) && scriptPackageComplete(backup) {
+				if err := os.Rename(backup, target); err != nil {
+					logger("[SCRIPTS] could not restore %s/%s: %v", displayParent, packageName, err)
+				} else {
+					logger("[SCRIPTS] restored %s/%s after an interrupted update", displayParent, packageName)
 				}
-				continue
-			}
-			packageName, suffix, found := strings.Cut(name, ".update.")
-			if found && suffix != "" && validScriptPathPart(packageName) {
-				stage := filepath.Join(parent, entry.Name())
-				if err := os.RemoveAll(stage); err != nil {
-					logger("[SCRIPTS] could not remove stale update directory %s: %v", stage, err)
+			} else if targetErr == nil && scriptPackageComplete(target) {
+				if err := os.RemoveAll(backup); err != nil {
+					logger("[SCRIPTS] could not remove stale backup %s: %v", backup, err)
 				}
+			}
+			continue
+		}
+		packageName, suffix, found := strings.Cut(name, ".update.")
+		if found && suffix != "" && validScriptPathPart(packageName) {
+			stage := filepath.Join(parent, entry.Name())
+			if err := os.RemoveAll(stage); err != nil {
+				logger("[SCRIPTS] could not remove stale update directory %s: %v", stage, err)
 			}
 		}
 	}

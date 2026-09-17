@@ -295,14 +295,14 @@ func uploadLocalScriptsConfigHandler(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"selection": selection, "message": "Local script package created."})
+	c.JSON(http.StatusCreated, gin.H{"selection": selection, "message": "Scripts uploaded."})
 }
 
 func createLocalScriptPackage(root, device, app string, files []*multipart.FileHeader) (string, error) {
 	device = strings.TrimSpace(device)
 	app = strings.TrimSpace(app)
-	if !validScriptPathPart(device) || !validScriptPathPart(app) {
-		return "", fmt.Errorf("device and app names may use letters, numbers, dots, underscores and hyphens")
+	if !validScriptPathPart(device) || (app != "" && !validScriptPathPart(app)) {
+		return "", fmt.Errorf("package, device and app names may use letters, numbers, dots, underscores and hyphens")
 	}
 	if len(files) == 0 {
 		return "", fmt.Errorf("choose the script files to upload")
@@ -342,21 +342,29 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 	if err != nil {
 		return "", fmt.Errorf("could not open the local scripts folder: %w", err)
 	}
-	deviceDir := filepath.Join(rootReal, device)
-	if err := os.MkdirAll(deviceDir, 0755); err != nil {
-		return "", fmt.Errorf("could not create the device folder: %w", err)
+	parent := rootReal
+	packageName := device
+	selection := "scripts/" + device
+	if app != "" {
+		deviceDir := filepath.Join(rootReal, device)
+		if err := os.MkdirAll(deviceDir, 0755); err != nil {
+			return "", fmt.Errorf("could not create the device folder: %w", err)
+		}
+		deviceReal, err := filepath.EvalSymlinks(deviceDir)
+		if err != nil || filepath.Dir(deviceReal) != rootReal {
+			return "", fmt.Errorf("the device folder is outside the local scripts folder")
+		}
+		parent = deviceReal
+		packageName = app
+		selection += "/" + app
 	}
-	deviceReal, err := filepath.EvalSymlinks(deviceDir)
-	if err != nil || (deviceReal != rootReal && !strings.HasPrefix(deviceReal, rootReal+string(filepath.Separator))) {
-		return "", fmt.Errorf("the device folder is outside the local scripts folder")
-	}
-	target := filepath.Join(deviceReal, app)
+	target := filepath.Join(parent, packageName)
 	if _, err := os.Lstat(target); err == nil {
-		return "", fmt.Errorf("scripts/%s/%s already exists: %w", device, app, os.ErrExist)
+		return "", fmt.Errorf("%s already exists: %w", selection, os.ErrExist)
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("could not check the destination folder: %w", err)
 	}
-	temporary, err := os.MkdirTemp(deviceReal, "."+app+"-upload-")
+	temporary, err := os.MkdirTemp(parent, "."+packageName+"-upload-")
 	if err != nil {
 		return "", fmt.Errorf("could not prepare the script upload: %w", err)
 	}
@@ -390,7 +398,7 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 		return "", fmt.Errorf("could not finish the script package: %w", err)
 	}
 	committed = true
-	return "scripts/" + device + "/" + app, nil
+	return selection, nil
 }
 
 func readLocalScriptDirectory(root, relative string) (localScriptDirectory, error) {
@@ -435,7 +443,7 @@ func readLocalScriptDirectory(root, relative string) (localScriptDirectory, erro
 		result.Parent = filepath.ToSlash(parent)
 	}
 	parts := strings.Split(filepath.ToSlash(clean), "/")
-	if clean != "" && len(parts) == 2 && validScriptPathPart(parts[0]) && validScriptPathPart(parts[1]) {
+	if clean != "" && (len(parts) == 1 || len(parts) == 2) && validStreamerSelection("scripts/"+filepath.ToSlash(clean)) {
 		result.Missing = missingRequiredStreamerFiles(targetReal)
 		if len(result.Missing) == 0 {
 			result.Selectable = true
@@ -486,7 +494,15 @@ func canonicalStreamerSelection(value string) string {
 
 func validStreamerSelection(value string) bool {
 	parts := strings.Split(canonicalStreamerSelection(value), "/")
-	return len(parts) == 3 && parts[0] == "scripts" && validScriptPathPart(parts[1]) && validScriptPathPart(parts[2])
+	if (len(parts) != 2 && len(parts) != 3) || parts[0] != "scripts" {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if !validScriptPathPart(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func scriptPackageComplete(directory string) bool {
@@ -1000,7 +1016,7 @@ func validateCatalogValue(spec VarSpec, value string) error {
 		return nil
 	}
 	if spec.Key == "STREAMER_APP" && value != "" && !validStreamerSelection(value) {
-		return fmt.Errorf("must use scripts/device/app")
+		return fmt.Errorf("must use scripts/package or scripts/device/app")
 	}
 	if spec.Key == "CHANNELS_M3U" && value != "" {
 		if _, err := validM3UFile(value); err != nil {
@@ -1204,15 +1220,19 @@ func discoverLocalStreamersAt(root string) []string {
 	devices, err := os.ReadDir(root)
 	if err == nil {
 		for _, device := range devices {
-			if !device.IsDir() {
+			if !device.IsDir() || !validScriptPathPart(device.Name()) {
 				continue
 			}
-			providers, err := os.ReadDir(filepath.Join(root, device.Name()))
+			devicePath := filepath.Join(root, device.Name())
+			if scriptPackageComplete(devicePath) {
+				seen[filepath.ToSlash(filepath.Join("scripts", device.Name()))] = true
+			}
+			providers, err := os.ReadDir(devicePath)
 			if err != nil {
 				continue
 			}
 			for _, provider := range providers {
-				if !provider.IsDir() || !validScriptPathPart(device.Name()) || !validScriptPathPart(provider.Name()) {
+				if !provider.IsDir() || !validScriptPathPart(provider.Name()) {
 					continue
 				}
 				if scriptPackageComplete(filepath.Join(root, device.Name(), provider.Name())) {
@@ -1260,17 +1280,21 @@ func queryUpstreamStreamers() ([]string, error) {
 	packages := map[string]map[string]bool{}
 	for _, entry := range tree.Tree {
 		parts := strings.Split(filepath.ToSlash(entry.Path), "/")
-		if entry.Type != "blob" || len(parts) != 4 || parts[0] != "scripts" || !validScriptPathPart(parts[1]) || !validScriptPathPart(parts[2]) {
+		if entry.Type != "blob" || (len(parts) != 3 && len(parts) != 4) || parts[0] != "scripts" {
 			continue
 		}
-		name := parts[3]
+		selectionParts := parts[:len(parts)-1]
+		selection := strings.Join(selectionParts, "/")
+		if !validStreamerSelection(selection) {
+			continue
+		}
+		name := parts[len(parts)-1]
 		for _, required := range requiredStreamerFiles {
 			if name == required {
-				path := strings.Join(parts[:3], "/")
-				if packages[path] == nil {
-					packages[path] = map[string]bool{}
+				if packages[selection] == nil {
+					packages[selection] = map[string]bool{}
 				}
-				packages[path][name] = true
+				packages[selection][name] = true
 			}
 		}
 	}

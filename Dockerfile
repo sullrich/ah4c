@@ -68,7 +68,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 ENV LIBVA_DRIVER_NAME=iHD
 
 # Set up working directories
-RUN mkdir -p /opt/scripts /tmp/m3u /opt/html /opt/static
+RUN mkdir -p /opt/scripts /tmp/scripts /tmp/m3u /opt/html /opt/static
 
 WORKDIR /opt
 
@@ -76,8 +76,9 @@ WORKDIR /opt
 COPY --from=builder /ws-scrcpy/dist /opt/ws-scrcpy
 COPY --from=builder /opt/ah4c /opt/ah4c
 
-# Copy runtime files and static assets
+# Copy necessary scripts and static files
 COPY docker-start.sh adbpackages.sh /opt/
+COPY scripts /tmp/scripts/
 COPY m3u/* /tmp/m3u/
 COPY html/* /opt/html/
 RUN sed -i '/href="\/config"/d; /href="\/env"/d' /opt/html/index.html

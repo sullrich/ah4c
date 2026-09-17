@@ -463,7 +463,7 @@ func initTranscribe(variant string) error {
 func explainMissingVulkan() {
 	logger("[CC] Vulkan was asked for and is not available. The facts:")
 	if nodes := renderNodes(); len(nodes) == 0 {
-		logger("[CC]   - /dev/dri has no render nodes: the container does not have access to the GPU device")
+		logger("[CC]   - /dev/dri has no render nodes: the compose file is not passing the GPU through")
 	} else {
 		logger("[CC]   - /dev/dri render nodes: %s", strings.Join(nodes, ", "))
 	}
@@ -535,7 +535,7 @@ func logComputeDevices() {
 		logger("[CC] compute device %d: %s (%s, %d MB free of %d)",
 			i, desc, txGoString(d.kind), d.memoryFree>>20, d.memoryTotal>>20)
 		if softwareRenderer(desc) {
-			logger("[CC] WARNING: %q is a software renderer, not a graphics card. Transcription on it is slower than the plain processor backend. Check that the container has access to /dev/dri and that the Vulkan driver install finished cleanly.", desc)
+			logger("[CC] WARNING: %q is a software renderer, not a graphics card. Transcription on it is slower than the plain processor backend. Check that the compose file passes /dev/dri through and that the Vulkan driver install finished cleanly.", desc)
 		}
 	}
 }
@@ -677,7 +677,7 @@ func pinHardwareVulkanICDs() {
 	os.Setenv("VK_DRIVER_FILES", list)
 	os.Setenv("VK_ICD_FILENAMES", list)
 	if len(hardware) == 0 {
-		logger("[CC] The only Vulkan driver here is a software renderer, which is slower than using the processor directly. Ignoring it; captions will run on the processor. Give the container access to /dev/dri and reinstall the driver to use the GPU.")
+		logger("[CC] The only Vulkan driver here is a software renderer, which is slower than using the processor directly. Ignoring it; captions will run on the processor. Pass /dev/dri through in the compose file and reinstall the driver to use the GPU.")
 	} else {
 		logger("[CC] Vulkan drivers limited to the hardware ones: %s", list)
 	}

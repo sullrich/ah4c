@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,7 +61,7 @@ var varCatalog = []VarSpec{
 	{Key: "IPADDRESS", Label: "This ah4c address", Desc: "The network address other devices use to reach ah4c.", Placeholder: "192.168.1.50:7654", Type: varString, Applies: applyLive},
 	{Key: "CHANNELSIP", Label: "Channels DVR address", Desc: "Open Channels DVR in a browser and copy the server address and port from the address bar.", Placeholder: "192.168.1.20:8089", Type: varString, Applies: applyLive},
 	{Key: "CHANNELS_M3U", Label: "Channel list in Channels DVR", Desc: "The last M3U successfully added to Channels DVR. The Channel M3Us page is the easiest place to change it.", Placeholder: "all.m3u", Type: varString, Applies: applyLive},
-	{Key: "STREAMER_APP", Label: "Streamer app", Desc: "Optional script package used when a tuner needs to control a streaming device. You can leave this blank and choose one later.", Placeholder: "scripts/firetv/hulu", Type: varEnum, Applies: applyRestart},
+	{Key: "STREAMER_APP", Label: "Streamer app", Desc: "Optional local or GitHub script package used when a tuner needs to control a streaming device. You can leave this blank and choose one later.", Placeholder: "scripts/david", Type: varEnum, Applies: applyRestart},
 	{Key: "PYATV", Label: "Use pyatv", Desc: "Use Apple TV tuners through pyatv instead of adb-based tuners. Changing this requires a restart.", Type: varBool, Applies: applyRestart},
 	{Key: "FASTCHANNELS_URL", Label: "FastChannels URL", Desc: "Base URL of the FastChannels container used by its ah4c tuning integration.", Placeholder: "http://fastchannels:8000", Type: varURL, Applies: applyLive, ScriptVaries: true},
 	{Key: "ALERT_SMTP_SERVER", Label: "SMTP server", Desc: "SMTP server and port used for failure alerts.", Placeholder: "smtp.gmail.com:587", Type: varString, Applies: applyLive},
@@ -75,7 +76,7 @@ var varCatalog = []VarSpec{
 	{Key: "UPDATE_SCRIPTS", Label: "Update scripts", Desc: "When enabled, replace only the chosen package with the latest copy from sullrich/ah4c at startup. This also works when STREAMER_APP is set in the environment.", Type: varBool, Applies: applyRestart},
 	{Key: "UPDATE_M3US", Label: "Update sample M3Us", Desc: "Replace bundled sample M3Us at startup.", Type: varBool, Applies: applyRestart},
 	{Key: "USER_SCRIPT", Label: "Custom startup script", Desc: "Path to a custom script run alongside ah4c at container startup.", Type: varPath, Applies: applyRestart},
-	{Key: "TZ", Label: "Timezone", Desc: "Local timezone in Linux tz format.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
+	{Key: "TZ", Label: "Time zone", Desc: "Local time zone used for logs and scheduled behavior.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
 	{Key: "SPEED_MODE", Label: "Speed mode", Desc: "Keep supported streaming apps open between tuning cycles.", Type: varBool, Applies: applyLive, ScriptVaries: true},
 	{Key: "KEEP_WATCHING", Label: "Keep-watching interval", Desc: "Delay before supported scripts resend a deeplink or keypress to prevent inactivity prompts.", Placeholder: "4h or 240m", Type: varDuration, Applies: applyLive, ScriptVaries: true},
 	{Key: "AUTOCROP_CHANNELS", Label: "Autocrop channels", Desc: "Space-separated channel numbers whose four-sided black borders should be cropped by a LinkPi encoder.", Type: varString, Applies: applyLive, ScriptVaries: true},
@@ -676,57 +677,97 @@ func envBoolTrueOrOne(value string) bool {
 }
 
 func mountPointPersistent(dir string) (bool, string) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
+	mounted, abs, _ := mountPointState(dir)
+	if mounted {
 		return true, ""
-	}
-	f, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		return true, ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 5 && fields[4] == abs {
-			return true, ""
-		}
 	}
 	return false, abs
 }
 
+func mountPointState(dir string) (bool, string, string) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return true, "", ""
+	}
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return true, "", ""
+	}
+	defer f.Close()
+	mounted, root := mountPointDetails(abs, f)
+	return mounted, abs, root
+}
+
+func mountPointDetails(abs string, r io.Reader) (bool, string) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) >= 5 && decodeMountInfoPath(fields[4]) == abs {
+			return true, decodeMountInfoPath(fields[3])
+		}
+	}
+	return false, ""
+}
+
+func decodeMountInfoPath(value string) string {
+	replacer := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	return replacer.Replace(value)
+}
+
 type persistentMountRequirement struct {
-	Label         string
-	CheckPath     string
-	ContainerPath string
+	Label            string
+	CheckPath        string
+	ContainerPath    string
+	InvalidMountRoot string
 }
 
 func requiredPersistentMounts() []persistentMountRequirement {
 	return []persistentMountRequirement{
-		{Label: "Settings", CheckPath: filepath.Dir(settingsFilePath()), ContainerPath: "/opt/config"},
-		{Label: "Streaming-app scripts", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts"},
-		{Label: "Channel lists", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u"},
-		{Label: "Android connection keys", CheckPath: "/root/.android", ContainerPath: "/root/.android"},
-		{Label: "Closed-caption files", CheckPath: "/opt/captions", ContainerPath: "/opt/captions"},
-		{Label: "Pre-roll files", CheckPath: "/opt/preroll", ContainerPath: "/opt/preroll"},
+		{Label: "Settings", CheckPath: filepath.Dir(settingsFilePath()), ContainerPath: "/opt/config", InvalidMountRoot: "/ah4c/config"},
+		{Label: "Streaming-app scripts", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts", InvalidMountRoot: "/ah4c/scripts"},
+		{Label: "Channel lists", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u", InvalidMountRoot: "/ah4c/m3u"},
+		{Label: "Android connection keys", CheckPath: "/root/.android", ContainerPath: "/root/.android", InvalidMountRoot: "/ah4c/adb"},
+		{Label: "Closed-caption files", CheckPath: "/opt/captions", ContainerPath: "/opt/captions", InvalidMountRoot: "/ah4c/captions"},
+		{Label: "Pre-roll files", CheckPath: "/opt/preroll", ContainerPath: "/opt/preroll", InvalidMountRoot: "/ah4c/preroll"},
 	}
 }
 
-func filterMissingPersistentMounts(requirements []persistentMountRequirement, mounted func(string) (bool, string)) []persistentMountRequirement {
+func filterMissingPersistentMounts(requirements []persistentMountRequirement, mounted func(persistentMountRequirement) bool) []persistentMountRequirement {
 	missing := make([]persistentMountRequirement, 0, len(requirements))
 	for _, requirement := range requirements {
-		if ok, _ := mounted(requirement.CheckPath); !ok {
+		if !mounted(requirement) {
 			missing = append(missing, requirement)
 		}
 	}
 	return missing
 }
 
+func requiredMountPersistent(requirement persistentMountRequirement) bool {
+	ok, _, root := mountPointState(requirement.CheckPath)
+	if !ok {
+		return false
+	}
+	return persistentMountRootValid(requirement, root)
+}
+
+func persistentMountRootValid(requirement persistentMountRequirement, root string) bool {
+	return requirement.InvalidMountRoot == "" || filepath.Clean(root) != filepath.Clean(requirement.InvalidMountRoot)
+}
+
 func missingRequiredPersistentMounts() []persistentMountRequirement {
 	if !runningInContainer() {
 		return nil
 	}
-	return filterMissingPersistentMounts(requiredPersistentMounts(), mountPointPersistent)
+	requirements := requiredPersistentMounts()
+	if hostDirMarkerMissing() {
+		return requirements
+	}
+	return filterMissingPersistentMounts(requirements, requiredMountPersistent)
+}
+
+func hostDirMarkerMissing() bool {
+	value, present := os.LookupEnv("AH4C_HOST_DIR_CONFIGURED")
+	return present && !strings.EqualFold(strings.TrimSpace(value), "true")
 }
 
 func configDirPersistent() (bool, string) {

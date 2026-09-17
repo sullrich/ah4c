@@ -128,7 +128,7 @@ fetchConfiguredScripts() {
   while [[ "$STREAMER_APP" == */ ]]; do STREAMER_APP="${STREAMER_APP%/}"; done
   export STREAMER_APP
   [[ -n "$STREAMER_APP" ]] || { echo "No STREAMER_APP configured; no tuner scripts requested"; return; }
-  [[ "$STREAMER_APP" =~ ^scripts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "WARNING: Invalid STREAMER_APP path '$STREAMER_APP'"; return; }
+  [[ "$STREAMER_APP" =~ ^scripts/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]] || { echo "WARNING: Invalid STREAMER_APP path '$STREAMER_APP'"; return; }
   packageTarget="/opt/$STREAMER_APP"
   packageParent="${packageTarget%/*}"
   packageName="${packageTarget##*/}"

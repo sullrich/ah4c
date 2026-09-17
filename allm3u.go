@@ -148,13 +148,14 @@ func registerAllM3URoutes(r *gin.Engine) {
 			c.String(http.StatusInternalServerError, "Failed to list installed scripts: %v", err)
 			return
 		}
-		c.HTML(http.StatusOK, "allm3u.html", gin.H{
-			"sources":       allM3USources(),
-			"devices":       deviceNames,
-			"devicesJSON":   template.JS(devicesJSON),
-			"installedJSON": template.JS(installedJSON),
-			"streamerApp":   os.Getenv("STREAMER_APP"),
-		})
+		page := gin.H{
+			"sources":     allM3USources(),
+			"devices":     deviceNames,
+			"devicesJSON": template.JS(devicesJSON),
+		}
+		page["installedJSON"] = template.JS(installedJSON)
+		page["streamerApp"] = os.Getenv("STREAMER_APP")
+		c.HTML(http.StatusOK, "allm3u.html", page)
 	})
 
 	r.POST("/allm3u/install-script", func(c *gin.Context) {

@@ -14,6 +14,7 @@ services:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
       - AH4C_COMPOSE=2026.09.16 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_HOST_DIR_CONFIGURED=${HOST_DIR:+true} # Internal safety check: blank means HOST_DIR was not set, so setup remains blocked instead of accepting accidental /ah4c mounts.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       # ── Tuners ──────────────────────────────────────────────────────────────

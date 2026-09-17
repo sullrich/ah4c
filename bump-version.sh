@@ -11,15 +11,6 @@
 # incremented instead, so the version never repeats and never goes down.
 set -eu
 cd "$(dirname "$0")"
-if [ -n "${VERSION_OVERRIDE:-}" ]; then
-	case "$VERSION_OVERRIDE" in
-		v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]) now="$VERSION_OVERRIDE" ;;
-		*) echo "VERSION_OVERRIDE must use vYYYY.MM.DD.HHMM" >&2; exit 1 ;;
-	esac
-	printf '%s\n' "$now" > VERSION
-	echo "$now"
-	exit 0
-fi
 now="v$(date -u +%Y.%m.%d.%H%M)"
 cur="$(cat VERSION 2>/dev/null || echo)"
 if [ -n "$cur" ] && [ "$now" != "$(printf '%s\n%s\n' "$now" "$cur" | sort | tail -1)" ]; then

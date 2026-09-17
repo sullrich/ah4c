@@ -255,7 +255,7 @@ var (
 func warnIfNotPersistent() {
 	if ok, dir := captionDirPersistent(); !ok {
 		logger("[CC] WARNING: %s is not a bind mount. The speech model, engine and any GPU driver downloaded here are lost when the container is recreated.", dir)
-		logger("[CC] WARNING: map a persistent host folder to /opt/captions in your container settings, then recreate the container")
+		logger("[CC] WARNING: add this volume to your compose file and recreate the container:  ${HOST_DIR}/ah4c/captions:/opt/captions")
 	}
 }
 

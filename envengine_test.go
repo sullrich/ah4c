@@ -36,11 +36,54 @@ func TestFilterMissingPersistentMountsReportsEveryMissingFolder(t *testing.T) {
 		{Label: "M3Us", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u"},
 	}
 	mounted := map[string]bool{"/opt/config": true}
-	missing := filterMissingPersistentMounts(requirements, func(path string) (bool, string) {
-		return mounted[path], path
+	missing := filterMissingPersistentMounts(requirements, func(requirement persistentMountRequirement) bool {
+		return mounted[requirement.CheckPath]
 	})
 	if len(missing) != 2 || missing[0].ContainerPath != "/opt/scripts" || missing[1].ContainerPath != "/opt/m3u" {
 		t.Fatalf("missing mounts = %#v", missing)
+	}
+}
+
+func TestRequiredMountRejectsEmptyHostDirRoot(t *testing.T) {
+	oldPath := settingsPathOverride
+	settingsPathOverride = "/opt/config/settings.json"
+	t.Cleanup(func() { settingsPathOverride = oldPath })
+	requirements := requiredPersistentMounts()
+	mountRoots := map[string]string{
+		"/opt/config":    "/ah4c/config",
+		"/opt/scripts":   "/ah4c/scripts",
+		"/opt/m3u":       "/ah4c/m3u",
+		"/root/.android": "/ah4c/adb",
+		"/opt/captions":  "/ah4c/captions",
+		"/opt/preroll":   "/ah4c/preroll",
+	}
+	missing := filterMissingPersistentMounts(requirements, func(requirement persistentMountRequirement) bool {
+		return persistentMountRootValid(requirement, mountRoots[requirement.CheckPath])
+	})
+	if len(missing) != len(requirements) {
+		t.Fatalf("missing mounts = %d, want %d: %#v", len(missing), len(requirements), missing)
+	}
+}
+
+func TestMountPointDetailsReadsBindSourceRoot(t *testing.T) {
+	mountInfo := "390 213 0:2 /ah4c/scripts /opt/scripts rw - rootfs rootfs rw\n" +
+		"391 213 0:2 /srv/ah4c/config /opt/config rw - rootfs rootfs rw\n"
+	if mounted, root := mountPointDetails("/opt/scripts", strings.NewReader(mountInfo)); !mounted || root != "/ah4c/scripts" {
+		t.Fatalf("scripts mount = (%v, %q)", mounted, root)
+	}
+	if mounted, root := mountPointDetails("/opt/config", strings.NewReader(mountInfo)); !mounted || root != "/srv/ah4c/config" {
+		t.Fatalf("config mount = (%v, %q)", mounted, root)
+	}
+}
+
+func TestHostDirMarkerOnlyBlocksWhenExplicitlyEmpty(t *testing.T) {
+	t.Setenv("AH4C_HOST_DIR_CONFIGURED", "")
+	if !hostDirMarkerMissing() {
+		t.Fatal("empty HOST_DIR marker was accepted")
+	}
+	t.Setenv("AH4C_HOST_DIR_CONFIGURED", "true")
+	if hostDirMarkerMissing() {
+		t.Fatal("configured HOST_DIR marker was rejected")
 	}
 }
 
@@ -196,12 +239,17 @@ func TestPreviouslyAcceptedSettingsStillLoadIntact(t *testing.T) {
 }
 
 func TestCanonicalStreamerSelection(t *testing.T) {
-	for _, value := range []string{"scripts/firetv/hulu/", "./scripts/firetv/hulu", "  ./scripts/firetv/hulu/  "} {
-		if got := canonicalStreamerSelection(value); got != "scripts/firetv/hulu" {
-			t.Fatalf("canonicalStreamerSelection(%q) = %q", value, got)
+	for _, tc := range []struct{ value, want string }{
+		{"scripts/firetv/hulu/", "scripts/firetv/hulu"},
+		{"./scripts/firetv/hulu", "scripts/firetv/hulu"},
+		{"  ./scripts/firetv/hulu/  ", "scripts/firetv/hulu"},
+		{"./scripts/david/", "scripts/david"},
+	} {
+		if got := canonicalStreamerSelection(tc.value); got != tc.want {
+			t.Fatalf("canonicalStreamerSelection(%q) = %q", tc.value, got)
 		}
-		if !validStreamerSelection(value) {
-			t.Fatalf("validStreamerSelection(%q) = false", value)
+		if !validStreamerSelection(tc.value) {
+			t.Fatalf("validStreamerSelection(%q) = false", tc.value)
 		}
 	}
 	sets, locked, _ := materializeBootstrapPlan([]string{"STREAMER_APP=./scripts/firetv/hulu/"}, emptySettings(), false, nil)
