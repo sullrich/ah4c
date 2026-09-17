@@ -434,6 +434,18 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .config-notice { display: flex; align-items: center; gap: 0.8rem; justify-content: space-between; padding: 0.7rem 0.9rem; border: 1px solid var(--info); border-radius: var(--radius); margin-bottom: 0.9rem; background: var(--surface); }
 .config-notice--warning { border-color: var(--warning); }
 .config-notice--danger { border-color: var(--danger); color: var(--danger); }
+.settings-page > #notice:not(.hidden) {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 120;
+  width: min(34rem, calc(100vw - 2rem));
+  margin: 0;
+  align-items: flex-start;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
+}
+.settings-page > #notice > span { flex: 1; min-width: 0; line-height: 1.45; }
+.settings-page > #notice .toast-close { flex: 0 0 auto; }
 .storage-blocker { display: block; color: var(--text); }
 .storage-blocker > strong { display: block; margin-bottom: .45rem; color: var(--danger); font-size: .9rem; }
 .storage-blocker p { margin: .4rem 0; color: var(--text-muted); }

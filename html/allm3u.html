@@ -94,7 +94,7 @@
     </div>
     <script>
         const deviceProviders = {{.devicesJSON}};
-        const installedPackages = {{.installedJSON}};
+        const packageStatuses = {{.packageStatusesJSON}};
 
         document.querySelectorAll('.src-device').forEach(function (sel) {
             sel.addEventListener('change', function () { populateProviders(sel); });
@@ -113,7 +113,13 @@
                 const opt = document.createElement('option');
                 opt.value = p;
                 const path = 'scripts/' + deviceSelect.value + '/' + p;
-                opt.textContent = p + (installedPackages[path] ? ' — ready' : ' — download needed');
+                const status = packageStatuses[path] || 'remote';
+                const description = status === 'ready'
+                    ? ' — ready locally'
+                    : status === 'incomplete'
+                        ? ' — local folder is missing required files'
+                        : ' — available to download';
+                opt.textContent = p + description;
                 providerSelect.appendChild(opt);
             });
             if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
@@ -190,18 +196,30 @@
                 return;
             }
             const packages = [...new Set(sources.map(source => 'scripts/' + source.device + '/' + source.provider))];
+            const incompleteLocal = packages.filter(path => packageStatuses[path] === 'incomplete');
+            if (incompleteLocal.length) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = incompleteLocal.join(', ') + ' already exists locally but is missing one or more required files. The local folder was not replaced.';
+                return;
+            }
+            const downloads = packages.filter(path => (packageStatuses[path] || 'remote') === 'remote');
+            if (!downloads.length) {
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = 'The selected scripts are already ready locally. Nothing was downloaded.';
+                return;
+            }
             button.disabled = true;
             try {
-                for (let index = 0; index < packages.length; index++) {
-                    const path = packages[index];
+                for (let index = 0; index < downloads.length; index++) {
+                    const path = downloads[index];
                     status.className = 'm3u-action-status muted';
-                    status.textContent = 'Downloading ' + path + ' (' + (index + 1) + ' of ' + packages.length + ')…';
+                    status.textContent = 'Downloading ' + path + ' (' + (index + 1) + ' of ' + downloads.length + ')…';
                     const response = await fetch('/allm3u/install-script', {
                         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
                     });
                     const payload = await response.json();
                     if (!response.ok) throw new Error(payload.error || 'Could not download ' + path + '.');
-                    installedPackages[path] = true;
+                    packageStatuses[path] = 'ready';
                 }
                 document.querySelectorAll('.src-device').forEach(populateProviders);
                 status.className = 'm3u-action-status connection-state--ready';
