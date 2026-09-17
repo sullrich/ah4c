@@ -217,9 +217,9 @@
                 status.textContent = 'Choose an .m3u file first.';
                 return;
             }
-            if (!file.name.toLowerCase().endsWith('.m3u')) {
+            if (!file.name.endsWith('.m3u') || file.name.trim() !== file.name) {
                 status.className = 'm3u-action-status connection-state--error';
-                status.textContent = 'The filename must end in .m3u.';
+                status.textContent = 'Use a plain filename ending in lowercase .m3u, with no leading or trailing spaces.';
                 return;
             }
             const replacing = [...document.querySelectorAll('[data-m3u-file]')].some(item => item.dataset.m3uFile === file.name);

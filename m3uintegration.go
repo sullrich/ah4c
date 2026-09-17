@@ -54,7 +54,7 @@ func uploadM3UFileHandler(c *gin.Context) {
 		return
 	}
 	name := filepath.Base(filepath.ToSlash(header.Filename))
-	name, err = validM3UFile(name)
+	name, err = validManagedM3UFile(name)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -125,7 +125,7 @@ func deleteM3UFileHandler(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Wait until the current tune finishes before deleting a channel list."})
 		return
 	}
-	name, err := validM3UFile(c.Param("file"))
+	name, err := validManagedM3UFile(c.Param("file"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -258,6 +258,13 @@ func addM3UToChannelsHandler(c *gin.Context) {
 		"status": "ok", "file": file, "url": m3uURL, "source": sourceName,
 		"dvr": dvrBase, "persisted": persisted, "message": persistMessage,
 	})
+}
+
+func validManagedM3UFile(value string) (string, error) {
+	if value == "" || strings.TrimSpace(value) != value || filepath.Base(value) != value || !strings.HasSuffix(value, ".m3u") {
+		return "", fmt.Errorf("M3U filenames must use a plain filename ending in lowercase .m3u")
+	}
+	return value, nil
 }
 
 func validM3UFile(value string) (string, error) {
