@@ -672,11 +672,11 @@ function startTunerPreview() {
     }
     tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
     tunerPreviewPlayer.attachMediaElement(video);
-    video.onloadedmetadata = () => {
+    video.addEventListener('loadedmetadata', () => {
         video.currentTime = video.duration;
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
-    };
-    video.onended = restartTunerPreviewSoon;
+    }, {once:true});
+    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
     tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
     tunerPreviewPlayer.load();
     tunerPreviewPlayer.play().catch(() => {});
@@ -1388,7 +1388,7 @@ async function handleSaveClick() {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
+            button.textContent = button.id === 'save-settings' && wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
         });
     }
 }

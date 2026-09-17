@@ -642,7 +642,7 @@ details.card > summary::-webkit-details-marker { display: none; }
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 0.5rem;
-  align-items: end;
+  align-items: start;
   margin-bottom: 0.8rem;
 }
 
@@ -651,11 +651,13 @@ details.card > summary::-webkit-details-marker { display: none; }
 .pair .field label.connection-label { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .connection-state { display: inline-flex; align-items: center; gap: .3rem; color: var(--text-faint); font-size: .66rem; font-weight: 500; white-space: nowrap; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+.connection-state--ready { color: var(--live); }
 .connection-state--ready .connection-dot { background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
 .connection-state--checking { color: var(--accent); }
 .connection-state--checking .connection-dot { background: var(--accent); }
 .connection-state--authorize, .connection-state--pair { color: var(--warning); }
 .connection-state--authorize .connection-dot, .connection-state--pair .connection-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--accent-soft); }
+.connection-state--error { color: var(--danger); }
 .connection-state--error .connection-dot { background: var(--danger); }
 .connection-message { margin-top: .25rem; color: var(--text-muted); font-size: .68rem; line-height: 1.35; }
 .connection-message:empty { display: none; }
@@ -665,6 +667,7 @@ details.card > summary::-webkit-details-marker { display: none; }
   align-items: center;
   justify-content: center;
   height: 33px;
+  margin-top: 1.3rem;
   color: var(--text-faint);
   font-size: 0.9rem;
 }
