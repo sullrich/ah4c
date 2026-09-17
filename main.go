@@ -132,23 +132,6 @@ type Entry struct {
 	Group         string `json:"Group"`
 }
 
-type ConfigEnvVariable struct {
-	Key   string
-	Value string
-}
-
-type ConfigTuner struct {
-	Number     string
-	Cmd        string
-	EncoderUrl string
-	TunerIp    string
-}
-
-type ConfigData struct {
-	EnvVariables []ConfigEnvVariable
-	Tuners       []ConfigTuner
-}
-
 // Early init called before main
 func init() {
 	// Intitalize HTTP Transport
@@ -190,6 +173,9 @@ func (r *reader) startTeeCMD() error { // Removed the readers argument
 	logger("Starting TEECMD %s", r.t.teecmd)
 	// Execute command and assign stdin stdout stderr
 	cmdparts := strings.Fields(r.t.teecmd)
+	if len(cmdparts) == 0 {
+		return fmt.Errorf("TEECMD is empty")
+	}
 	cmd := exec.Command(cmdparts[0], cmdparts[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -397,6 +383,11 @@ func tune(idx, channel string, early *earlyTune) (io.ReadCloser, error) {
 			if t.cmd != "" {
 				logger("Attempting application tune for device %s %v", t.cmd, idx)
 				cmdAndArgs := parseCommand(t.cmd)
+				if len(cmdAndArgs) == 0 {
+					logger("[ERR] CMD is empty for tuner %d", i)
+					t.active = false
+					continue
+				}
 				cmd := exec.Command(cmdAndArgs[0], cmdAndArgs[1:]...)
 				pipeReader, pipeWriter := io.Pipe()
 				cmd.Stdout = pipeWriter
@@ -648,6 +639,7 @@ func run() error {
 	r := gin.New()
 	r.SetTrustedProxies(nil)
 	r.Use(CustomLogger())
+	registerConfigRoutes(r)
 	r.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/static") {
 			c.Header("Cache-Control", "no-store")
@@ -730,10 +722,17 @@ func run() error {
 	r.GET("/m3u/:channel", func(c *gin.Context) {
 		r.LoadHTMLGlob("m3u/*.m3u")
 		channel := c.Param("channel")
+		filePath := "m3u/" + channel
 		// Check if the file exists
-		if _, errread := os.Stat("m3u/" + channel); errread == nil {
-			// Get the proxy IP address used to rewrite m3u ip addresses
-			IPADDRESS := os.Getenv("IPADDRESS")
+		if templateContents, errread := os.ReadFile(filePath); errread == nil {
+			templateAddsPort := bytes.Contains(templateContents, []byte("{{ .IPADDRESS }}:")) || bytes.Contains(templateContents, []byte("{{.IPADDRESS}}:"))
+			IPADDRESS, err := m3uTemplateAddress(os.Getenv("IPADDRESS"), templateAddsPort)
+			if err != nil {
+				r.LoadHTMLGlob("html/*")
+				logger("[M3U] refusing to render %s without a valid IPADDRESS: %v", channel, err)
+				c.String(http.StatusServiceUnavailable, "Set the ah4c address in Settings before using a channel list.")
+				return
+			}
 			c.HTML(http.StatusOK, channel, gin.H{
 				"IPADDRESS": IPADDRESS,
 			})
@@ -745,7 +744,7 @@ func run() error {
 	})
 	// Show registered env variables
 	r.GET("/env", func(c *gin.Context) {
-		env := os.Environ()
+		env := maskedEnviron()
 		var envData string
 		for _, val := range env {
 			envData += val + "\n"
@@ -1013,13 +1012,22 @@ func run() error {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte("Attempting email testemail"))
 	})
 	r.GET("/status/channelsactivity", func(c *gin.Context) {
-		var IPADDR string
-		if os.Getenv("CHANNELSIP") != "" {
-			IPADDR = os.Getenv("CHANNELSIP")
-		} else {
-			IPADDR = os.Getenv("IPADDRESS")
+		channelsAddress := strings.TrimSpace(os.Getenv("CHANNELSIP"))
+		if channelsAddress == "" {
+			proxyBase, err := serverBaseURL(os.Getenv("IPADDRESS"), "7654")
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "CHANNELSIP is not configured"})
+				return
+			}
+			parsed, _ := url.Parse(proxyBase)
+			channelsAddress = parsed.Scheme + "://" + net.JoinHostPort(parsed.Hostname(), "8089")
 		}
-		resp, err := http.Get("http://" + IPADDR + ":8089/dvr")
+		channelsBase, err := serverBaseURL(channelsAddress, "8089")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp, err := http.Get(channelsBase + "/dvr")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1208,29 +1216,7 @@ func run() error {
 		})
 	})
 
-	r.GET("/config", func(c *gin.Context) {
-		configData := parseEnvFile("./env")
-		c.HTML(200, "config.html", configData)
-	})
-
-	r.POST("/configsave", func(c *gin.Context) {
-		// Print all form data
-		c.Request.ParseForm()
-		// Load current configuration data
-		configData := parseEnvFile("./env")
-		// Update global variables
-		for i, envVariable := range configData.EnvVariables {
-			configData.EnvVariables[i].Value = c.PostForm(envVariable.Key)
-		}
-		// Update tuner variables
-		for i := 0; i < len(configData.Tuners); i++ {
-			configData.Tuners[i].Cmd = c.PostForm("CMD" + configData.Tuners[i].Number)
-			configData.Tuners[i].EncoderUrl = c.PostForm("ENCODER" + configData.Tuners[i].Number + "_URL")
-			configData.Tuners[i].TunerIp = c.PostForm("TUNER" + configData.Tuners[i].Number + "_IP")
-		}
-		c.Redirect(http.StatusMovedPermanently, "/config")
-		saveConfigToFile("./env", configData)
-	})
+	r.GET("/config", func(c *gin.Context) { c.Redirect(http.StatusMovedPermanently, "/settings") })
 
 	// Report stats every 30 minutes
 	if envdebug {
@@ -1273,14 +1259,14 @@ func loadenv() {
 	}
 	// Get the proxy IP address used to rewrite m3u ip addresses
 	IPADDRESS := os.Getenv("IPADDRESS")
-	if os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW") == "TRUE" {
+	if strings.EqualFold(os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"), "true") {
 		allowPreview = true
 	}
 	logger("[ENV] IPADDRESS                  %s", IPADDRESS)
 	logger("[ENV] ALERT_SMTP_SERVER          %s", os.Getenv("ALERT_SMTP_SERVER"))
 	logger("[ENV] ALERT_AUTH_SERVER          %s", os.Getenv("ALERT_AUTH_SERVER"))
 	logger("[ENV] ALERT_EMAIL_FROM           %s", os.Getenv("ALERT_EMAIL_FROM"))
-	logger("[ENV] ALERT_EMAIL_PASS           %s", os.Getenv("ALERT_EMAIL_PASS"))
+	logger("[ENV] ALERT_EMAIL_PASS           %s", maskedEnvValue("ALERT_EMAIL_PASS"))
 	logger("[ENV] ALERT_EMAIL_TO             %s", os.Getenv("ALERT_EMAIL_TO"))
 	logger("[ENV] ALERT_WEBHOOK_URL          %s", os.Getenv("ALERT_WEBHOOK_URL"))
 	logger("[ENV] ALLOW_DEBUG_VIDEO_PREVIEW  %s", os.Getenv("ALLOW_DEBUG_VIDEO_PREVIEW"))
@@ -1291,12 +1277,12 @@ func loadenv() {
 	// Retrieve the number of tuners from the environment variable "NUMBER_TUNERS".
 	// This value represents the number of distinct tuners that the program will manage.
 	numTunersStr := os.Getenv("NUMBER_TUNERS")
-	numTuners, errtuners := strconv.Atoi(numTunersStr)
+	numTuners, errtuners := tunerCount(numTunersStr)
 	if errtuners != nil {
-		panic("Could not find an environment variable named NUMBER_TUNERS")
+		logger("[CONFIG] NUMBER_TUNERS %q %v; starting with zero tuners so Settings remains available", numTunersStr, errtuners)
 	}
 	// Get directory of scripts
-	streamerApp := os.Getenv("STREAMER_APP")
+	streamerApp := canonicalStreamerSelection(os.Getenv("STREAMER_APP"))
 	// Loop over the number of tuners and create each one
 	for i := 1; i <= numTuners; i++ {
 		iStr := strconv.Itoa(i)
@@ -1333,6 +1319,7 @@ func loadenv() {
 
 // Almighty main function
 func main() {
+	envengineStartup()
 	logger("[START] ah4c %s is starting", buildVersion())
 	loadenv()
 	tuneHoldStartup()
@@ -1390,7 +1377,7 @@ func sendEmail(message string) {
 	to := os.Getenv("ALERT_EMAIL_TO")
 	smtpServer := os.Getenv("ALERT_SMTP_SERVER")
 	authServer := os.Getenv("ALERT_AUTH_SERVER")
-	useSendmail := os.Getenv("ALERT_EMAIL_USE_SENDMAIL") == "TRUE"
+	useSendmail := strings.EqualFold(os.Getenv("ALERT_EMAIL_USE_SENDMAIL"), "true")
 	if from == "" || to == "" {
 		return
 	}
@@ -1622,76 +1609,6 @@ func channelName(channel string) string {
 		}
 	}
 	return ""
-}
-
-func parseEnvFile(filePath string) ConfigData {
-	file, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Printf("Failed to open file: %s", err)
-		os.Exit(1)
-	}
-	lines := strings.Split(string(file), "\n")
-	var envVariables []ConfigEnvVariable
-	var tuners []ConfigTuner
-	tunerRegex := regexp.MustCompile(`(CMD|ENCODER|TUNER)([0-9]+)(_URL|_IP)?`)
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			log.Printf("Invalid line: %s", line)
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
-		if tunerRegex.MatchString(key) {
-			tunerNumber := tunerRegex.FindStringSubmatch(key)[2]
-			// Find the tuner with this number, or create a new one
-			var tuner *ConfigTuner
-			for i := range tuners {
-				if tuners[i].Number == tunerNumber {
-					tuner = &tuners[i]
-					break
-				}
-			}
-			if tuner == nil {
-				tuners = append(tuners, ConfigTuner{Number: tunerNumber})
-				tuner = &tuners[len(tuners)-1] // Get reference to the last element in the slice
-			}
-			switch {
-			case strings.HasPrefix(key, "CMD"):
-				tuner.Cmd = value
-			case strings.HasPrefix(key, "ENCODER") && strings.HasSuffix(key, "_URL"):
-				tuner.EncoderUrl = value
-			case strings.HasPrefix(key, "TUNER") && strings.HasSuffix(key, "_IP"):
-				tuner.TunerIp = value
-			}
-		} else {
-			envVariables = append(envVariables, ConfigEnvVariable{Key: key, Value: value})
-		}
-	}
-	return ConfigData{EnvVariables: envVariables, Tuners: tuners}
-}
-
-func saveConfigToFile(filePath string, configData ConfigData) {
-	var lines []string
-	// Save global variables
-	for _, envVariable := range configData.EnvVariables {
-		lines = append(lines, envVariable.Key+"="+"\""+envVariable.Value+"\"")
-	}
-	lines = append(lines, "\n")
-	// Save tuner variables
-	for _, tuner := range configData.Tuners {
-		lines = append(lines, "CMD"+tuner.Number+"="+"\""+tuner.Cmd+"\"")
-		lines = append(lines, "ENCODER"+tuner.Number+"_URL="+"\""+tuner.EncoderUrl+"\"")
-		lines = append(lines, "TUNER"+tuner.Number+"_IP="+"\""+tuner.TunerIp+"\"\n")
-	}
-	err := os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
-	if err != nil {
-		log.Printf("Failed to write to file: %s", err)
-		os.Exit(1)
-	}
 }
 
 // nullTSPacket is an MPEG-TS NULL packet (PID 0x1FFF) — safe keepalive bytes.
