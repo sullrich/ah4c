@@ -50,6 +50,10 @@ folder where ah4c should keep its files, then start [`ah4c-minimal.yaml`](ah4c-m
 docker compose --env-file ah4c-minimal.env -f ah4c-minimal.yaml up -d
 ```
 
+The minimal environment file sets `GPU_DEVICE=/dev/dri` so Intel integrated graphics is
+available inside the container. The same setting works for AMD graphics. Change it to
+`GPU_DEVICE=/dev/null` only on a host that does not provide `/dev/dri`.
+
 Ports, bind mounts, GPU device passthrough and the container runtime remain in Compose because
 they must exist before ah4c starts. The streamer script is optional while setting up the app;
 choose it in the wizard or Settings when you are ready, and add zero or more tuners there.
