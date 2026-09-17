@@ -388,9 +388,15 @@ func computeLockSet(environ []string, s Settings) map[string]bool {
 		candidates[key] = true
 	}
 	values := environMap(environ)
+	_, countPresent := values["NUMBER_TUNERS"]
+	tunersOwnedByEnvironment := envValueUsable(values["NUMBER_TUNERS"], countPresent)
 	locked := map[string]bool{}
 	for key, val := range values {
-		if (candidates[key] || tunerKeyPattern.MatchString(key)) && envValueUsable(val, true) {
+		isTunerKey := tunerKeyPattern.MatchString(key)
+		if isTunerKey && key != "NUMBER_TUNERS" && !tunersOwnedByEnvironment {
+			continue
+		}
+		if (candidates[key] || isTunerKey) && envValueUsable(val, true) {
 			locked[key] = true
 		}
 	}
@@ -431,7 +437,9 @@ func materializePlan(environ []string, s Settings) (map[string]string, map[strin
 	}
 	if !locked["NUMBER_TUNERS"] {
 		for key, val := range synthesizeTunerVars(s.Tuners) {
-			consider(key, val, key != "NUMBER_TUNERS")
+			// NUMBER_TUNERS is the explicit source-of-truth switch. Without it,
+			// Settings owns the complete tuner topology and replaces stray tuner fields.
+			sets[key] = val
 		}
 	}
 	return sets, locked
