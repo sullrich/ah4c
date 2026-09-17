@@ -29,6 +29,21 @@ func TestSaveSettingsUsesPrivateAtomicFile(t *testing.T) {
 	}
 }
 
+func TestFilterMissingPersistentMountsReportsEveryMissingFolder(t *testing.T) {
+	requirements := []persistentMountRequirement{
+		{Label: "Settings", CheckPath: "/opt/config", ContainerPath: "/opt/config"},
+		{Label: "Scripts", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts"},
+		{Label: "M3Us", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u"},
+	}
+	mounted := map[string]bool{"/opt/config": true}
+	missing := filterMissingPersistentMounts(requirements, func(path string) (bool, string) {
+		return mounted[path], path
+	})
+	if len(missing) != 2 || missing[0].ContainerPath != "/opt/scripts" || missing[1].ContainerPath != "/opt/m3u" {
+		t.Fatalf("missing mounts = %#v", missing)
+	}
+}
+
 func TestEnvValueUsable(t *testing.T) {
 	for _, tc := range []struct {
 		value   string

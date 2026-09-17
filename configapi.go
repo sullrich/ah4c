@@ -111,6 +111,13 @@ func putConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if missing := missingRequiredPersistentMounts(); len(missing) > 0 {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":                   "Setup cannot continue until every required storage folder is added to the container.",
+			"missingPersistentMounts": persistentMountResponse(missing),
+		})
+		return
+	}
 	configAPIMu.Lock()
 	defer configAPIMu.Unlock()
 
@@ -717,10 +724,11 @@ func configResponse() gin.H {
 	locked := copyBoolMap(envLocked)
 	dockerManaged := envDockerManaged
 	envEngineMu.RUnlock()
-	persistent, dir := configDirPersistent()
+	missingMounts := missingRequiredPersistentMounts()
+	persistent := len(missingMounts) == 0
 	warning := ""
 	if !persistent {
-		warning = fmt.Sprintf("%s is not persistent. Map a persistent host folder to /opt/config in your container settings before relying on saved settings.", dir)
+		warning = "Setup cannot continue until every required storage folder is added to the container."
 	}
 	catalog := make([]gin.H, 0, len(varCatalog))
 	for _, spec := range varCatalog {
@@ -748,9 +756,18 @@ func configResponse() gin.H {
 	}
 	return gin.H{
 		"persistent": persistent, "persistWarning": warning, "dockerManaged": dockerManaged,
-		"restartNeeded": configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "catalog": catalog,
+		"missingPersistentMounts": persistentMountResponse(missingMounts),
+		"restartNeeded":           configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "catalog": catalog,
 		"tuners": tunerResponse(s, locked), "extra": s.Extra, "extraLocked": extraLocked, "host": host,
 	}
+}
+
+func persistentMountResponse(requirements []persistentMountRequirement) []gin.H {
+	response := make([]gin.H, 0, len(requirements))
+	for _, requirement := range requirements {
+		response = append(response, gin.H{"label": requirement.Label, "path": requirement.ContainerPath})
+	}
+	return response
 }
 
 func restartRequiredKeys() []string {

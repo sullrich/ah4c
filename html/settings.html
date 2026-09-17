@@ -44,7 +44,14 @@
             <p>A few things live outside this page by design: ports, persistent folders, graphics-device access and the image tag must be configured before the container starts. For most installs the only host-side value you need is <code>HOST_DIR</code>.</p>
             <p>The script package is optional and can be chosen later because it is unique to your streaming app and device; ah4c cannot safely guess it. Tuners are optional too and can be added now or later.</p>
             <p>You can return to any of this later under <strong>Settings</strong>; changes to tuners or the streamer app take a container restart, which the page will offer when needed.</p>
-            <div id="wizard-persist-warning" class="config-notice config-notice--danger hidden"></div>
+            <div id="wizard-persist-warning" class="config-notice config-notice--danger storage-blocker hidden" role="alert">
+                <strong>Setup cannot continue yet</strong>
+                <p>ah4c is missing one or more permanent storage folders. Without them, your settings or downloaded files could disappear when the container is updated or replaced.</p>
+                <p><strong>What to do:</strong> Open ah4c in your container manager, stop the container, and add a permanent host folder for every item listed below. The container folder shown must match exactly.</p>
+                <ul id="wizard-missing-mounts" class="storage-mount-list"></ul>
+                <p>Recreate or restart the container after adding the folders, then return here.</p>
+                <button id="wizard-storage-recheck" class="btn btn-sm" type="button">Check storage again</button>
+            </div>
             <div class="btn-row"><button id="wizard-start" class="btn btn-primary" type="button">Start setup</button></div>
         </section>
 
@@ -487,7 +494,7 @@ function chooseLocalScript(path) {
 function render() {
     document.body.classList.toggle('wizard-mode', wizard);
     byId('settings-content').classList.remove('hidden');
-    if (state.persistWarning) showNotice(state.persistWarning, 'danger');
+    if (state.persistWarning && !wizard) showNotice(state.persistWarning, 'danger');
     renderCatalog();
     renderTuners();
     renderExtra();
@@ -1081,13 +1088,18 @@ function startWizardIntro() {
     byId('wizard-steps').classList.add('hidden');
     byId('wizard-back').classList.add('hidden');
     document.querySelectorAll('.settings-section, .settings-actions').forEach(el => el.classList.add('wizard-hidden'));
-    if (state.persistWarning) {
-        byId('wizard-persist-warning').textContent = state.persistWarning;
-        byId('wizard-persist-warning').classList.remove('hidden');
-    }
+    const missing = state.missingPersistentMounts || [];
+    const blocker = byId('wizard-persist-warning');
+    blocker.classList.toggle('hidden', missing.length === 0);
+    byId('wizard-missing-mounts').innerHTML = missing.map(item => `<li><span>${escapeHTML(item.label)}</span><code>${escapeHTML(item.path)}</code></li>`).join('');
+    byId('wizard-start').disabled = missing.length > 0;
 }
 
 function showWizardStep(step) {
+    if (!state.persistent) {
+        startWizardIntro();
+        return;
+    }
     wizardStep = step;
     byId('wizard-intro').classList.add('hidden');
     byId('wizard-steps').classList.remove('hidden');
@@ -1103,6 +1115,7 @@ function showWizardStep(step) {
 }
 
 byId('wizard-start').addEventListener('click', () => showWizardStep(1));
+byId('wizard-storage-recheck').addEventListener('click', () => location.reload());
 byId('wizard-back').addEventListener('click', () => {
     if (wizardStep <= 1) startWizardIntro(); else showWizardStep(wizardStep - 1);
 });
@@ -1158,6 +1171,11 @@ byId('save-settings').addEventListener('click', async () => {
     saveButton.dataset.busy = 'true';
     saveButton.disabled = true;
     try {
+        if (!state.persistent) {
+            if (wizard) startWizardIntro();
+            showNotice('Setup cannot continue until every required storage folder is added to the container.', 'danger');
+            return;
+        }
         if (wizard && wizardStep > 0) {
             const section = wizardStep === 1 ? 'proxy' : wizardStep === 2 ? 'streamer' : 'tuners';
             if (!validateSettingsForm(section)) return;

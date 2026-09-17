@@ -695,6 +695,40 @@ func mountPointPersistent(dir string) (bool, string) {
 	return false, abs
 }
 
+type persistentMountRequirement struct {
+	Label         string
+	CheckPath     string
+	ContainerPath string
+}
+
+func requiredPersistentMounts() []persistentMountRequirement {
+	return []persistentMountRequirement{
+		{Label: "Settings", CheckPath: filepath.Dir(settingsFilePath()), ContainerPath: "/opt/config"},
+		{Label: "Streaming-app scripts", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts"},
+		{Label: "Channel lists", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u"},
+		{Label: "Android connection keys", CheckPath: "/root/.android", ContainerPath: "/root/.android"},
+		{Label: "Closed-caption files", CheckPath: "/opt/captions", ContainerPath: "/opt/captions"},
+		{Label: "Pre-roll files", CheckPath: "/opt/preroll", ContainerPath: "/opt/preroll"},
+	}
+}
+
+func filterMissingPersistentMounts(requirements []persistentMountRequirement, mounted func(string) (bool, string)) []persistentMountRequirement {
+	missing := make([]persistentMountRequirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		if ok, _ := mounted(requirement.CheckPath); !ok {
+			missing = append(missing, requirement)
+		}
+	}
+	return missing
+}
+
+func missingRequiredPersistentMounts() []persistentMountRequirement {
+	if !runningInContainer() {
+		return nil
+	}
+	return filterMissingPersistentMounts(requiredPersistentMounts(), mountPointPersistent)
+}
+
 func configDirPersistent() (bool, string) {
 	if !runningInContainer() {
 		return true, ""
@@ -711,8 +745,12 @@ func runningInContainer() bool {
 }
 
 func warnIfConfigNotPersistent() {
-	if ok, dir := configDirPersistent(); !ok {
-		logger("[CONFIG] WARNING: %s is not a bind mount. Settings saved here are lost when the container is recreated.", dir)
-		logger("[CONFIG] WARNING: map a persistent host folder to /opt/config in your container settings, then recreate the container")
+	missing := missingRequiredPersistentMounts()
+	if len(missing) == 0 {
+		return
+	}
+	logger("[CONFIG] WARNING: setup is blocked because %d required persistent folder mount(s) are missing", len(missing))
+	for _, requirement := range missing {
+		logger("[CONFIG] WARNING: add a persistent folder for %s at %s", requirement.Label, requirement.ContainerPath)
 	}
 }

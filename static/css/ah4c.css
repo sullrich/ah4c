@@ -434,6 +434,15 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .config-notice { display: flex; align-items: center; gap: 0.8rem; justify-content: space-between; padding: 0.7rem 0.9rem; border: 1px solid var(--info); border-radius: var(--radius); margin-bottom: 0.9rem; background: var(--surface); }
 .config-notice--warning { border-color: var(--warning); }
 .config-notice--danger { border-color: var(--danger); color: var(--danger); }
+.storage-blocker { display: block; color: var(--text); }
+.storage-blocker > strong { display: block; margin-bottom: .45rem; color: var(--danger); font-size: .9rem; }
+.storage-blocker p { margin: .4rem 0; color: var(--text-muted); }
+.storage-blocker p strong { color: var(--text); }
+.storage-mount-list { display: grid; gap: .35rem; margin: .65rem 0; padding: 0; list-style: none; }
+.storage-mount-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: center; padding: .48rem .6rem; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.storage-mount-list span { color: var(--text); font-weight: 500; }
+.storage-mount-list code { color: var(--accent); }
+.storage-blocker .btn { margin-top: .35rem; }
 .validation-error { color: var(--danger); }
 .empty-state { margin: .65rem 0 .75rem; padding: .75rem .85rem; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: .76rem; }
 .empty-state strong { color: var(--text); }
@@ -590,6 +599,7 @@ details.card > summary::-webkit-details-marker { display: none; }
 @media (max-width: 460px) {
   .tuner-card-header { gap: .45rem; }
   .tuner-order-row { grid-template-columns: minmax(0, 1fr) 86px; }
+  .storage-mount-list li { grid-template-columns: 1fr; gap: .2rem; }
 }
 
 /* The visual pairing: device on the left, encoder on the right, linked */
