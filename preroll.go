@@ -30,6 +30,9 @@ const (
 	prerollMount = "/opt/preroll"
 	// prerollCache is where the prepared transport stream lives.
 	prerollCache = "/tmp/preroll.ts"
+	// prerollSelectionName records the original filename selected through the
+	// Settings page without forcing the uploaded file itself to be renamed.
+	prerollSelectionName = ".preroll-selected"
 	// prerollStillSeconds is how long a clip a still image is made into. It
 	// loops, so this only bounds the file's size.
 	prerollStillSeconds = 10
@@ -209,15 +212,15 @@ func prerollStartup() {
 	preparePreroll(src)
 }
 
-// prerollInDir picks preroll.* from a directory if there is one, otherwise the
-// only file, otherwise the first by name with a note in the log. Hidden files
+// prerollInDir uses the Settings selection when present, then falls back to a
+// legacy preroll.* file, the only file, or the first by name. Hidden files
 func prerollInDir(dir string) string {
 	pick, count, err := pickPrerollFile(dir)
 	if err != nil {
 		logger("[PREROLL] %s cannot be listed (%v); holds will use NULL packets", dir, err)
 		return ""
 	}
-	if count > 1 {
+	if count > 1 && pick != "" {
 		logger("[PREROLL] %s holds %d files; using %s (name one preroll.* to choose)", dir, count, filepath.Base(pick))
 	}
 	return pick
@@ -238,6 +241,22 @@ func pickPrerollFile(dir string) (string, int, error) {
 		return "", 0, nil
 	}
 	sort.Strings(files)
+	selected, err := os.ReadFile(filepath.Join(dir, prerollSelectionName))
+	if err == nil {
+		name := strings.TrimSpace(string(selected))
+		if name == "" {
+			return "", len(files), nil
+		}
+		for _, file := range files {
+			if file == name {
+				return filepath.Join(dir, file), len(files), nil
+			}
+		}
+		return "", len(files), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", 0, err
+	}
 	pick := files[0]
 	for _, f := range files {
 		if strings.HasPrefix(strings.ToLower(f), "preroll.") {

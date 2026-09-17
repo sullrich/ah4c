@@ -76,8 +76,17 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 	}
 	defer part.Close()
 
-	extension := safePrerollExtension(part.FileName())
-	target := filepath.Join(prerollAPIRoot, "preroll"+extension)
+	filename, err := safePrerollFilename(part.FileName())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	previous, err := managedPrerollSelection(prerollAPIRoot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not read the current pre-roll selection: %v", err)})
+		return
+	}
+	target := filepath.Join(prerollAPIRoot, filename)
 	temporary, err := os.CreateTemp(prerollAPIRoot, ".preroll-upload-*")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not create the pre-roll file: %v", err)})
@@ -120,6 +129,16 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 		return
 	}
 	keepTemporary = true
+	if err := writePrerollSelection(prerollAPIRoot, filename); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but could not be selected: %v", err)})
+		return
+	}
+	if previous != "" && previous != target {
+		if err := os.Remove(previous); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but the previous pre-roll could not be removed: %v", err)})
+			return
+		}
+	}
 	if err := removeOtherManagedPrerolls(prerollAPIRoot, target); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but the previous pre-roll could not be removed: %v", err)})
 		return
@@ -148,6 +167,10 @@ func deletePrerollConfigHandler(c *gin.Context) {
 	}
 	if err := os.Remove(selected); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not delete the pre-roll file: %v", err)})
+		return
+	}
+	if err := writePrerollSelection(prerollAPIRoot, ""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The pre-roll was deleted, but the selection could not be cleared: %v", err)})
 		return
 	}
 	markPrerollRestartNeeded()
@@ -238,17 +261,56 @@ func prerollUploadPart(reader *multipart.Reader) (*multipart.Part, error) {
 	}
 }
 
-func safePrerollExtension(name string) string {
-	extension := strings.ToLower(filepath.Ext(filepath.Base(name)))
-	if len(extension) < 2 || len(extension) > 12 {
-		return ".media"
+func safePrerollFilename(name string) (string, error) {
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	name = filepath.Base(name)
+	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, ".") || len(name) > 255 {
+		return "", fmt.Errorf("the pre-roll filename is not safe")
 	}
-	for _, character := range extension[1:] {
-		if (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-			return ".media"
-		}
+	if strings.ContainsAny(name, "\x00\r\n") {
+		return "", fmt.Errorf("the pre-roll filename is not safe")
 	}
-	return extension
+	return name, nil
+}
+
+func managedPrerollSelection(dir string) (string, error) {
+	selection, err := os.ReadFile(filepath.Join(dir, prerollSelectionName))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(selection))
+	if name == "" {
+		return "", nil
+	}
+	safe, err := safePrerollFilename(name)
+	if err != nil || safe != name {
+		return "", fmt.Errorf("stored pre-roll selection is invalid")
+	}
+	return filepath.Join(dir, safe), nil
+}
+
+func writePrerollSelection(dir, name string) error {
+	temporary, err := os.CreateTemp(dir, ".preroll-selection-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := temporary.WriteString(name + "\n"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, filepath.Join(dir, prerollSelectionName))
 }
 
 func copyPrerollUpload(ctx context.Context, destination io.Writer, source io.Reader) (int64, error) {
