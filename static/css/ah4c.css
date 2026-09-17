@@ -395,6 +395,44 @@ select:focus {
 .settings-section + .settings-section { margin-top: 0.9rem; }
 .settings-section-title { justify-content: space-between; }
 .settings-section-title > span { min-width: 0; }
+.title-with-tip { position: relative; display: inline-flex; align-items: center; gap: .35rem; }
+.info-tip-wrap { position: static; display: inline-flex; }
+.info-tip {
+  display: inline-grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font: 600 .68rem/1 var(--font);
+  text-transform: none;
+  cursor: help;
+}
+.info-tip:hover, .info-tip:focus-visible { color: var(--text); border-color: var(--text-muted); outline: none; }
+.info-tooltip {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + .45rem);
+  left: 0;
+  display: none;
+  width: min(25rem, calc(100vw - 3rem));
+  padding: .65rem .75rem;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
+  font-size: .74rem;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+}
+.info-tip-wrap:hover .info-tooltip, .info-tip-wrap:focus-within .info-tooltip { display: block; }
 .settings-section-title .section-save {
   flex: 0 0 auto;
   margin-left: auto;

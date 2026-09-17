@@ -839,9 +839,9 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		if fieldLocks["teecmd"] {
 			values["teecmd"] = os.Getenv("TEECMD" + n)
 		}
-		items = append(items, gin.H{"tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
+		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
 	}
-	return gin.H{"locked": allLocked, "topologyLocked": tunerTopologyLocked(locked), "list": items}
+	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "list": items}
 }
 
 func tunerTopologyLocked(locked map[string]bool) bool {
@@ -902,10 +902,10 @@ func lockedRequestKeys(request configSaveRequest, old Settings, locked map[strin
 			rejected = append(rejected, key)
 		}
 	}
-	if request.Tuners != nil && locked["NUMBER_TUNERS"] {
-		rejected = append(rejected, "NUMBER_TUNERS")
-	} else if request.Tuners != nil {
-		if tunerTopologyLocked(locked) && len(*request.Tuners) != len(old.Tuners) {
+	if request.Tuners != nil {
+		if locked["NUMBER_TUNERS"] {
+			rejected = append(rejected, "NUMBER_TUNERS")
+		} else if tunerCountChangeMovesLockedPosition(len(old.Tuners), len(*request.Tuners), locked) {
 			rejected = append(rejected, "tuner count")
 		}
 		for i, tuner := range *request.Tuners {
@@ -924,23 +924,50 @@ func lockedRequestKeys(request configSaveRequest, old Settings, locked map[strin
 	return rejected
 }
 
+func tunerCountChangeMovesLockedPosition(oldCount, newCount int, locked map[string]bool) bool {
+	if oldCount == newCount {
+		return false
+	}
+	lastLocked := -1
+	limit := oldCount
+	if newCount > limit {
+		limit = newCount
+	}
+	for index := 0; index < limit; index++ {
+		n := strconv.Itoa(index + 1)
+		if locked["TUNER"+n+"_IP"] || locked["ENCODER"+n+"_URL"] || locked["CMD"+n] || locked["TEECMD"+n] {
+			lastLocked = index
+		}
+	}
+	return newCount < oldCount && newCount <= lastLocked
+}
+
 func restoreLockedTunerSettings(next *Settings, old Settings, locked map[string]bool) {
 	for i := range next.Tuners {
-		if i >= len(old.Tuners) {
-			continue
-		}
 		n := strconv.Itoa(i + 1)
 		if locked["TUNER"+n+"_IP"] {
-			next.Tuners[i].TunerIP = old.Tuners[i].TunerIP
+			next.Tuners[i].TunerIP = ""
+			if i < len(old.Tuners) {
+				next.Tuners[i].TunerIP = old.Tuners[i].TunerIP
+			}
 		}
 		if locked["ENCODER"+n+"_URL"] {
-			next.Tuners[i].EncoderURL = old.Tuners[i].EncoderURL
+			next.Tuners[i].EncoderURL = ""
+			if i < len(old.Tuners) {
+				next.Tuners[i].EncoderURL = old.Tuners[i].EncoderURL
+			}
 		}
 		if locked["CMD"+n] {
-			next.Tuners[i].CMD = old.Tuners[i].CMD
+			next.Tuners[i].CMD = ""
+			if i < len(old.Tuners) {
+				next.Tuners[i].CMD = old.Tuners[i].CMD
+			}
 		}
 		if locked["TEECMD"+n] {
-			next.Tuners[i].TEECMD = old.Tuners[i].TEECMD
+			next.Tuners[i].TEECMD = ""
+			if i < len(old.Tuners) {
+				next.Tuners[i].TEECMD = old.Tuners[i].TEECMD
+			}
 		}
 	}
 }

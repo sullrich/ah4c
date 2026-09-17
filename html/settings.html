@@ -6,6 +6,7 @@
     <title>Settings — AH4C</title>
     <link rel="stylesheet" href="/static/css/ah4c.css">
     <script src="/static/js/theme.js"></script>
+    <script defer src="https://unpkg.com/mpegts.js/dist/mpegts.js"></script>
 </head>
 <body>
     <div class="pagebar">
@@ -111,11 +112,11 @@
             </section>
 
             <section class="card settings-section" data-section="tuners">
-                <div class="card-title settings-section-title"><span>Tuners <span class="hint">— order determines tuner number</span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
-                <p id="tuner-lock-hint" class="section-help hidden">NUMBER_TUNERS is set by the environment, so the complete tuner section is read-only. Mixed environment and Settings tuner lists are not supported.</p>
+                <p id="tuner-lock-hint" class="section-help hidden">Environment-owned tuner numbers remain fixed. Other tuner numbers can still be managed here.</p>
                 <div id="no-tuners-hint" class="empty-state hidden"><strong>No tuners are configured.</strong> ah4c can start this way. Add one now, or return to Settings from the main navigation when you have the details.</div>
                 <div id="tuners" class="tuner-grid"></div>
                 <div class="btn-row">
@@ -237,13 +238,28 @@
                 </div>
                 <button id="tuner-order-close" class="btn btn-sm modal-close" type="button">Close</button>
             </div>
-            <p>Use every number from <strong>0</strong> through <strong id="tuner-order-maximum">0</strong> once. Duplicate or missing numbers cannot be applied.</p>
+            <p>Use every number from <strong>0</strong> through <strong id="tuner-order-maximum">0</strong> once. Environment-owned numbers stay fixed.</p>
             <div id="tuner-order-list" class="tuner-order-list"></div>
             <div id="tuner-order-modal-status" class="field-validation" aria-live="polite"></div>
             <div class="btn-row tuner-order-actions">
                 <button id="tuner-order-apply" class="btn btn-primary" type="button">Apply order</button>
                 <button id="tuner-order-cancel" class="btn" type="button">Cancel</button>
             </div>
+        </div>
+    </div>
+
+    <div id="tuner-preview-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="tuner-preview-title">
+        <div class="modal">
+            <div class="modal-head">
+                <span id="tuner-preview-number" class="tuner-number"></span>
+                <h3 id="tuner-preview-title">Tuner preview</h3>
+                <button id="tuner-preview-close" class="btn btn-sm modal-close" type="button">Close</button>
+            </div>
+            <video id="tuner-preview-video" class="hidden" controls muted></video>
+            <div id="tuner-preview-start" class="preview-start hidden">
+                <button id="tuner-preview-retry" class="btn btn-primary" type="button">Retry preview</button>
+            </div>
+            <p id="tuner-preview-hint" class="modal-hint"></p>
         </div>
     </div>
 
@@ -258,6 +274,8 @@ const sectionKeys = {
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT']
 };
 let state = null;
+let tunerPreviewPlayer = null;
+let tunerPreviewNumber = null;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
 let wizard = false;
@@ -585,14 +603,13 @@ function renderTuners() {
     const target = byId('tuners');
     target.innerHTML = '';
     state.tuners.list.forEach((tuner, index) => target.appendChild(tunerCard(tuner, index)));
-    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
-    byId('add-tuner').disabled = topologyLocked;
+    const topologyLocked = Boolean(state.tuners.countLocked || state.tuners.topologyLocked);
     byId('check-connections').disabled = state.tuners.list.length === 0;
     byId('no-tuners-hint').classList.toggle('hidden', state.tuners.list.length !== 0);
     byId('tuner-lock-hint').classList.toggle('hidden', !topologyLocked);
-    byId('tuner-lock-hint').textContent = state.tuners.locked
-        ? 'The tuner count is set by the environment, so the complete tuner section is read-only.'
-        : 'One or more tuner values are set by the environment. To protect tuner numbering, adding, deleting, and reordering tuners are disabled. Fields not set by the environment can still be edited.';
+    byId('tuner-lock-hint').textContent = state.tuners.countLocked
+        ? 'These tuners are read-only because NUMBER_TUNERS is set in the environment.'
+        : 'Tuner numbers supplied by the environment stay fixed. Tuners managed in Settings can still be added, removed, and reordered around them.';
     renumberTuners();
     updateTunerDeviceLabels();
 }
@@ -601,19 +618,23 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const card = document.createElement('div');
     card.className = 'tuner-card';
     const lock = tuner.locked || {};
-    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${index}</span><h3>Tuner ${index}</h3><span class="spacer"></span><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button" ${topologyLocked ? 'disabled title="Tuner numbering is controlled by the environment"' : ''}>Delete</button></div>
+    const number = Number.isInteger(tuner.number) ? tuner.number : index;
+    card.dataset.tunerNumber = String(number);
+    if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
-        if (state.tuners.locked || state.tuners.topologyLocked) return;
+        if (!canDeleteTunerCard(card)) return;
         card.remove();
+        repackTunersAroundFixedPositions();
         renumberTuners();
         const empty = byId('tuners').children.length === 0;
         byId('no-tuners-hint').classList.toggle('hidden', !empty);
         byId('check-connections').disabled = empty;
     });
+    card.querySelector('[data-tuner-preview]').addEventListener('click', () => openTunerPreview(card));
     card.querySelector('[data-pair-apple-tv]').addEventListener('click', () => openAppleTVPairing(card));
     card.querySelectorAll('[data-tuner]').forEach(input => input.addEventListener('input', () => {
         input.classList.remove('input-invalid');
@@ -622,6 +643,36 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         updateTunerDeviceLabels();
     }));
     return card;
+}
+
+function canDeleteTunerCard(card) {
+    const cards = [...byId('tuners').children];
+    if (state.tuners.countLocked || !cards.includes(card) || card.dataset.fixedTunerNumber !== undefined) return false;
+    const highestFixed = cards.reduce((highest, item) => {
+        const fixed = item.dataset.fixedTunerNumber;
+        return fixed === undefined ? highest : Math.max(highest, Number(fixed));
+    }, -1);
+    return cards.length - 1 > highestFixed;
+}
+
+function tunerNumber(card) { return Number(card.dataset.tunerNumber); }
+
+function repackTunersAroundFixedPositions() {
+    const cards = [...byId('tuners').children];
+    const slots = Array(cards.length).fill(null);
+    const movable = [];
+    cards.forEach(card => {
+        const fixed = card.dataset.fixedTunerNumber;
+        if (fixed === undefined) movable.push(card);
+        else slots[Number(fixed)] = card;
+    });
+    slots.forEach((card, index) => {
+        if (!card) slots[index] = movable.shift();
+    });
+    slots.forEach((card, index) => {
+        card.dataset.tunerNumber = String(index);
+        byId('tuners').appendChild(card);
+    });
 }
 
 function updateTunerDeviceLabels() {
@@ -641,13 +692,23 @@ function updateTunerDeviceLabels() {
 
 function renumberTuners() {
     const cards = [...byId('tuners').children];
-    const topologyLocked = Boolean(state.tuners.locked || state.tuners.topologyLocked);
     cards.forEach((card, index) => {
+        card.dataset.tunerNumber = String(index);
         card.querySelector('.tuner-number').textContent = index;
         card.querySelector('h3').textContent = `Tuner ${index}`;
-        card.querySelector('.delete-tuner').disabled = topologyLocked;
+        const remove = card.querySelector('.delete-tuner');
+        remove.disabled = !canDeleteTunerCard(card);
+        if (card.dataset.fixedTunerNumber !== undefined) {
+            remove.title = 'This tuner number is controlled by the environment';
+        } else if (state.tuners.countLocked) {
+            remove.title = 'The tuner count is controlled by the environment';
+        } else {
+            remove.title = '';
+        }
     });
-    byId('edit-tuner-order').disabled = topologyLocked || cards.length < 2;
+    const movable = cards.filter(card => card.dataset.fixedTunerNumber === undefined).length;
+    byId('edit-tuner-order').disabled = movable === 0 || cards.length < 2;
+    byId('add-tuner').disabled = state.tuners.countLocked;
 }
 
 function openTunerOrderEditor() {
@@ -657,19 +718,21 @@ function openTunerOrderEditor() {
     const list = byId('tuner-order-list');
     list.innerHTML = '';
     tunerOrderCards.forEach((card, index) => {
+        const number = tunerNumber(card);
         const tunerIP = card.querySelector('[data-tuner="tunerIP"]').value.trim();
         const encoderURL = card.querySelector('[data-tuner="encoderURL"]').value.trim();
+        const fixed = card.dataset.fixedTunerNumber !== undefined;
         const row = document.createElement('div');
         row.className = 'tuner-order-row';
         row.dataset.cardIndex = index;
-        row.innerHTML = `<div class="tuner-order-identity"><strong>Tuner ${index}</strong><span><b>Device:</b> ${escapeHTML(tunerIP || 'Not entered')}</span><span><b>Encoder:</b> ${escapeHTML(encoderURL || 'Not entered')}</span></div><label>Number<input data-tuner-order-value type="number" min="0" max="${maximum}" step="1" value="${index}" aria-label="Number for tuner ${index}"></label><div class="field-validation" data-tuner-order-error aria-live="polite"></div>`;
+        row.innerHTML = `<div class="tuner-order-identity"><strong>Tuner ${number}${fixed ? ' <span class="badge config-lock">set by environment</span>' : ''}</strong><span><b>Device:</b> ${escapeHTML(tunerIP || 'Not entered')}</span><span><b>Encoder:</b> ${escapeHTML(encoderURL || 'Not entered')}</span></div><label>Number<input data-tuner-order-value type="number" min="0" max="${maximum}" step="1" value="${number}" aria-label="Number for tuner ${number}" ${fixed ? 'disabled' : ''}></label><div class="field-validation" data-tuner-order-error aria-live="polite"></div>`;
         row.querySelector('input').addEventListener('input', validateTunerOrderPopover);
         list.appendChild(row);
     });
     byId('tuner-order-modal-status').textContent = '';
     byId('tuner-order-modal').classList.add('open');
-    list.querySelector('input')?.focus();
-    list.querySelector('input')?.select();
+    list.querySelector('input:not(:disabled)')?.focus();
+    list.querySelector('input:not(:disabled)')?.select();
 }
 
 function validateTunerOrderPopover() {
@@ -689,7 +752,7 @@ function validateTunerOrderPopover() {
         if (!value) message = 'Enter a tuner number.';
         else if (!Number.isInteger(number)) message = 'Use a whole tuner number.';
         else if (number < 0 || number > maximum) message = `Choose a number from 0 to ${maximum}.`;
-        else if (counts.get(number) > 1) message = `Tuner number ${number} is already in use.`;
+        else if (counts.get(number) > 1 && !input.disabled) message = `Tuner number ${number} is already in use.`;
         input.setAttribute('aria-invalid', message ? 'true' : 'false');
         row.querySelector('[data-tuner-order-error]').textContent = message;
         if (message) valid = false;
@@ -706,7 +769,10 @@ function applyTunerOrderPopover() {
     [...byId('tuner-order-list').children]
         .map(row => ({card:tunerOrderCards[Number(row.dataset.cardIndex)], number:Number(row.querySelector('input').value)}))
         .sort((a, b) => a.number - b.number)
-        .forEach(item => byId('tuners').appendChild(item.card));
+        .forEach(item => {
+            item.card.dataset.tunerNumber = String(item.number);
+            byId('tuners').appendChild(item.card);
+        });
     renumberTuners();
     closeTunerOrderEditor();
     return true;
@@ -715,6 +781,57 @@ function applyTunerOrderPopover() {
 function closeTunerOrderEditor() {
     byId('tuner-order-modal').classList.remove('open');
     tunerOrderCards = [];
+}
+
+function openTunerPreview(card) {
+    tunerPreviewNumber = tunerNumber(card);
+    byId('tuner-preview-number').textContent = tunerPreviewNumber;
+    byId('tuner-preview-title').textContent = `Tuner ${tunerPreviewNumber} preview`;
+    byId('tuner-preview-modal').classList.add('open');
+    startTunerPreview();
+}
+
+function startTunerPreview() {
+    stopTunerPreview();
+    const video = byId('tuner-preview-video');
+    const retry = byId('tuner-preview-start');
+    const hint = byId('tuner-preview-hint');
+    retry.classList.add('hidden');
+    video.classList.remove('hidden');
+    hint.textContent = 'Loading the encoder output from the currently running configuration…';
+    if (!window.mpegts || !mpegts.isSupported()) {
+        video.classList.add('hidden');
+        retry.classList.remove('hidden');
+        hint.textContent = 'This browser cannot display the tuner preview.';
+        return;
+    }
+    tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
+    tunerPreviewPlayer.attachMediaElement(video);
+    video.addEventListener('loadedmetadata', () => {
+        video.currentTime = video.duration;
+        hint.textContent = 'Showing the encoder output from the currently running configuration.';
+    }, {once:true});
+    tunerPreviewPlayer.on(mpegts.Events.ERROR, () => {
+        stopTunerPreview();
+        video.classList.add('hidden');
+        retry.classList.remove('hidden');
+        hint.textContent = 'No preview is available. Save and restart first if this tuner was just added or changed.';
+    });
+    tunerPreviewPlayer.load();
+    tunerPreviewPlayer.play().catch(() => {});
+}
+
+function stopTunerPreview() {
+    if (tunerPreviewPlayer) {
+        tunerPreviewPlayer.destroy();
+        tunerPreviewPlayer = null;
+    }
+}
+
+function closeTunerPreview() {
+    stopTunerPreview();
+    tunerPreviewNumber = null;
+    byId('tuner-preview-modal').classList.remove('open');
 }
 
 function selectedStreamerPath(root = document) {
@@ -995,7 +1112,7 @@ async function checkConnections() {
             const card = cards[index];
             const tuner = Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]));
             try {
-                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index, tuner, usePyatv:pyatv})});
+                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:tunerNumber(card), tuner, usePyatv:pyatv})});
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload.error || 'Connection check failed');
                 setConnectionState(card, 'device', payload.device.state, payload.device.message);
@@ -1254,8 +1371,9 @@ byId('use-local-script').addEventListener('click', () => {
 });
 byId('upload-local-scripts').addEventListener('click', uploadLocalScripts);
 byId('add-tuner').addEventListener('click', () => {
-    if (state.tuners.locked || state.tuners.topologyLocked) return;
-    byId('tuners').appendChild(tunerCard(undefined, byId('tuners').children.length));
+    if (state.tuners.countLocked) return;
+    const number = byId('tuners').children.length;
+    byId('tuners').appendChild(tunerCard(undefined, number));
     renumberTuners();
     updateTunerDeviceLabels();
     byId('no-tuners-hint').classList.add('hidden');
@@ -1267,6 +1385,11 @@ byId('tuner-order-cancel').addEventListener('click', closeTunerOrderEditor);
 byId('tuner-order-close').addEventListener('click', closeTunerOrderEditor);
 byId('tuner-order-modal').addEventListener('click', event => {
     if (event.target === byId('tuner-order-modal')) closeTunerOrderEditor();
+});
+byId('tuner-preview-close').addEventListener('click', closeTunerPreview);
+byId('tuner-preview-retry').addEventListener('click', startTunerPreview);
+byId('tuner-preview-modal').addEventListener('click', event => {
+    if (event.target === byId('tuner-preview-modal')) closeTunerPreview();
 });
 byId('check-connections').addEventListener('click', checkConnections);
 byId('apple-tv-pair-submit').addEventListener('click', finishAppleTVPairing);
@@ -1287,7 +1410,9 @@ document.addEventListener('keydown', event => {
     if (byId('restart-prompt-modal').classList.contains('open')) closeRestartPrompt();
     if (byId('apple-tv-pair-modal').classList.contains('open')) closeAppleTVPairing();
     if (byId('tuner-order-modal').classList.contains('open')) closeTunerOrderEditor();
+    if (byId('tuner-preview-modal').classList.contains('open')) closeTunerPreview();
 });
+window.addEventListener('pagehide', stopTunerPreview);
 byId('preroll-file').addEventListener('change', renderPreroll);
 byId('upload-preroll').addEventListener('click', uploadPreroll);
 byId('delete-preroll').addEventListener('click', deletePreroll);
