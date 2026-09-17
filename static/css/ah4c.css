@@ -445,7 +445,12 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
 }
 .settings-page > #notice > span { flex: 1; min-width: 0; line-height: 1.45; }
+.settings-page > #notice .toast-actions { display: flex; flex: 0 0 auto; gap: .45rem; }
 .settings-page > #notice .toast-close { flex: 0 0 auto; }
+@media (max-width: 560px) {
+  .settings-page > #notice:not(.hidden) { flex-wrap: wrap; }
+  .settings-page > #notice > span { flex-basis: 100%; }
+}
 .storage-blocker { display: block; color: var(--text); }
 .storage-blocker > strong { display: block; margin-bottom: .45rem; color: var(--danger); font-size: .9rem; }
 .storage-blocker p { margin: .4rem 0; color: var(--text-muted); }

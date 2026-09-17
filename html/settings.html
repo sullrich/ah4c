@@ -1063,8 +1063,30 @@ async function saveSettings(restartAfter = false) {
         await restart();
     } else if (restartAfter) {
         location.href = '/';
+    } else if (state.restartNeeded) {
+        showRestartPrompt();
     }
     return true;
+}
+
+function readableList(items) {
+    if (items.length < 2) return items[0] || '';
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+}
+
+function restartReasonLabels() {
+    const special = {tuners:'Tuner changes', 'pre-roll':'Pre-roll file'};
+    return (state.restartRequired || []).map(key => special[key] || state.catalog.find(spec => spec.key === key)?.label || key);
+}
+
+function showRestartPrompt() {
+    const reasons = restartReasonLabels();
+    const detail = reasons.length ? ` to apply ${readableList(reasons)}` : ' to apply these changes';
+    showNotice(`Settings saved. Restart the container${detail}.`, 'warning', {
+        label: state.dockerManaged ? 'Restart container' : 'Restart container manually',
+        handler: restart,
+    });
 }
 
 function updateRestartUI() {
@@ -1073,7 +1095,8 @@ function updateRestartUI() {
     const text = state.dockerManaged ? 'Restart container' : 'Restart container manually';
     byId('restart-settings').textContent = text;
     byId('restart-top').textContent = text;
-    const reasons = state.restartRequired?.length ? `: ${state.restartRequired.join(', ')}` : '';
+    const labels = restartReasonLabels();
+    const reasons = labels.length ? `: ${readableList(labels)}` : '';
     byId('restart-reasons').textContent = `Restart the container to apply${reasons}.`;
 }
 
@@ -1113,17 +1136,28 @@ async function waitForRestart() {
     setTimeout(waitForRestart, 1000);
 }
 
-function showNotice(message, kind = '') {
+function showNotice(message, kind = '', action = null) {
     const notice = byId('notice');
     const text = document.createElement('span');
     text.textContent = message;
+    const actions = document.createElement('div');
+    actions.className = 'toast-actions';
+    if (action) {
+        const actionButton = document.createElement('button');
+        actionButton.type = 'button';
+        actionButton.className = 'btn btn-sm btn-primary';
+        actionButton.textContent = action.label;
+        actionButton.addEventListener('click', () => action.handler());
+        actions.appendChild(actionButton);
+    }
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'btn btn-sm toast-close';
     close.textContent = 'Close';
     close.setAttribute('aria-label', 'Dismiss message');
     close.addEventListener('click', () => notice.classList.add('hidden'));
-    notice.replaceChildren(text, close);
+    actions.appendChild(close);
+    notice.replaceChildren(text, actions);
     notice.className = 'config-notice' + (kind ? ` config-notice--${kind}` : '');
 }
 
