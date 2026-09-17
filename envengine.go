@@ -89,8 +89,11 @@ var varCatalog = []VarSpec{
 	{Key: "PLAYBACK_DELAY", Label: "Playback delay", Desc: "Hold each tune before handing the DVR the program; accepts bare seconds or a duration such as 30s, 2m or 1h.", Placeholder: "30s", Type: varDuration, Applies: applyRestart},
 	{Key: "ENCODER_CODEC", Label: "Encoder codec", Desc: "Video codec emitted by the encoder; filler and pre-roll are prepared to match it.", Type: varEnum, Applies: applyRestart, Enum: []string{"h264", "h265"}},
 	{Key: "HEARTBEAT_INTERVAL", Label: "Heartbeat interval", Desc: "Seconds between supported scripts' keepalive keyevents; 0 disables them.", Placeholder: "180", Type: varSeconds, Applies: applyLive, ScriptVaries: true},
-	{Key: "ALLOW_DEBUG_VIDEO_PREVIEW", Label: "Debug video preview", Desc: "Enable the browser video preview used for debugging.", Type: varBool, Applies: applyRestart},
-	{Key: "CC_WATCHDOG", Label: "Caption watchdog", Desc: "Enable the closed-caption decoder watchdog. This diagnostic option can reduce transcription speed.", Type: varBool, Applies: applyRestart},
+}
+
+var environmentOnlyKeys = map[string]bool{
+	"ALLOW_DEBUG_VIDEO_PREVIEW": true,
+	"CC_WATCHDOG":               true,
 }
 
 var hostCatalog = []VarSpec{
@@ -193,6 +196,11 @@ func sanitizeLoadedSettings(s Settings) (Settings, []string) {
 	specs := specByKey()
 	var warnings []string
 	for key, value := range s.Vars {
+		if environmentOnlyKeys[key] {
+			delete(s.Vars, key)
+			warnings = append(warnings, fmt.Sprintf("ignored %s from settings.json because it is environment-only", key))
+			continue
+		}
 		if strings.ContainsAny(value, "\r\n") {
 			delete(s.Vars, key)
 			warnings = append(warnings, fmt.Sprintf("ignored %s because multiline values are not allowed", key))
@@ -224,6 +232,11 @@ func sanitizeLoadedSettings(s Settings) (Settings, []string) {
 		warnings = append(warnings, fmt.Sprintf("ignored unknown setting %s", key))
 	}
 	for key, value := range s.Extra {
+		if environmentOnlyKeys[key] {
+			delete(s.Extra, key)
+			warnings = append(warnings, fmt.Sprintf("ignored %s from additional variables because it is environment-only", key))
+			continue
+		}
 		if strings.ContainsAny(value, "\r\n") {
 			delete(s.Extra, key)
 			warnings = append(warnings, fmt.Sprintf("ignored additional variable %s because multiline values are not allowed", key))
@@ -286,7 +299,7 @@ func validateSettingsSchema(s Settings) error {
 		}
 	}
 	for key, value := range s.Extra {
-		if !envKeyPattern.MatchString(key) || catalog[key] || tunerKeyPattern.MatchString(key) {
+		if !envKeyPattern.MatchString(key) || catalog[key] || tunerKeyPattern.MatchString(key) || environmentOnlyKeys[key] {
 			return fmt.Errorf("extra contains invalid or managed key %s", key)
 		}
 		if err := validValue(key, value); err != nil {

@@ -41,19 +41,17 @@ var (
 )
 
 var defaultValues = map[string]string{
-	"PYATV":                     "false",
-	"ALERT_EMAIL_USE_SENDMAIL":  "false",
-	"CREATE_M3US":               "false",
-	"UPDATE_SCRIPTS":            "false",
-	"UPDATE_M3US":               "true",
-	"SPEED_MODE":                "false",
-	"NULL_FRAME_INSERTION":      "false",
-	"PLAYBACK_DETECTION":        "false",
-	"PLAYBACK_STATIC_TIMEOUT":   "2",
-	"ENCODER_CODEC":             "h264",
-	"HEARTBEAT_INTERVAL":        "180",
-	"ALLOW_DEBUG_VIDEO_PREVIEW": "false",
-	"CC_WATCHDOG":               "false",
+	"PYATV":                    "false",
+	"ALERT_EMAIL_USE_SENDMAIL": "false",
+	"CREATE_M3US":              "false",
+	"UPDATE_SCRIPTS":           "false",
+	"UPDATE_M3US":              "true",
+	"SPEED_MODE":               "false",
+	"NULL_FRAME_INSERTION":     "false",
+	"PLAYBACK_DETECTION":       "false",
+	"PLAYBACK_STATIC_TIMEOUT":  "2",
+	"ENCODER_CODEC":            "h264",
+	"HEARTBEAT_INTERVAL":       "180",
 }
 
 type configSaveRequest struct {
@@ -979,6 +977,9 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 	for key, value := range request.Extra {
 		if !envKeyPattern.MatchString(key) {
 			return Settings{}, fmt.Errorf("invalid additional variable name %q", key)
+		}
+		if environmentOnlyKeys[key] {
+			return Settings{}, fmt.Errorf("additional variable %s must be set in the container environment", key)
 		}
 		if _, collision := specs[key]; collision || tunerKeyPattern.MatchString(key) {
 			return Settings{}, fmt.Errorf("additional variable %s collides with a managed setting", key)
