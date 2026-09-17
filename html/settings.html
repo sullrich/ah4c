@@ -1444,22 +1444,31 @@ function startWizardIntro() {
     byId('wizard-start').disabled = missing.length > 0;
 }
 
+function wizardSections() {
+    return state.tuners.countLocked ? ['proxy', 'streamer'] : ['proxy', 'streamer', 'tuners'];
+}
+
 function showWizardStep(step) {
     if (!state.persistent) {
         startWizardIntro();
         return;
     }
-    wizardStep = step;
+    const sections = wizardSections();
+    wizardStep = Math.min(step, sections.length);
     byId('wizard-intro').classList.add('hidden');
     byId('wizard-steps').classList.remove('hidden');
-    document.querySelectorAll('[data-step]').forEach(el => el.classList.toggle('active', Number(el.dataset.step) === step));
+    document.querySelectorAll('[data-step]').forEach(el => {
+        const stepNumber = Number(el.dataset.step);
+        el.classList.toggle('hidden', stepNumber > sections.length);
+        el.classList.toggle('active', stepNumber === wizardStep);
+    });
     document.querySelectorAll('.settings-section, .settings-actions').forEach(el => el.classList.add('wizard-hidden'));
-    const section = step === 1 ? 'proxy' : step === 2 ? 'streamer' : 'tuners';
+    const section = sections[wizardStep - 1];
     document.querySelector(`[data-section="${section}"]`).classList.remove('wizard-hidden');
     const actions = document.querySelector('.settings-actions');
     actions.classList.remove('wizard-hidden');
     byId('wizard-back').classList.remove('hidden');
-    byId('save-settings').textContent = step < 3 ? 'Next' : 'Save setup';
+    byId('save-settings').textContent = wizardStep < sections.length ? 'Next' : 'Save setup';
     byId('restart-settings').classList.add('hidden');
 }
 
@@ -1554,26 +1563,28 @@ async function handleSaveClick() {
             showNotice('Setup cannot continue until every required storage folder is added to the container.', 'danger');
             return;
         }
+        const sections = wizardSections();
         if (wizard && wizardStep > 0) {
-            const section = wizardStep === 1 ? 'proxy' : wizardStep === 2 ? 'streamer' : 'tuners';
+            const section = sections[wizardStep - 1];
             if (!validateSettingsForm(section)) return;
         } else if (!validateSettingsForm()) {
             return;
         }
-        if (wizard && wizardStep > 0 && wizardStep < 3) { showWizardStep(wizardStep + 1); return; }
-        if (wizard && wizardStep === 3 && byId('tuners').children.length && !await checkConnections()) {
+        if (wizard && wizardStep > 0 && wizardStep < sections.length) { showWizardStep(wizardStep + 1); return; }
+        const finalWizardStep = wizard && wizardStep === sections.length;
+        if (finalWizardStep && sections[wizardStep - 1] === 'tuners' && byId('tuners').children.length && !await checkConnections()) {
             const status = byId('save-status');
             status.classList.add('validation-error');
             status.textContent = 'Setup was not saved. Fix each connection above, then choose Save setup again.';
             showNotice('Setup was not saved because one or more tuner connections need attention. Apple TV users can use Pair on the affected tuner.', 'danger');
             return;
         }
-        await saveSettings(wizard && wizardStep === 3);
+        await saveSettings(finalWizardStep);
     } finally {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = button.id === 'save-settings' && wizard && wizardStep === 3 ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
+            button.textContent = button.id === 'save-settings' && wizard && wizardStep === wizardSections().length ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
         });
     }
 }
