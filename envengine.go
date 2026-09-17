@@ -104,7 +104,6 @@ var hostCatalog = []VarSpec{
 	{Key: "PREROLL_FILE", Label: "Pre-roll host path", Applies: applyHost},
 	{Key: "NVIDIA_VISIBLE_DEVICES", Label: "NVIDIA devices", Applies: applyHost},
 	{Key: "NVIDIA_DRIVER_CAPABILITIES", Label: "NVIDIA driver capabilities", Applies: applyHost},
-	{Key: "AH4C_COMPOSE", Label: "Compose version", Applies: applyHost},
 }
 
 var (
@@ -597,6 +596,6 @@ func configDirPersistent() (bool, string) {
 func warnIfConfigNotPersistent() {
 	if ok, dir := configDirPersistent(); !ok {
 		logger("[CONFIG] WARNING: %s is not a bind mount. Settings saved here are lost when the container is recreated.", dir)
-		logger("[CONFIG] WARNING: add this volume to your compose file and recreate the container:  ${HOST_DIR}/ah4c/config:/opt/config")
+		logger("[CONFIG] WARNING: map a persistent host folder to /opt/config in your container settings, then recreate the container")
 	}
 }

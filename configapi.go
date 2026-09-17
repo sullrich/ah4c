@@ -558,7 +558,7 @@ func configResponse() gin.H {
 	persistent, dir := configDirPersistent()
 	warning := ""
 	if !persistent {
-		warning = fmt.Sprintf("%s is not persistent. Add ${HOST_DIR}/ah4c/config:/opt/config to your compose volumes before relying on saved settings.", dir)
+		warning = fmt.Sprintf("%s is not persistent. Map a persistent host folder to /opt/config in your container settings before relying on saved settings.", dir)
 	}
 	catalog := make([]gin.H, 0, len(varCatalog))
 	for _, spec := range varCatalog {

@@ -350,8 +350,7 @@ function render() {
                 <div class="h">Downloads will not survive a restart</div>
                 <div class="d">The caption directory is inside the container rather than on your server, so
                 the model, the engine and any GPU driver are thrown away when the container is recreated.
-                Add this volume to your compose file and recreate it:<br>
-                <code>- \${HOST_DIR}/ah4c/captions:/opt/captions</code></div>
+                Map a persistent host folder to <code>/opt/captions</code> in your container settings, then recreate the container.</div>
             </div>
         </div>` : '';
 

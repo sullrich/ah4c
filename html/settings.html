@@ -40,8 +40,8 @@
         <section id="wizard-intro" class="card wizard-panel hidden">
             <div class="card-title">Welcome to ah4c</div>
             <p><strong>Welcome to ah4c.</strong> This proxy hands Channels DVR a video stream from your streaming devices and encoders. ah4c can start without a streamer script or any tuners, so this short wizard is only here to make later setup easier.</p>
-            <p>Everything you set here is saved to <code>settings.json</code> on the container's <code>/opt/config</code> volume, so it survives container updates and recreation. Every setting is still an ordinary environment variable underneath: anything you set in your compose file always wins, and shows up here grayed out with a "set by environment" badge. You can mix freely — pin a few values in compose, manage the rest on this page.</p>
-            <p>A few things live outside this page by design: ports, volumes, GPU passthrough and the image tag are consumed by Docker itself before the container exists, so they can only be changed in the compose file. For most installs the only host-side value you need is <code>HOST_DIR</code>.</p>
+            <p>Everything you set here is saved to <code>settings.json</code> in the container's persistent <code>/opt/config</code> folder, so it survives container updates and recreation. Every setting is still an ordinary environment variable underneath: any environment variable supplied to the container always wins and appears here grayed out with a "set by environment" badge. You can mix freely — provide a few values as environment variables and manage the rest on this page.</p>
+            <p>A few things live outside this page by design: ports, persistent folders, graphics-device access and the image tag must be configured before the container starts. For most installs the only host-side value you need is <code>HOST_DIR</code>.</p>
             <p>The script package is optional and can be chosen later because it is unique to your streaming app and device; ah4c cannot safely guess it. Tuners are optional too and can be added now or later.</p>
             <p>You can return to any of this later under <strong>Settings</strong>; changes to tuners or the streamer app take a container restart, which the page will offer when needed.</p>
             <div id="wizard-persist-warning" class="config-notice config-notice--danger hidden"></div>
@@ -62,7 +62,7 @@
 
             <section class="card settings-section" data-section="streamer">
                 <div class="card-title">Streamer script</div>
-                <p class="section-help"><strong>Optional during initial setup:</strong> The script package you choose here becomes <code>STREAMER_APP</code>; there is no second app setting and you do not need to put it in Compose. Leave it blank until you are ready. <strong>Check for scripts</strong> gets the valid package list from GitHub without downloading any scripts. After you select and save one, the container downloads only that package.</p>
+                <p class="section-help"><strong>Optional during initial setup:</strong> The script package you choose here becomes <code>STREAMER_APP</code>; there is no second app setting and you do not need to supply that environment variable yourself. Leave it blank until you are ready. <strong>Check for scripts</strong> gets the valid package list from GitHub without downloading any scripts. After you select and save one, the container downloads only that package.</p>
                 <div id="section-streamer" class="settings-grid"></div>
                 <div class="btn-row compact-row">
                     <button id="query-streamers" class="btn btn-sm" type="button">Check for scripts</button>
@@ -156,8 +156,8 @@
             </section>
 
             <details class="card settings-section" data-section="host">
-                <summary class="card-title">Host-level (compose only)</summary>
-                <p class="section-help">Set these in your compose file or <code>.env</code>; they are consumed before the container starts and cannot be managed here.</p>
+                <summary class="card-title">Container environment</summary>
+                <p class="section-help">Supply these as environment variables in your container settings. They are consumed before the container starts and cannot be managed here.</p>
                 <div id="host-vars" class="settings-grid"></div>
             </details>
 
@@ -388,7 +388,7 @@ function renderFieldInto(spec, target, replace = false) {
     wrap.className = 'setting-field' + (spec.locked ? ' locked' : '');
     wrap.dataset.key = spec.key;
     const disabled = spec.locked ? 'disabled' : '';
-    const title = spec.locked ? 'set by environment — unset it in your compose/.env to manage it here' : '';
+    const title = spec.locked ? 'set by environment — remove that environment variable to manage it here' : '';
     let control;
     if (spec.key === 'STREAMER_APP') {
         const choices = [...new Set([...streamerChoices, spec.value].filter(Boolean))].sort();
@@ -526,7 +526,7 @@ function addExtraRow(key = '', value = '', locked = false) {
 }
 
 function renderHost() {
-    byId('host-vars').innerHTML = state.host.map(item => `<div class="setting-field locked"><div class="setting-label"><label>${escapeHTML(item.label)}</label><span class="badge config-lock">compose only</span></div><input type="text" value="${escapeHTML(item.value)}" disabled><div class="setting-description">${escapeHTML(item.key)}</div></div>`).join('');
+    byId('host-vars').innerHTML = state.host.map(item => `<div class="setting-field locked"><div class="setting-label"><label>${escapeHTML(item.label)}</label><span class="badge config-lock">container setting</span></div><input type="text" value="${escapeHTML(item.value)}" disabled><div class="setting-description">${escapeHTML(item.key)}</div></div>`).join('');
 }
 
 function collectPayload() {

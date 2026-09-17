@@ -225,10 +225,12 @@ createM3Us() {
 # /tmp/ah4c.log by the redirect at the top of this script, so it shows in the
 # WebUI Logs page too. Informational only - nothing is blocked.
 checkVersions() {
-  if [ "${AH4C_COMPOSE}" == "$LATEST_COMPOSE" ]; then
-    echo "docker-start-pyatv.sh: Docker Compose version $AH4C_COMPOSE confirmed as up to date"
+  if [ -z "${AH4C_COMPOSE}" ]; then
+    echo "docker-start-pyatv.sh: Container template version was not supplied; compatibility check skipped"
+  elif [ "${AH4C_COMPOSE}" == "$LATEST_COMPOSE" ]; then
+    echo "docker-start-pyatv.sh: Container template version $AH4C_COMPOSE confirmed as up to date"
   else
-    echo "docker-start-pyatv.sh: WARNING -- Docker Compose version '${AH4C_COMPOSE:-unset}' does not match latest ($LATEST_COMPOSE) -- please update your compose file"
+    echo "docker-start-pyatv.sh: WARNING -- container template version '$AH4C_COMPOSE' does not match latest ($LATEST_COMPOSE) -- please update your container settings"
   fi
 
   # vYYYY.MM.DD.HHMM stamp that bump-version.sh embedded in the binary via //go:embed
