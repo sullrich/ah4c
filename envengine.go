@@ -72,7 +72,7 @@ var varCatalog = []VarSpec{
 	{Key: "ALERT_WEBHOOK_URL", Label: "Alert webhook URL", Desc: "URL to GET when tuning fails; $reason is replaced with the encoded failure message.", Type: varURL, Applies: applyLive},
 	{Key: "LIVETV_ATTEMPTS", Label: "Live TV attempts", Desc: "Maximum attempts at finding a channel with Fire TV Live Guide tuning.", Placeholder: "3", Type: varInt, Applies: applyLive, ScriptVaries: true},
 	{Key: "CREATE_M3US", Label: "Create device M3Us", Desc: "Create device-specific M3Us for Amazon Prime Premium channels at startup.", Type: varBool, Applies: applyRestart},
-	{Key: "UPDATE_SCRIPTS", Label: "Update scripts", Desc: "When set to Yes, replace only the chosen package with the latest copy from sullrich/ah4c at startup. This also works when STREAMER_APP is set in the environment.", Type: varBool, Applies: applyRestart},
+	{Key: "UPDATE_SCRIPTS", Label: "Update scripts", Desc: "When enabled, replace only the chosen package with the latest copy from sullrich/ah4c at startup. This also works when STREAMER_APP is set in the environment.", Type: varBool, Applies: applyRestart},
 	{Key: "UPDATE_M3US", Label: "Update sample M3Us", Desc: "Replace bundled sample M3Us at startup.", Type: varBool, Applies: applyRestart},
 	{Key: "USER_SCRIPT", Label: "Custom startup script", Desc: "Path to a custom script run alongside ah4c at container startup.", Type: varPath, Applies: applyRestart},
 	{Key: "TZ", Label: "Timezone", Desc: "Local timezone in Linux tz format.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
@@ -146,26 +146,126 @@ func normalizeSettings(s Settings) Settings {
 	return s
 }
 
+func copySettings(s Settings) Settings {
+	s = normalizeSettings(s)
+	copyOf := Settings{
+		Version: s.Version,
+		Vars:    make(map[string]string, len(s.Vars)),
+		Tuners:  append([]TunerSpec(nil), s.Tuners...),
+		Extra:   make(map[string]string, len(s.Extra)),
+	}
+	for key, value := range s.Vars {
+		copyOf.Vars[key] = value
+	}
+	for key, value := range s.Extra {
+		copyOf.Extra[key] = value
+	}
+	return copyOf
+}
+
 func loadSettings() (Settings, error) {
+	s, _, err := loadSettingsWithWarnings()
+	return s, err
+}
+
+func loadSettingsWithWarnings() (Settings, []string, error) {
 	b, err := os.ReadFile(settingsFilePath())
 	if os.IsNotExist(err) {
-		return emptySettings(), nil
+		return emptySettings(), nil, nil
 	}
 	if err != nil {
-		return emptySettings(), err
+		return emptySettings(), nil, err
 	}
 	var s Settings
 	if err := json.Unmarshal(b, &s); err != nil {
-		return emptySettings(), err
+		return emptySettings(), nil, err
 	}
 	if s.Version != 0 && s.Version != 1 {
-		return emptySettings(), fmt.Errorf("unsupported settings version %d", s.Version)
+		return emptySettings(), nil, fmt.Errorf("unsupported settings version %d", s.Version)
 	}
-	s = normalizeSettings(s)
-	if err := validateSettingsSchema(s); err != nil {
-		return emptySettings(), err
+	s, warnings := sanitizeLoadedSettings(s)
+	return s, warnings, nil
+}
+
+func sanitizeLoadedSettings(s Settings) (Settings, []string) {
+	s = copySettings(s)
+	specs := specByKey()
+	var warnings []string
+	for key, value := range s.Vars {
+		if strings.ContainsAny(value, "\r\n") {
+			delete(s.Vars, key)
+			warnings = append(warnings, fmt.Sprintf("ignored %s because multiline values are not allowed", key))
+			continue
+		}
+		if spec, managed := specs[key]; managed {
+			if key == "STREAMER_APP" {
+				canonical := canonicalStreamerSelection(value)
+				if canonical != value {
+					value = canonical
+					s.Vars[key] = canonical
+					warnings = append(warnings, fmt.Sprintf("normalized STREAMER_APP to %s", canonical))
+				}
+			}
+			if err := validateCatalogValue(spec, value); err != nil {
+				delete(s.Vars, key)
+				warnings = append(warnings, fmt.Sprintf("ignored invalid %s: %v", key, err))
+			}
+			continue
+		}
+		delete(s.Vars, key)
+		if envKeyPattern.MatchString(key) && !tunerKeyPattern.MatchString(key) {
+			if _, exists := s.Extra[key]; !exists {
+				s.Extra[key] = value
+				warnings = append(warnings, fmt.Sprintf("moved unknown setting %s to additional variables", key))
+				continue
+			}
+		}
+		warnings = append(warnings, fmt.Sprintf("ignored unknown setting %s", key))
 	}
-	return s, nil
+	for key, value := range s.Extra {
+		if strings.ContainsAny(value, "\r\n") {
+			delete(s.Extra, key)
+			warnings = append(warnings, fmt.Sprintf("ignored additional variable %s because multiline values are not allowed", key))
+			continue
+		}
+		if spec, managed := specs[key]; managed {
+			delete(s.Extra, key)
+			if key == "STREAMER_APP" {
+				value = canonicalStreamerSelection(value)
+			}
+			if err := validateCatalogValue(spec, value); err != nil {
+				warnings = append(warnings, fmt.Sprintf("ignored invalid %s from additional variables: %v", key, err))
+				continue
+			}
+			if _, exists := s.Vars[key]; !exists {
+				s.Vars[key] = value
+				warnings = append(warnings, fmt.Sprintf("restored %s from additional variables", key))
+			}
+			continue
+		}
+		if !envKeyPattern.MatchString(key) || tunerKeyPattern.MatchString(key) {
+			delete(s.Extra, key)
+			warnings = append(warnings, fmt.Sprintf("ignored invalid additional variable %s", key))
+		}
+	}
+	for index := range s.Tuners {
+		fields := []struct {
+			name  string
+			value *string
+		}{
+			{"tunerIP", &s.Tuners[index].TunerIP},
+			{"encoderURL", &s.Tuners[index].EncoderURL},
+			{"cmd", &s.Tuners[index].CMD},
+			{"teecmd", &s.Tuners[index].TEECMD},
+		}
+		for _, field := range fields {
+			if strings.ContainsAny(*field.value, "\r\n") {
+				*field.value = ""
+				warnings = append(warnings, fmt.Sprintf("cleared tuners[%d].%s because multiline values are not allowed", index, field.name))
+			}
+		}
+	}
+	return s, warnings
 }
 
 func validateSettingsSchema(s Settings) error {
@@ -332,6 +432,13 @@ func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool
 		}
 	}
 	values := environMap(environ)
+	if raw, present := values["STREAMER_APP"]; envValueUsable(raw, present) {
+		canonical := canonicalStreamerSelection(raw)
+		if canonical != raw && validStreamerSelection(canonical) {
+			sets["STREAMER_APP"] = canonical
+			sources["STREAMER_APP"] = "normalized environment"
+		}
+	}
 	consider := func(key, value, source string) {
 		if !envKeyPattern.MatchString(key) || value == "" || strings.ContainsAny(value, "\r\n") {
 			return
@@ -345,7 +452,11 @@ func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool
 		sets[key] = value
 		sources[key] = source
 	}
+	catalog := catalogKeySet()
 	for key, value := range legacy {
+		if settingsPresent && (catalog[key] || tunerKeyPattern.MatchString(key)) {
+			continue
+		}
 		consider(key, value, "./env")
 	}
 	for key, value := range defaultValues {
@@ -405,12 +516,12 @@ func shellExports(sets map[string]string, locked map[string]bool) string {
 }
 
 func configComplete(merged func(string) string) bool {
-	streamerApp := strings.TrimSpace(merged("STREAMER_APP"))
+	streamerApp := canonicalStreamerSelection(merged("STREAMER_APP"))
 	return streamerApp == "" || validStreamerSelection(streamerApp)
 }
 
 func streamerTuneReady(merged func(string) string) bool {
-	return validStreamerSelection(strings.TrimSpace(merged("STREAMER_APP")))
+	return validStreamerSelection(canonicalStreamerSelection(merged("STREAMER_APP")))
 }
 
 func tunerCount(value string) (int, error) {
@@ -467,7 +578,7 @@ func logMaterialization(s Settings, sets map[string]string, locked map[string]bo
 }
 
 func envengineStartup() {
-	s, err := loadSettings()
+	s, loadWarnings, err := loadSettingsWithWarnings()
 	settingsPresent := settingsFileExists()
 	legacy := readLegacyEnv()
 	if printModeRequested() {
@@ -475,6 +586,12 @@ func envengineStartup() {
 			fmt.Fprintf(os.Stderr, "[CONFIG] ignoring malformed settings.json: %v\n", err)
 			fmt.Print("export AH4C_ENV_LOCKED=''\n# settings.json ignored\n")
 			os.Exit(0)
+		}
+		for _, warning := range loadWarnings {
+			fmt.Fprintf(os.Stderr, "[CONFIG] %s\n", warning)
+		}
+		if settingsPresent && len(legacy) > 0 {
+			fmt.Fprintln(os.Stderr, "[CONFIG] settings.json exists; managed values in ./env are ignored")
 		}
 		sets, locked, sources := materializeBootstrapPlan(os.Environ(), s, settingsPresent, legacy)
 		lockedKeys := make([]string, 0, len(locked))
@@ -500,6 +617,13 @@ func envengineStartup() {
 		logger("[CONFIG] ignoring malformed settings.json: %v", err)
 		s = emptySettings()
 	}
+	for _, warning := range loadWarnings {
+		logger("[CONFIG] %s", warning)
+	}
+	if settingsPresent && len(legacy) > 0 {
+		logger("[CONFIG] settings.json exists; managed values in ./env are ignored")
+	}
+	repairScriptPackageTransactions("scripts")
 	lockValue, supervised := os.LookupEnv("AH4C_ENV_LOCKED")
 	locked := parseLockSet(lockValue)
 	sets := map[string]string{}
@@ -590,7 +714,18 @@ func mountPointPersistent(dir string) (bool, string) {
 }
 
 func configDirPersistent() (bool, string) {
+	if !runningInContainer() {
+		return true, ""
+	}
 	return mountPointPersistent(filepath.Dir(settingsFilePath()))
+}
+
+func runningInContainer() bool {
+	if _, supervised := os.LookupEnv("AH4C_ENV_LOCKED"); supervised {
+		return true
+	}
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
 }
 
 func warnIfConfigNotPersistent() {

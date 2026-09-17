@@ -73,11 +73,11 @@ only when requested, never polls, and refuses to run while a tune is starting or
 `STREAMER_APP` is the selected script package, such as `scripts/firetv/hulu`. Scripts are
 not baked into the image. The **Check for scripts** button retrieves only folder metadata from
 `sullrich/ah4c` and caches the dropdown choices. At container startup, ah4c downloads only
-the selected package, and only when it is missing or `UPDATE_SCRIPTS=Yes`; it never downloads
+the selected package, and only when it is missing or `UPDATE_SCRIPTS=true`; it never downloads
 the full scripts tree. **Browse local scripts** opens the mounted `/opt/scripts` folder so you
 can choose a package you wrote or copied there. Local packages use the same
 `scripts/device/app` layout and must contain `prebmitune.sh`, `bmitune.sh`, and
-`stopbmitune.sh`; additional helper files are allowed. `UPDATE_SCRIPTS=Yes` works when
+`stopbmitune.sh`; additional helper files are allowed. `UPDATE_SCRIPTS=true` works when
 `STREAMER_APP` is set in compose or an environment file as well as when it is selected in the
 GUI. Updates are downloaded and validated in a staging folder before the complete package is
 swapped into place. A failed update leaves the existing package untouched.

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -63,6 +64,8 @@ func TestConfigAPIRejectsInvalidStreamerPath(t *testing.T) {
 }
 
 func TestFirstRunCanFinishWithoutStreamerOrTuners(t *testing.T) {
+	t.Setenv("STREAMER_APP", "")
+	t.Setenv("NUMBER_TUNERS", "")
 	r := configAPITestSetup(t, emptySettings(), map[string]bool{})
 
 	initial := httptest.NewRecorder()
@@ -84,6 +87,62 @@ func TestFirstRunCanFinishWithoutStreamerOrTuners(t *testing.T) {
 	}
 	if settings.Vars["STREAMER_APP"] != "" || len(settings.Tuners) != 0 {
 		t.Fatalf("unexpected empty setup: %#v", settings)
+	}
+}
+
+func TestExistingEnvironmentConfigurationSkipsWizard(t *testing.T) {
+	t.Setenv("STREAMER_APP", "./scripts/firetv/hulu/")
+	t.Setenv("NUMBER_TUNERS", "1")
+	t.Setenv("ENCODER1_URL", "http://encoder/stream")
+	t.Setenv("CMD1", "")
+	r := configAPITestSetup(t, emptySettings(), map[string]bool{"STREAMER_APP": true, "NUMBER_TUNERS": true, "ENCODER1_URL": true})
+
+	config := httptest.NewRecorder()
+	r.ServeHTTP(config, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if config.Code != http.StatusOK || strings.Contains(config.Body.String(), `"wizard":true`) {
+		t.Fatalf("environment-only config was sent to wizard: %d %s", config.Code, config.Body.String())
+	}
+	home := httptest.NewRecorder()
+	r.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
+	if home.Code == http.StatusFound {
+		t.Fatalf("environment-only home redirected to %s", home.Header().Get("Location"))
+	}
+}
+
+func TestConfigAPICanonicalizesStreamerSelection(t *testing.T) {
+	r := configAPITestSetup(t, emptySettings(), map[string]bool{})
+	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"vars":{"STREAMER_APP":" ./scripts/firetv/hulu/ "},"extra":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("canonical streamer save = %d %s", w.Code, w.Body.String())
+	}
+	settings, err := loadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Vars["STREAMER_APP"] != "scripts/firetv/hulu" {
+		t.Fatalf("saved STREAMER_APP = %q", settings.Vars["STREAMER_APP"])
+	}
+}
+
+func TestRestartSafelyRejectsPendingTune(t *testing.T) {
+	r := configAPITestSetup(t, emptySettings(), map[string]bool{})
+	tuneMu.Lock()
+	oldPending := append([]time.Time(nil), tunePending...)
+	tunePending = []time.Time{time.Now()}
+	tuneMu.Unlock()
+	t.Cleanup(func() {
+		tuneMu.Lock()
+		tunePending = oldPending
+		tuneMu.Unlock()
+	})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/config/restart", nil))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "starting or active") {
+		t.Fatalf("pending-tune restart = %d %s", w.Code, w.Body.String())
 	}
 }
 

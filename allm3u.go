@@ -87,7 +87,7 @@ func mergeScriptDeviceProviders(into map[string][]string, root string) {
 		return
 	}
 	for _, d := range entries {
-		if !d.IsDir() {
+		if !d.IsDir() || !validScriptPathPart(d.Name()) {
 			continue
 		}
 		subEntries, err := os.ReadDir(filepath.Join(root, d.Name()))
@@ -95,7 +95,7 @@ func mergeScriptDeviceProviders(into map[string][]string, root string) {
 			continue
 		}
 		for _, s := range subEntries {
-			if s.IsDir() && !slices.Contains(into[d.Name()], s.Name()) {
+			if s.IsDir() && validScriptPathPart(s.Name()) && !slices.Contains(into[d.Name()], s.Name()) {
 				into[d.Name()] = append(into[d.Name()], s.Name())
 			}
 		}

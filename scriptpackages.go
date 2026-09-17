@@ -42,7 +42,7 @@ func installScriptPackage(ctx context.Context, selection string) error {
 }
 
 func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) error {
-	selection = filepath.ToSlash(strings.TrimSpace(selection))
+	selection = canonicalStreamerSelection(selection)
 	if !validStreamerSelection(selection) {
 		return fmt.Errorf("script package must use scripts/device/app")
 	}
@@ -192,6 +192,55 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 		}
 	}
 	return nil
+}
+
+// repairScriptPackageTransactions finishes or removes transaction directories
+// left behind if the process stopped during a package swap. It runs at startup,
+// before the listener is available and therefore before any tune can arrive.
+func repairScriptPackageTransactions(scriptsRoot string) {
+	devices, err := os.ReadDir(scriptsRoot)
+	if err != nil {
+		return
+	}
+	for _, device := range devices {
+		if !device.IsDir() || !validScriptPathPart(device.Name()) {
+			continue
+		}
+		parent := filepath.Join(scriptsRoot, device.Name())
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			name := strings.TrimPrefix(entry.Name(), ".")
+			if packageName, found := strings.CutSuffix(name, ".backup"); found && validScriptPathPart(packageName) {
+				backup := filepath.Join(parent, entry.Name())
+				target := filepath.Join(parent, packageName)
+				if _, targetErr := os.Lstat(target); os.IsNotExist(targetErr) && scriptPackageComplete(backup) {
+					if err := os.Rename(backup, target); err != nil {
+						logger("[SCRIPTS] could not restore %s/%s: %v", device.Name(), packageName, err)
+					} else {
+						logger("[SCRIPTS] restored scripts/%s/%s after an interrupted update", device.Name(), packageName)
+					}
+				} else if targetErr == nil && scriptPackageComplete(target) {
+					if err := os.RemoveAll(backup); err != nil {
+						logger("[SCRIPTS] could not remove stale backup %s: %v", backup, err)
+					}
+				}
+				continue
+			}
+			packageName, suffix, found := strings.Cut(name, ".update.")
+			if found && suffix != "" && validScriptPathPart(packageName) {
+				stage := filepath.Join(parent, entry.Name())
+				if err := os.RemoveAll(stage); err != nil {
+					logger("[SCRIPTS] could not remove stale update directory %s: %v", stage, err)
+				}
+			}
+		}
+	}
 }
 
 func downloadScriptFile(ctx context.Context, client *http.Client, rawURL string, allowed func() bool) ([]byte, error) {

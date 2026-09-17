@@ -187,7 +187,7 @@ func rememberChannelsM3U(file string) (bool, string) {
 	configAPIMu.Lock()
 	defer configAPIMu.Unlock()
 	envEngineMu.RLock()
-	settings := normalizeSettings(envSettings)
+	settings := copySettings(envSettings)
 	locked := envLocked["CHANNELS_M3U"]
 	envEngineMu.RUnlock()
 	if locked {

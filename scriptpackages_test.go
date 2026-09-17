@@ -101,3 +101,31 @@ func TestInstallScriptPackageStopsBeforeGitHubWhenTuneIsActive(t *testing.T) {
 		t.Fatal("GitHub was contacted while a tune was active")
 	}
 }
+
+func TestRepairScriptPackageTransactions(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "firetv")
+	backup := filepath.Join(parent, ".hulu.backup")
+	stage := filepath.Join(parent, ".netflix.update.abcd")
+	for _, directory := range []string{backup, stage} {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range requiredStreamerFiles {
+		if err := os.WriteFile(filepath.Join(backup, name), []byte(name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repairScriptPackageTransactions(root)
+	if !scriptPackageComplete(filepath.Join(parent, "hulu")) {
+		t.Fatal("complete backup was not restored")
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("backup still exists: %v", err)
+	}
+	if _, err := os.Stat(stage); !os.IsNotExist(err) {
+		t.Fatalf("stale update stage still exists: %v", err)
+	}
+}

@@ -112,6 +112,9 @@ scriptPackageComplete() {
 # Download only the configured streamer directory, never the repository's full scripts tree.
 fetchConfiguredScripts() {
   local work api name url packageTarget packageParent packageName stage backup
+  STREAMER_APP="${STREAMER_APP#./}"
+  while [[ "$STREAMER_APP" == */ ]]; do STREAMER_APP="${STREAMER_APP%/}"; done
+  export STREAMER_APP
   [[ -n "$STREAMER_APP" ]] || { echo "No STREAMER_APP configured; no tuner scripts requested"; return; }
   [[ "$STREAMER_APP" =~ ^scripts/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "WARNING: Invalid STREAMER_APP path '$STREAMER_APP'"; return; }
   packageTarget="/opt/$STREAMER_APP"

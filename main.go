@@ -1278,7 +1278,7 @@ func loadenv() {
 		logger("[CONFIG] NUMBER_TUNERS %q %v; starting with zero tuners so Settings remains available", numTunersStr, errtuners)
 	}
 	// Get directory of scripts
-	streamerApp := os.Getenv("STREAMER_APP")
+	streamerApp := canonicalStreamerSelection(os.Getenv("STREAMER_APP"))
 	// Loop over the number of tuners and create each one
 	for i := 1; i <= numTuners; i++ {
 		iStr := strconv.Itoa(i)

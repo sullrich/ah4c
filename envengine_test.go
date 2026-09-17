@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -101,11 +102,49 @@ func TestMaterializeBootstrapPrecedence(t *testing.T) {
 	if sets["SPEED_MODE"] != "true" || sources["SPEED_MODE"] != "settings.json" {
 		t.Fatal("settings must win over ./env")
 	}
-	if sets["UPDATE_M3US"] != "false" || sources["UPDATE_M3US"] != "./env" {
-		t.Fatal("./env must win over the built-in default")
+	if sets["UPDATE_M3US"] != "true" || sources["UPDATE_M3US"] != "built-in default" {
+		t.Fatal("managed ./env values must not return after settings.json exists")
 	}
 	if sets["ENCODER_CODEC"] != "h264" || sources["ENCODER_CODEC"] != "built-in default" {
 		t.Fatal("built-in default was not materialized")
+	}
+}
+
+func TestSettingsFileKeepsTunersWhenOneVarIsUnknown(t *testing.T) {
+	oldPath := settingsPathOverride
+	settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+	t.Cleanup(func() { settingsPathOverride = oldPath })
+	data := `{"version":1,"vars":{"IPADDRESS":"ah4c:7654","FUTURE_SETTING":"kept"},"tuners":[{"tunerIP":"box","encoderURL":"http://encoder"}],"extra":{}}`
+	if err := os.WriteFile(settingsPathOverride, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings, warnings, err := loadSettingsWithWarnings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.Tuners) != 1 || settings.Tuners[0].TunerIP != "box" {
+		t.Fatalf("tuners were discarded: %#v", settings.Tuners)
+	}
+	if settings.Extra["FUTURE_SETTING"] != "kept" {
+		t.Fatalf("unknown safe variable was not preserved: %#v", settings.Extra)
+	}
+	if len(warnings) == 0 || !strings.Contains(strings.Join(warnings, " "), "FUTURE_SETTING") {
+		t.Fatalf("unknown variable was not reported: %#v", warnings)
+	}
+}
+
+func TestCanonicalStreamerSelection(t *testing.T) {
+	for _, value := range []string{"scripts/firetv/hulu/", "./scripts/firetv/hulu", "  ./scripts/firetv/hulu/  "} {
+		if got := canonicalStreamerSelection(value); got != "scripts/firetv/hulu" {
+			t.Fatalf("canonicalStreamerSelection(%q) = %q", value, got)
+		}
+		if !validStreamerSelection(value) {
+			t.Fatalf("validStreamerSelection(%q) = false", value)
+		}
+	}
+	sets, locked, _ := materializeBootstrapPlan([]string{"STREAMER_APP=./scripts/firetv/hulu/"}, emptySettings(), false, nil)
+	if sets["STREAMER_APP"] != "scripts/firetv/hulu" || !locked["STREAMER_APP"] {
+		t.Fatalf("environment streamer was not normalized and locked: sets=%#v locked=%#v", sets, locked)
 	}
 }
 

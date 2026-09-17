@@ -54,7 +54,7 @@ type configSaveRequest struct {
 
 func registerConfigRoutes(r *gin.Engine) {
 	r.Use(func(c *gin.Context) {
-		if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/" && !settingsFileExists() {
+		if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/" && setupWizardNeeded() {
 			c.Redirect(http.StatusFound, "/settings?wizard=1")
 			c.Abort()
 			return
@@ -103,7 +103,7 @@ func putConfigHandler(c *gin.Context) {
 	defer configAPIMu.Unlock()
 
 	envEngineMu.RLock()
-	old := normalizeSettings(envSettings)
+	old := copySettings(envSettings)
 	locked := copyBoolMap(envLocked)
 	envEngineMu.RUnlock()
 
@@ -170,9 +170,9 @@ func putConfigHandler(c *gin.Context) {
 
 func restartConfigHandler(c *gin.Context) {
 	force := c.Query("force") == "true"
-	active := activeTunerNumbers()
-	if len(active) > 0 && !force {
-		c.JSON(http.StatusConflict, gin.H{"error": "a tuner is active", "tuners": active})
+	active, blocked := restartTuneConflict()
+	if blocked && !force {
+		c.JSON(http.StatusConflict, gin.H{"error": "a tune is starting or active", "tuners": active, "pending": tunesPending()})
 		return
 	}
 	envEngineMu.RLock()
@@ -187,13 +187,10 @@ func restartConfigHandler(c *gin.Context) {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		if !force {
-			tunerLock.Lock()
-			for i := range tuners {
-				if tuners[i].active {
-					tunerLock.Unlock()
-					logger("[CONFIG] restart canceled because tuner %d became active", i+1)
-					return
-				}
+			active, blocked := restartTuneConflict()
+			if blocked {
+				logger("[CONFIG] restart canceled because a tune started or became active: %v", active)
+				return
 			}
 		}
 		os.Exit(0)
@@ -322,7 +319,7 @@ func readLocalScriptDirectory(root, relative string) (localScriptDirectory, erro
 }
 
 func validScriptPathPart(value string) bool {
-	if value == "" || value == "." || value == ".." {
+	if value == "" || strings.HasPrefix(value, ".") {
 		return false
 	}
 	for _, r := range value {
@@ -334,8 +331,16 @@ func validScriptPathPart(value string) bool {
 	return true
 }
 
+func canonicalStreamerSelection(value string) string {
+	value = filepath.ToSlash(strings.TrimSpace(value))
+	for strings.HasPrefix(value, "./") {
+		value = strings.TrimPrefix(value, "./")
+	}
+	return strings.TrimRight(value, "/")
+}
+
 func validStreamerSelection(value string) bool {
-	parts := strings.Split(filepath.ToSlash(strings.TrimSpace(value)), "/")
+	parts := strings.Split(canonicalStreamerSelection(value), "/")
 	return len(parts) == 3 && parts[0] == "scripts" && validScriptPathPart(parts[1]) && validScriptPathPart(parts[2])
 }
 
@@ -595,7 +600,7 @@ func configResponse() gin.H {
 	}
 	return gin.H{
 		"persistent": persistent, "persistWarning": warning, "dockerManaged": dockerManaged,
-		"restartNeeded": configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": !settingsFileExists(), "catalog": catalog,
+		"restartNeeded": configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "catalog": catalog,
 		"tuners": tunerResponse(s, locked), "extra": s.Extra, "extraLocked": extraLocked, "host": host,
 	}
 }
@@ -768,6 +773,9 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 			continue
 		}
 		value = strings.TrimSpace(value)
+		if key == "STREAMER_APP" {
+			value = canonicalStreamerSelection(value)
+		}
 		if value == "" {
 			continue
 		}
@@ -895,6 +903,35 @@ func activeTunerNumbers() []int {
 	return active
 }
 
+func restartTuneConflict() ([]int, bool) {
+	active := activeTunerNumbers()
+	return active, len(active) > 0 || tunesPending()
+}
+
+func setupWizardNeeded() bool {
+	if settingsFileExists() {
+		return false
+	}
+	return !environmentSetupReady(os.Getenv)
+}
+
+func environmentSetupReady(lookup func(string) string) bool {
+	if !streamerTuneReady(lookup) {
+		return false
+	}
+	count, err := tunerCount(lookup("NUMBER_TUNERS"))
+	if err != nil {
+		return false
+	}
+	for i := 1; i <= count; i++ {
+		n := strconv.Itoa(i)
+		if strings.TrimSpace(lookup("ENCODER"+n+"_URL")) != "" || strings.TrimSpace(lookup("CMD"+n)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func discoverStreamers() []string {
 	return mergeStreamers(discoverLocalStreamers(), loadStreamerCache())
 }
@@ -916,7 +953,7 @@ func discoverLocalStreamersAt(root string) []string {
 				continue
 			}
 			for _, provider := range providers {
-				if !provider.IsDir() {
+				if !provider.IsDir() || !validScriptPathPart(device.Name()) || !validScriptPathPart(provider.Name()) {
 					continue
 				}
 				if scriptPackageComplete(filepath.Join(root, device.Name(), provider.Name())) {
@@ -964,7 +1001,7 @@ func queryUpstreamStreamers() ([]string, error) {
 	packages := map[string]map[string]bool{}
 	for _, entry := range tree.Tree {
 		parts := strings.Split(filepath.ToSlash(entry.Path), "/")
-		if entry.Type != "blob" || len(parts) != 4 || parts[0] != "scripts" {
+		if entry.Type != "blob" || len(parts) != 4 || parts[0] != "scripts" || !validScriptPathPart(parts[1]) || !validScriptPathPart(parts[2]) {
 			continue
 		}
 		name := parts[3]
@@ -1031,7 +1068,10 @@ func mergeStreamers(groups ...[]string) []string {
 	seen := map[string]bool{}
 	for _, group := range groups {
 		for _, value := range group {
-			seen[value] = true
+			value = canonicalStreamerSelection(value)
+			if validStreamerSelection(value) {
+				seen[value] = true
+			}
 		}
 	}
 	result := make([]string, 0, len(seen))

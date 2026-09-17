@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -64,5 +67,37 @@ func TestValidM3UFile(t *testing.T) {
 		if _, err := validM3UFile(value); err == nil {
 			t.Errorf("validM3UFile(%q) should fail", value)
 		}
+	}
+}
+
+func TestRememberChannelsM3USaveFailureDoesNotMutateLiveSettings(t *testing.T) {
+	oldPath := settingsPathOverride
+	settingsPathOverride = filepath.Join(t.TempDir(), "settings-directory")
+	if err := os.Mkdir(settingsPathOverride, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { settingsPathOverride = oldPath })
+
+	envEngineMu.Lock()
+	oldSettings, oldLocked := envSettings, envLocked
+	envSettings = emptySettings()
+	envLocked = map[string]bool{}
+	envSettings.Vars["IPADDRESS"] = "ah4c:7654"
+	before := copySettings(envSettings)
+	envEngineMu.Unlock()
+	t.Cleanup(func() {
+		envEngineMu.Lock()
+		envSettings, envLocked = oldSettings, oldLocked
+		envEngineMu.Unlock()
+	})
+
+	if saved, _ := rememberChannelsM3U("all.m3u"); saved {
+		t.Fatal("save unexpectedly succeeded")
+	}
+	envEngineMu.RLock()
+	after := copySettings(envSettings)
+	envEngineMu.RUnlock()
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("live settings changed after failed save: before=%#v after=%#v", before, after)
 	}
 }
