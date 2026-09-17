@@ -147,13 +147,37 @@
                 const response = await fetch('/api/config/streamers?remote=true');
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload.error || 'GitHub could not be reached.');
+                mergeAvailableScripts(payload.streamers || payload);
                 status.textContent = 'Script list updated. No scripts were downloaded.';
-                window.setTimeout(() => window.location.reload(), 500);
             } catch (error) {
                 status.textContent = error.message + ' Installed scripts are still available.';
             } finally {
                 button.disabled = false;
             }
+        }
+
+        function mergeAvailableScripts(streamers) {
+            if (!Array.isArray(streamers)) return;
+            streamers.forEach(function (path) {
+                const parts = String(path).split('/');
+                if (parts.length !== 3 || parts[0] !== 'scripts' || !parts[1] || !parts[2]) return;
+                if (!deviceProviders[parts[1]]) deviceProviders[parts[1]] = [];
+                if (!deviceProviders[parts[1]].includes(parts[2])) {
+                    deviceProviders[parts[1]].push(parts[2]);
+                    deviceProviders[parts[1]].sort();
+                }
+            });
+            const devices = Object.keys(deviceProviders).sort();
+            document.querySelectorAll('.src-device').forEach(function (deviceSelect) {
+                const currentDevice = deviceSelect.value;
+                devices.forEach(function (device) {
+                    if (![...deviceSelect.options].some(option => option.value === device)) {
+                        deviceSelect.add(new Option(device, device));
+                    }
+                });
+                deviceSelect.value = currentDevice;
+                populateProviders(deviceSelect);
+            });
         }
 
         async function downloadSelectedScripts() {

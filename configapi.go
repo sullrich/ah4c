@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"os/exec"
@@ -21,13 +25,19 @@ import (
 
 const secretMask = "•••"
 
+const (
+	localScriptFileLimit  = 8 << 20
+	localScriptTotalLimit = 32 << 20
+)
+
 var requiredStreamerFiles = []string{"bmitune.sh", "prebmitune.sh", "stopbmitune.sh"}
 
 var (
-	configAPIMu          sync.Mutex
-	configRestartNeeded  bool
-	configRestartKeys    = map[string]bool{}
-	connectionCheckSlots = make(chan struct{}, 4)
+	configAPIMu              sync.Mutex
+	configRestartNeeded      bool
+	configRestartKeys        = map[string]bool{}
+	connectionCheckSlots     = make(chan struct{}, 4)
+	localScriptsRootOverride string
 )
 
 var defaultValues = map[string]string{
@@ -83,7 +93,9 @@ func registerConfigRoutes(r *gin.Engine) {
 	r.POST("/api/config/restart", restartConfigHandler)
 	r.GET("/api/config/streamers", streamersConfigHandler)
 	r.GET("/api/config/local-scripts", localScriptsConfigHandler)
+	r.POST("/api/config/local-scripts", uploadLocalScriptsConfigHandler)
 	r.POST("/api/config/check-connection", checkConfigConnectionHandler)
+	registerAppleTVPairingRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
@@ -235,7 +247,7 @@ type localScriptDirectory struct {
 }
 
 func localScriptsConfigHandler(c *gin.Context) {
-	root, err := filepath.Abs("scripts")
+	root, err := localScriptsRoot()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not locate the local scripts folder"})
 		return
@@ -246,6 +258,132 @@ func localScriptsConfigHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, directory)
+}
+
+func localScriptsRoot() (string, error) {
+	if localScriptsRootOverride != "" {
+		return filepath.Abs(localScriptsRootOverride)
+	}
+	return filepath.Abs("scripts")
+}
+
+func uploadLocalScriptsConfigHandler(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, localScriptTotalLimit+(1<<20))
+	if err := c.Request.ParseMultipartForm(localScriptTotalLimit); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "The script upload is too large or could not be read."})
+		return
+	}
+	defer c.Request.MultipartForm.RemoveAll()
+	root, err := localScriptsRoot()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not locate the local scripts folder"})
+		return
+	}
+	selection, err := createLocalScriptPackage(root, c.PostForm("device"), c.PostForm("app"), c.Request.MultipartForm.File["files"])
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, os.ErrExist) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"selection": selection, "message": "Local script package created."})
+}
+
+func createLocalScriptPackage(root, device, app string, files []*multipart.FileHeader) (string, error) {
+	device = strings.TrimSpace(device)
+	app = strings.TrimSpace(app)
+	if !validScriptPathPart(device) || !validScriptPathPart(app) {
+		return "", fmt.Errorf("device and app names may use letters, numbers, dots, underscores and hyphens")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("choose the script files to upload")
+	}
+	seen := make(map[string]bool, len(files))
+	total := int64(0)
+	for _, file := range files {
+		name := file.Filename
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			return "", fmt.Errorf("script filename %q is not safe", name)
+		}
+		if seen[name] {
+			return "", fmt.Errorf("script filename %q was selected more than once", name)
+		}
+		seen[name] = true
+		if file.Size < 0 || file.Size > localScriptFileLimit {
+			return "", fmt.Errorf("%s is larger than the 8 MB per-file limit", name)
+		}
+		total += file.Size
+		if total > localScriptTotalLimit {
+			return "", fmt.Errorf("the selected scripts are larger than the 32 MB upload limit")
+		}
+	}
+	var missing []string
+	for _, required := range requiredStreamerFiles {
+		if !seen[required] {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("the package is missing required files: %s", strings.Join(missing, ", "))
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return "", fmt.Errorf("could not create the local scripts folder: %w", err)
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("could not open the local scripts folder: %w", err)
+	}
+	deviceDir := filepath.Join(rootReal, device)
+	if err := os.MkdirAll(deviceDir, 0755); err != nil {
+		return "", fmt.Errorf("could not create the device folder: %w", err)
+	}
+	deviceReal, err := filepath.EvalSymlinks(deviceDir)
+	if err != nil || (deviceReal != rootReal && !strings.HasPrefix(deviceReal, rootReal+string(filepath.Separator))) {
+		return "", fmt.Errorf("the device folder is outside the local scripts folder")
+	}
+	target := filepath.Join(deviceReal, app)
+	if _, err := os.Lstat(target); err == nil {
+		return "", fmt.Errorf("scripts/%s/%s already exists: %w", device, app, os.ErrExist)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("could not check the destination folder: %w", err)
+	}
+	temporary, err := os.MkdirTemp(deviceReal, "."+app+"-upload-")
+	if err != nil {
+		return "", fmt.Errorf("could not prepare the script upload: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+	for _, header := range files {
+		source, err := header.Open()
+		if err != nil {
+			return "", fmt.Errorf("could not read %s: %w", header.Filename, err)
+		}
+		destination, err := os.OpenFile(filepath.Join(temporary, header.Filename), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
+		if err != nil {
+			source.Close()
+			return "", fmt.Errorf("could not create %s: %w", header.Filename, err)
+		}
+		written, copyErr := io.Copy(destination, io.LimitReader(source, localScriptFileLimit+1))
+		closeErr := destination.Close()
+		source.Close()
+		if copyErr != nil || closeErr != nil {
+			return "", fmt.Errorf("could not save %s", header.Filename)
+		}
+		if written > localScriptFileLimit {
+			return "", fmt.Errorf("%s is larger than the 8 MB per-file limit", header.Filename)
+		}
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		return "", fmt.Errorf("could not finish the script package: %w", err)
+	}
+	committed = true
+	return "scripts/" + device + "/" + app, nil
 }
 
 func readLocalScriptDirectory(root, relative string) (localScriptDirectory, error) {
@@ -439,12 +577,17 @@ func checkADBConnection(ctx context.Context, target string) connectionCheckResul
 	if !connectionChecksAllowed() {
 		return connectionCheckResult{State: "skipped", Message: "Stopped because a tune started"}
 	}
-	_, _ = boundedCommand(ctx, 2500*time.Millisecond, "adb", "connect", address)
+	connectOutput, _ := boundedCommand(ctx, 2500*time.Millisecond, "adb", "connect", address)
 	state, err := boundedCommand(ctx, 2*time.Second, "adb", "-s", address, "get-state")
 	state = strings.TrimSpace(state)
 	if err != nil || state != "device" {
-		if strings.Contains(strings.ToLower(state), "unauthorized") {
-			return connectionCheckResult{State: "error", Message: "ADB is not authorized on the device"}
+		if adbAuthorizationPending(connectOutput, state) {
+			// A fresh ADB handshake makes Android show its authorization dialog.
+			// Return immediately so the browser never waits for the person to find
+			// the remote and approve it.
+			_, _ = boundedCommand(ctx, time.Second, "adb", "disconnect", address)
+			_, _ = boundedCommand(ctx, 2500*time.Millisecond, "adb", "connect", address)
+			return connectionCheckResult{State: "authorize", Message: "Look at the Android device and approve Allow USB debugging, then check again"}
 		}
 		if strings.Contains(strings.ToLower(state), "offline") {
 			return connectionCheckResult{State: "error", Message: "ADB reports the device is offline"}
@@ -465,35 +608,40 @@ func checkPYATVConnection(ctx context.Context, target string) connectionCheckRes
 	if target == "" {
 		return connectionCheckResult{State: "empty", Message: "Enter an Apple TV address"}
 	}
-	config := "/root/.android/.pyatv.conf"
+	config := appleTVConfigPath
 	if info, err := os.Stat(config); err != nil || !info.Mode().IsRegular() {
-		return connectionCheckResult{State: "error", Message: "Apple TV pairing file is missing"}
+		return connectionCheckResult{State: "pair", Message: "Pair this Apple TV to continue"}
 	}
-	if _, err := exec.LookPath("atvremote"); err != nil {
+	if _, err := exec.LookPath(appleTVRemoteExecutable); err != nil {
 		return connectionCheckResult{State: "error", Message: "pyatv is not installed"}
 	}
 	if !connectionChecksAllowed() {
 		return connectionCheckResult{State: "skipped", Message: "Stopped because a tune started"}
 	}
-	if _, err := boundedCommand(ctx, 4*time.Second, "atvremote", "--storage-filename", config, "-s", target, "device_info"); err != nil {
-		return connectionCheckResult{State: "error", Message: "Apple TV is not reachable or paired"}
+	if _, err := boundedCommand(ctx, 4*time.Second, appleTVRemoteExecutable, "--storage-filename", config, "-s", target, "device_info"); err != nil {
+		return connectionCheckResult{State: "pair", Message: "The Apple TV did not accept the saved pairing. Confirm its address or pair it again"}
 	}
 	return connectionCheckResult{State: "ready", Message: "Apple TV is reachable and paired"}
+}
+
+func adbAuthorizationPending(outputs ...string) bool {
+	combined := strings.ToLower(strings.Join(outputs, " "))
+	return strings.Contains(combined, "unauthorized") || strings.Contains(combined, "authenticate") || strings.Contains(combined, "authorization")
 }
 
 func checkEncoderConnection(ctx context.Context, rawURL string) connectionCheckResult {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return connectionCheckResult{State: "empty", Message: "Enter an encoder URL"}
+		return connectionCheckResult{State: "empty", Message: "Enter the encoder stream address"}
 	}
 	address, err := encoderNetworkAddress(rawURL)
 	if err != nil {
-		return connectionCheckResult{State: "error", Message: "Invalid encoder URL"}
+		return connectionCheckResult{State: "error", Message: "Enter the full encoder stream address, starting with http:// or https://"}
 	}
 	if err := dialConnection(ctx, address); err != nil {
-		return connectionCheckResult{State: "error", Message: "Encoder host and port are unreachable"}
+		return connectionCheckResult{State: "error", Message: "The encoder address was understood, but ah4c could not reach it"}
 	}
-	return connectionCheckResult{State: "ready", Message: "Encoder host and port are reachable"}
+	return connectionCheckResult{State: "ready", Message: "The encoder is reachable"}
 }
 
 func addressWithDefaultPort(value, defaultPort string) (string, error) {
@@ -515,7 +663,7 @@ func addressWithDefaultPort(value, defaultPort string) (string, error) {
 func encoderNetworkAddress(rawURL string) (string, error) {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("invalid URL")
+		return "", fmt.Errorf("the encoder stream address must start with http:// or https://")
 	}
 	port := parsed.Port()
 	if port == "" {
@@ -525,7 +673,7 @@ func encoderNetworkAddress(rawURL string) (string, error) {
 		case "https":
 			port = "443"
 		default:
-			return "", fmt.Errorf("unsupported URL scheme")
+			return "", fmt.Errorf("the encoder stream address must start with http:// or https://")
 		}
 	}
 	return net.JoinHostPort(parsed.Hostname(), port), nil
@@ -580,7 +728,7 @@ func configResponse() gin.H {
 		item := gin.H{
 			"key": spec.Key, "label": spec.Label, "desc": spec.Desc, "placeholder": spec.Placeholder,
 			"type": spec.Type, "applies": spec.Applies, "enum": spec.Enum, "scriptVaries": spec.ScriptVaries,
-			"secret": spec.Secret, "value": value, "source": source, "locked": locked[spec.Key],
+			"secret": spec.Secret, "value": value, "defaultValue": defaultValues[spec.Key], "source": source, "locked": locked[spec.Key],
 		}
 		if spec.Secret {
 			item["isSet"] = value != ""
@@ -804,12 +952,35 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 			next.Extra[key] = value
 		}
 	}
+	for index := range next.Tuners {
+		tuner := &next.Tuners[index]
+		tuner.TunerIP = strings.TrimSpace(tuner.TunerIP)
+		tuner.EncoderURL = strings.TrimSpace(tuner.EncoderURL)
+		for field, value := range map[string]string{"Tuner IP": tuner.TunerIP, "Encoder URL": tuner.EncoderURL, "CMD": tuner.CMD, "TEECMD": tuner.TEECMD} {
+			if strings.ContainsAny(value, "\r\n") {
+				return Settings{}, fmt.Errorf("tuner %d %s must be one line", index, field)
+			}
+		}
+		if tuner.TunerIP != "" {
+			if err := validateBareHostPort(tuner.TunerIP); err != nil {
+				return Settings{}, fmt.Errorf("tuner %d Tuner IP: %v", index, err)
+			}
+		}
+		if tuner.EncoderURL != "" {
+			if err := validateHTTPURL(tuner.EncoderURL); err != nil {
+				return Settings{}, fmt.Errorf("tuner %d Encoder URL: %v", index, err)
+			}
+		}
+	}
 	return next, nil
 }
 
 func validateCatalogValue(spec VarSpec, value string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("multiline values are not allowed")
+	}
+	if strings.TrimSpace(value) == "" {
+		return nil
 	}
 	if spec.Key == "STREAMER_APP" && value != "" && !validStreamerSelection(value) {
 		return fmt.Errorf("must use scripts/device/app")
@@ -818,6 +989,35 @@ func validateCatalogValue(spec VarSpec, value string) error {
 		if _, err := validM3UFile(value); err != nil {
 			return err
 		}
+	}
+	switch spec.Key {
+	case "IPADDRESS":
+		if _, err := serverBaseURL(value, "7654"); err != nil {
+			return fmt.Errorf("enter an ah4c network address another computer can use, such as 192.168.1.50:7654")
+		}
+	case "CHANNELSIP":
+		if _, err := serverBaseURL(value, "8089"); err != nil {
+			return fmt.Errorf("open Channels DVR and copy its address here, such as 192.168.1.20:8089")
+		}
+	case "ALERT_SMTP_SERVER":
+		if err := validateBareHostPort(value); err != nil {
+			return fmt.Errorf("enter an SMTP hostname or IP address with an optional port")
+		}
+	case "ALERT_AUTH_SERVER":
+		if err := validateBareHostPort(value); err != nil {
+			return fmt.Errorf("enter a hostname or IP address with an optional port")
+		}
+	case "ALERT_EMAIL_FROM", "ALERT_EMAIL_TO":
+		if err := validateEmailAddress(value); err != nil {
+			return err
+		}
+	case "FASTCHANNELS_URL", "ALERT_WEBHOOK_URL":
+		if err := validateHTTPURL(value); err != nil {
+			return err
+		}
+	}
+	if spec.ScriptVaries && spec.Key != "FASTCHANNELS_URL" {
+		return nil
 	}
 	switch spec.Type {
 	case varBool:
@@ -842,6 +1042,53 @@ func validateCatalogValue(spec VarSpec, value string) error {
 				return fmt.Errorf("must be one of %s", strings.Join(spec.Enum, ", "))
 			}
 		}
+	}
+	return nil
+}
+
+func validateBareHostPort(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "://") || strings.ContainsAny(value, "/?#") {
+		return fmt.Errorf("invalid host")
+	}
+	base, err := serverBaseURL(value, "1")
+	if err != nil {
+		return err
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("invalid host")
+	}
+	return nil
+}
+
+func validateHTTPURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("enter a web address that starts with http:// or https://")
+	}
+	if err := validateURLPort(parsed); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEmailAddress(value string) error {
+	address, err := mail.ParseAddress(strings.TrimSpace(value))
+	if err != nil || !strings.Contains(address.Address, "@") {
+		return fmt.Errorf("must be one e-mail address, such as name@example.com")
+	}
+	return nil
+}
+
+func validateURLPort(parsed *url.URL) error {
+	port := parsed.Port()
+	if port == "" {
+		return nil
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
 	}
 	return nil
 }
@@ -897,7 +1144,7 @@ func activeTunerNumbers() []int {
 	var active []int
 	for i := range tuners {
 		if tuners[i].active {
-			active = append(active, i+1)
+			active = append(active, i)
 		}
 	}
 	return active
@@ -909,27 +1156,22 @@ func restartTuneConflict() ([]int, bool) {
 }
 
 func setupWizardNeeded() bool {
-	if settingsFileExists() {
-		return false
-	}
 	return !environmentSetupReady(os.Getenv)
 }
 
 func environmentSetupReady(lookup func(string) string) bool {
-	if !streamerTuneReady(lookup) {
+	proxy := strings.TrimSpace(lookup("IPADDRESS"))
+	channels := strings.TrimSpace(lookup("CHANNELSIP"))
+	if proxy == "" || channels == "" {
 		return false
 	}
-	count, err := tunerCount(lookup("NUMBER_TUNERS"))
-	if err != nil {
+	if _, err := serverBaseURL(proxy, "7654"); err != nil {
 		return false
 	}
-	for i := 1; i <= count; i++ {
-		n := strconv.Itoa(i)
-		if strings.TrimSpace(lookup("ENCODER"+n+"_URL")) != "" || strings.TrimSpace(lookup("CMD"+n)) != "" {
-			return true
-		}
+	if _, err := serverBaseURL(channels, "8089"); err != nil {
+		return false
 	}
-	return false
+	return true
 }
 
 func discoverStreamers() []string {

@@ -17,6 +17,7 @@ func TestServerBaseURL(t *testing.T) {
 		"channels-dvr:9000":     "http://channels-dvr:9000",
 		"https://channels:9443": "https://channels:9443",
 		"192.168.1.20":          "http://192.168.1.20:8089",
+		"2001:db8::1":           "http://[2001:db8::1]:8089",
 	}
 	for input, want := range tests {
 		got, err := serverBaseURL(input, "8089")
@@ -27,7 +28,7 @@ func TestServerBaseURL(t *testing.T) {
 			t.Errorf("serverBaseURL(%q) = %q, want %q", input, got, want)
 		}
 	}
-	for _, input := range []string{"", "ftp://channels", "http://channels/path", "http://user:pass@channels"} {
+	for _, input := range []string{"", "ftp://channels", "http://channels/path", "http://user:pass@channels", "channels:99999"} {
 		if got, err := serverBaseURL(input, "8089"); err == nil {
 			t.Errorf("serverBaseURL(%q) = %q, want an error", input, got)
 		}

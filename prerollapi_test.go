@@ -140,3 +140,23 @@ func TestSafePrerollExtension(t *testing.T) {
 		}
 	}
 }
+
+func TestPrerollAPIAndStartupUseTheSameFileSelection(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.mp4", "preroll.jpg", "zulu.ts", ".hidden.mp4"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startup, count, err := pickPrerollFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, apiCount, err := selectedPrerollFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startup != api || filepath.Base(api) != "preroll.jpg" || count != 3 || apiCount != count {
+		t.Fatalf("startup=%q/%d api=%q/%d", startup, count, api, apiCount)
+	}
+}

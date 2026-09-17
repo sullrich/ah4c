@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,52 @@ func TestSettingsFileKeepsTunersWhenOneVarIsUnknown(t *testing.T) {
 	}
 	if len(warnings) == 0 || !strings.Contains(strings.Join(warnings, " "), "FUTURE_SETTING") {
 		t.Fatalf("unknown variable was not reported: %#v", warnings)
+	}
+}
+
+func TestPreviouslyAcceptedSettingsStillLoadIntact(t *testing.T) {
+	oldPath := settingsPathOverride
+	settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+	t.Cleanup(func() { settingsPathOverride = oldPath })
+	want := emptySettings()
+	want.Vars = map[string]string{
+		"IPADDRESS":         "http://192.168.200.40:7655",
+		"CHANNELSIP":        "channels-dvr:8090",
+		"ALERT_SMTP_SERVER": "smtp.example.com",
+		"ALERT_EMAIL_FROM":  "ah4c@example.com",
+		"ALERT_EMAIL_TO":    "viewer@example.com",
+		"UPDATE_SCRIPTS":    "TRUE",
+		"PLAYBACK_DELAY":    "24h",
+		"KEEP_WATCHING":     "240m",
+		"LIVETV_ATTEMPTS":   "defined-by-the-script",
+		"SPEED_MODE":        "1",
+		"AUTOCROP_CHANNELS": "2.1 7.2 120",
+	}
+	want.Tuners = []TunerSpec{{
+		TunerIP: "living-room:5555", EncoderURL: "http://encoder:8090/stream",
+		CMD: "custom command --flag", TEECMD: "tee /tmp/capture",
+	}}
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPathOverride, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, warnings, err := loadSettingsWithWarnings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("valid settings produced warnings: %v", warnings)
+	}
+	for key, value := range want.Vars {
+		if got.Vars[key] != value {
+			t.Errorf("%s = %q, want %q", key, got.Vars[key], value)
+		}
+	}
+	if len(got.Tuners) != 1 || got.Tuners[0] != want.Tuners[0] {
+		t.Fatalf("tuners = %#v, want %#v", got.Tuners, want.Tuners)
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -216,28 +215,11 @@ func requirePrerollDirectory(root string) error {
 }
 
 func selectedPrerollFile(dir string) (string, int, error) {
-	entries, err := os.ReadDir(dir)
+	selected, count, err := pickPrerollFile(dir)
 	if err != nil {
 		return "", 0, fmt.Errorf("could not list the pre-roll folder: %w", err)
 	}
-	var files []string
-	for _, entry := range entries {
-		if entry.Type().IsRegular() && !strings.HasPrefix(entry.Name(), ".") {
-			files = append(files, entry.Name())
-		}
-	}
-	if len(files) == 0 {
-		return "", 0, nil
-	}
-	sort.Strings(files)
-	pick := files[0]
-	for _, name := range files {
-		if strings.HasPrefix(strings.ToLower(name), "preroll.") {
-			pick = name
-			break
-		}
-	}
-	return filepath.Join(dir, pick), len(files), nil
+	return selected, count, nil
 }
 
 func prerollUploadPart(reader *multipart.Reader) (*multipart.Part, error) {

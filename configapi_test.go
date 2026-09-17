@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -63,9 +65,11 @@ func TestConfigAPIRejectsInvalidStreamerPath(t *testing.T) {
 	}
 }
 
-func TestFirstRunCanFinishWithoutStreamerOrTuners(t *testing.T) {
+func TestFirstRunRequiresAddressesButNotStreamerOrTuners(t *testing.T) {
 	t.Setenv("STREAMER_APP", "")
 	t.Setenv("NUMBER_TUNERS", "")
+	t.Setenv("IPADDRESS", "")
+	t.Setenv("CHANNELSIP", "")
 	r := configAPITestSetup(t, emptySettings(), map[string]bool{})
 
 	initial := httptest.NewRecorder()
@@ -74,7 +78,15 @@ func TestFirstRunCanFinishWithoutStreamerOrTuners(t *testing.T) {
 		t.Fatalf("initial config = %d %s", initial.Code, initial.Body.String())
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"vars":{},"tuners":[],"extra":{}}`))
+	incomplete := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"vars":{},"tuners":[],"extra":{}}`))
+	incomplete.Header.Set("Content-Type", "application/json")
+	incompleteSaved := httptest.NewRecorder()
+	r.ServeHTTP(incompleteSaved, incomplete)
+	if incompleteSaved.Code != http.StatusOK || !strings.Contains(incompleteSaved.Body.String(), `"wizard":true`) {
+		t.Fatalf("incomplete setup save = %d %s", incompleteSaved.Code, incompleteSaved.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"vars":{"IPADDRESS":"ah4c:7654","CHANNELSIP":"channels:8089"},"tuners":[],"extra":{}}`))
 	req.Header.Set("Content-Type", "application/json")
 	saved := httptest.NewRecorder()
 	r.ServeHTTP(saved, req)
@@ -85,12 +97,14 @@ func TestFirstRunCanFinishWithoutStreamerOrTuners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Vars["STREAMER_APP"] != "" || len(settings.Tuners) != 0 {
+	if settings.Vars["IPADDRESS"] != "ah4c:7654" || settings.Vars["CHANNELSIP"] != "channels:8089" || settings.Vars["STREAMER_APP"] != "" || len(settings.Tuners) != 0 {
 		t.Fatalf("unexpected empty setup: %#v", settings)
 	}
 }
 
 func TestExistingEnvironmentConfigurationSkipsWizard(t *testing.T) {
+	t.Setenv("IPADDRESS", "ah4c:7654")
+	t.Setenv("CHANNELSIP", "channels:8089")
 	t.Setenv("STREAMER_APP", "./scripts/firetv/hulu/")
 	t.Setenv("NUMBER_TUNERS", "1")
 	t.Setenv("ENCODER1_URL", "http://encoder/stream")
@@ -109,6 +123,26 @@ func TestExistingEnvironmentConfigurationSkipsWizard(t *testing.T) {
 	}
 }
 
+func TestEnvironmentSetupRequiresValidProxyAndChannelsAddresses(t *testing.T) {
+	values := map[string]string{}
+	lookup := func(key string) string { return values[key] }
+	if environmentSetupReady(lookup) {
+		t.Fatal("empty setup was ready")
+	}
+	values["IPADDRESS"] = "ah4c:7654"
+	if environmentSetupReady(lookup) {
+		t.Fatal("setup without Channels DVR was ready")
+	}
+	values["CHANNELSIP"] = "channels:8089"
+	if !environmentSetupReady(lookup) {
+		t.Fatal("setup with both addresses was not ready")
+	}
+	values["CHANNELSIP"] = "http://channels/path"
+	if environmentSetupReady(lookup) {
+		t.Fatal("setup with an invalid Channels DVR address was ready")
+	}
+}
+
 func TestConfigAPICanonicalizesStreamerSelection(t *testing.T) {
 	r := configAPITestSetup(t, emptySettings(), map[string]bool{})
 	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"vars":{"STREAMER_APP":" ./scripts/firetv/hulu/ "},"extra":{}}`))
@@ -124,6 +158,78 @@ func TestConfigAPICanonicalizesStreamerSelection(t *testing.T) {
 	}
 	if settings.Vars["STREAMER_APP"] != "scripts/firetv/hulu" {
 		t.Fatalf("saved STREAMER_APP = %q", settings.Vars["STREAMER_APP"])
+	}
+}
+
+func TestValidateCatalogValueMatchesAcceptedConfigurationFormats(t *testing.T) {
+	specs := specByKey()
+	valid := map[string][]string{
+		"IPADDRESS":         {"ah4c", "ah4c:7654", "http://192.168.200.40:7655", "https://ah4c.example"},
+		"CHANNELSIP":        {"channels", "channels:8080", "channels:8089", "channels:8090", "http://channels:9999"},
+		"ALERT_SMTP_SERVER": {"smtp.example.com", "smtp.example.com:587"},
+		"ALERT_AUTH_SERVER": {"smtp.example.com", "smtp.example.com:587"},
+		"ALERT_EMAIL_FROM":  {"ah4c@example.com", "AH4C Alerts <ah4c@example.com>"},
+		"ALERT_EMAIL_TO":    {"viewer@example.com"},
+		"ALERT_WEBHOOK_URL": {"https://alerts.example/hook?reason=$reason"},
+		"FASTCHANNELS_URL":  {"http://fastchannels:8000"},
+		"PLAYBACK_DELAY":    {"30", "30s", "1m30s", "24h"},
+		"KEEP_WATCHING":     {"true", "4h", "240m", "defined-by-the-script"},
+		"LIVETV_ATTEMPTS":   {"3", "defined-by-the-script"},
+		"SPEED_MODE":        {"TRUE", "1", "defined-by-the-script"},
+		"UPDATE_SCRIPTS":    {"true", "TRUE", "False"},
+	}
+	for key, values := range valid {
+		for _, value := range values {
+			if err := validateCatalogValue(specs[key], value); err != nil {
+				t.Errorf("validateCatalogValue(%s, %q): %v", key, value, err)
+			}
+		}
+		if err := validateCatalogValue(specs[key], ""); err != nil {
+			t.Errorf("validateCatalogValue(%s, blank): %v", key, err)
+		}
+	}
+
+	invalid := map[string][]string{
+		"IPADDRESS":         {"http://ah4c/path", "ftp://ah4c", "http://ah4c:99999"},
+		"CHANNELSIP":        {"http://user:pass@channels", "channels/path"},
+		"ALERT_SMTP_SERVER": {"http://smtp.example.com"},
+		"ALERT_EMAIL_TO":    {"not-an-email"},
+		"ALERT_WEBHOOK_URL": {"ftp://alerts.example/hook"},
+		"PLAYBACK_DELAY":    {"later", "-1", "-1s"},
+		"UPDATE_SCRIPTS":    {"yes"},
+	}
+	for key, values := range invalid {
+		for _, value := range values {
+			if err := validateCatalogValue(specs[key], value); err == nil {
+				t.Errorf("validateCatalogValue(%s, %q) unexpectedly passed", key, value)
+			}
+		}
+	}
+}
+
+func TestValidatedSettingsNormalizesBooleanAndChecksTunerFields(t *testing.T) {
+	request := configSaveRequest{
+		Vars: map[string]string{"UPDATE_SCRIPTS": "TRUE"},
+		Tuners: &[]TunerSpec{{
+			TunerIP: "encoder-box:5555", EncoderURL: "http://encoder-box:8090/stream",
+			CMD: "ffmpeg -i input", TEECMD: "tee /tmp/output",
+		}},
+	}
+	settings, err := validatedSettingsRequest(request, emptySettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Vars["UPDATE_SCRIPTS"] != "true" {
+		t.Fatalf("UPDATE_SCRIPTS = %q", settings.Vars["UPDATE_SCRIPTS"])
+	}
+	if len(settings.Tuners) != 1 || settings.Tuners[0].TunerIP != "encoder-box:5555" {
+		t.Fatalf("tuners = %#v", settings.Tuners)
+	}
+
+	bad := request
+	bad.Tuners = &[]TunerSpec{{CMD: "first\nsecond"}}
+	if _, err := validatedSettingsRequest(bad, emptySettings()); err == nil || !strings.Contains(err.Error(), "one line") {
+		t.Fatalf("multiline command error = %v", err)
 	}
 }
 
@@ -275,6 +381,87 @@ func TestReadLocalScriptDirectoryReportsMissingEntryPoints(t *testing.T) {
 	}
 }
 
+func localScriptUploadRequest(t *testing.T, device, app string, files map[string]string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("device", device); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("app", app); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		part, err := writer.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/config/local-scripts", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func TestLocalScriptUploadCreatesCompletePackageAtomically(t *testing.T) {
+	root := t.TempDir()
+	oldRoot := localScriptsRootOverride
+	localScriptsRootOverride = root
+	t.Cleanup(func() { localScriptsRootOverride = oldRoot })
+	router := configAPITestSetup(t, emptySettings(), map[string]bool{})
+	files := map[string]string{
+		"bmitune.sh":     "#!/bin/sh\n",
+		"prebmitune.sh":  "#!/bin/sh\n",
+		"stopbmitune.sh": "#!/bin/sh\n",
+		"helper.json":    "{}\n",
+	}
+
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, localScriptUploadRequest(t, "my-device", "my-app", files))
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"selection":"scripts/my-device/my-app"`) {
+		t.Fatalf("script upload = %d %s", created.Code, created.Body.String())
+	}
+	packageDir := filepath.Join(root, "my-device", "my-app")
+	for name, content := range files {
+		got, err := os.ReadFile(filepath.Join(packageDir, name))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s = %q, %v", name, got, err)
+		}
+		info, err := os.Stat(filepath.Join(packageDir, name))
+		if err != nil || info.Mode().Perm()&0100 == 0 {
+			t.Fatalf("%s is not executable: %v, %v", name, info, err)
+		}
+	}
+
+	again := httptest.NewRecorder()
+	router.ServeHTTP(again, localScriptUploadRequest(t, "my-device", "my-app", files))
+	if again.Code != http.StatusConflict {
+		t.Fatalf("duplicate script upload = %d %s", again.Code, again.Body.String())
+	}
+}
+
+func TestLocalScriptUploadRejectsIncompletePackage(t *testing.T) {
+	root := t.TempDir()
+	oldRoot := localScriptsRootOverride
+	localScriptsRootOverride = root
+	t.Cleanup(func() { localScriptsRootOverride = oldRoot })
+	router := configAPITestSetup(t, emptySettings(), map[string]bool{})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, localScriptUploadRequest(t, "my-device", "my-app", map[string]string{"bmitune.sh": "#!/bin/sh\n"}))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "prebmitune.sh") || !strings.Contains(response.Body.String(), "stopbmitune.sh") {
+		t.Fatalf("incomplete script upload = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "my-device", "my-app")); !os.IsNotExist(err) {
+		t.Fatalf("incomplete package was created: %v", err)
+	}
+}
+
 func TestReadLocalScriptDirectoryRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -336,6 +523,21 @@ func TestConnectionAddressParsing(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Fatalf("encoderNetworkAddress(%q) = %q, %v; want %q", tc.value, got, err, tc.want)
 		}
+	}
+}
+
+func TestADBAuthorizationPendingRecognizesConnectAndStateMessages(t *testing.T) {
+	for _, output := range []string{
+		"unauthorized",
+		"failed to authenticate to 192.168.1.20:5555",
+		"device authorization is pending",
+	} {
+		if !adbAuthorizationPending(output) {
+			t.Errorf("adbAuthorizationPending(%q) = false", output)
+		}
+	}
+	if adbAuthorizationPending("connected to 192.168.1.20:5555", "device") {
+		t.Fatal("authorized ADB connection was reported as pending")
 	}
 }
 

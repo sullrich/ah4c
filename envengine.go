@@ -57,11 +57,11 @@ type Settings struct {
 }
 
 var varCatalog = []VarSpec{
-	{Key: "IPADDRESS", Label: "Proxy address", Desc: "Hostname or IP address of this ah4c proxy, including its port when the M3U does not supply one.", Placeholder: "ah4c:7654", Type: varString, Applies: applyLive},
-	{Key: "CHANNELSIP", Label: "Channels DVR host", Desc: "Hostname or IP address of the Channels DVR server.", Placeholder: "channels-dvr", Type: varString, Applies: applyLive},
+	{Key: "IPADDRESS", Label: "This ah4c address", Desc: "The network address other devices use to reach ah4c.", Placeholder: "192.168.1.50:7654", Type: varString, Applies: applyLive},
+	{Key: "CHANNELSIP", Label: "Channels DVR address", Desc: "Open Channels DVR in a browser and copy the server address and port from the address bar.", Placeholder: "192.168.1.20:8089", Type: varString, Applies: applyLive},
 	{Key: "CHANNELS_M3U", Label: "Channel list in Channels DVR", Desc: "The last M3U successfully added to Channels DVR. The Channel M3Us page is the easiest place to change it.", Placeholder: "all.m3u", Type: varString, Applies: applyLive},
 	{Key: "STREAMER_APP", Label: "Streamer app", Desc: "Optional script package used when a tuner needs to control a streaming device. You can leave this blank and choose one later.", Placeholder: "scripts/firetv/hulu", Type: varEnum, Applies: applyRestart},
-	{Key: "PYATV", Label: "Use pyatv", Desc: "Use Apple TV tuners through pyatv instead of adb-based tuners.", Type: varBool, Applies: applyRestart},
+	{Key: "PYATV", Label: "Use pyatv", Desc: "Use Apple TV tuners through pyatv instead of adb-based tuners. Changing this requires a restart.", Type: varBool, Applies: applyRestart},
 	{Key: "FASTCHANNELS_URL", Label: "FastChannels URL", Desc: "Base URL of the FastChannels container used by its ah4c tuning integration.", Placeholder: "http://fastchannels:8000", Type: varURL, Applies: applyLive, ScriptVaries: true},
 	{Key: "ALERT_SMTP_SERVER", Label: "SMTP server", Desc: "SMTP server and port used for failure alerts.", Placeholder: "smtp.gmail.com:587", Type: varString, Applies: applyLive},
 	{Key: "ALERT_AUTH_SERVER", Label: "SMTP auth server", Desc: "Authentication server used for alert e-mail.", Placeholder: "smtp.gmail.com", Type: varString, Applies: applyLive},
@@ -85,7 +85,7 @@ var varCatalog = []VarSpec{
 	{Key: "NULL_FRAME_INSERTION", Label: "Null frame insertion", Desc: "Fill encoder stalls with MPEG-TS NULL packets so the DVR does not see a zero-byte gap.", Type: varBool, Applies: applyLive},
 	{Key: "PLAYBACK_DETECTION", Label: "Playback detection", Desc: "Hold the stream until the device reports audio and a moving picture, then start on a keyframe.", Type: varBool, Applies: applyLive},
 	{Key: "PLAYBACK_STATIC_TIMEOUT", Label: "Static-player timeout", Desc: "Seconds the prior player may remain before playback detection falls back to motion alone.", Placeholder: "2", Type: varSeconds, Applies: applyLive},
-	{Key: "PLAYBACK_DELAY", Label: "Playback delay", Desc: "Hold each tune before handing the DVR the program; accepts bare seconds or a duration and is capped at 10m.", Placeholder: "30s", Type: varDuration, Applies: applyRestart},
+	{Key: "PLAYBACK_DELAY", Label: "Playback delay", Desc: "Hold each tune before handing the DVR the program; accepts bare seconds or a duration such as 30s, 2m or 1h.", Placeholder: "30s", Type: varDuration, Applies: applyRestart},
 	{Key: "ENCODER_CODEC", Label: "Encoder codec", Desc: "Video codec emitted by the encoder; filler and pre-roll are prepared to match it.", Type: varEnum, Applies: applyRestart, Enum: []string{"h264", "h265"}},
 	{Key: "HEARTBEAT_INTERVAL", Label: "Heartbeat interval", Desc: "Seconds between supported scripts' keepalive keyevents; 0 disables them.", Placeholder: "180", Type: varSeconds, Applies: applyLive, ScriptVaries: true},
 	{Key: "ALLOW_DEBUG_VIDEO_PREVIEW", Label: "Debug video preview", Desc: "Enable the browser video preview used for debugging.", Type: varBool, Applies: applyRestart},
@@ -555,7 +555,7 @@ func printModeRequested() bool {
 	return false
 }
 
-func logMaterialization(s Settings, sets map[string]string, locked map[string]bool) {
+func logMaterialization(sets map[string]string, locked map[string]bool, sources map[string]string) {
 	keys := make([]string, 0, len(sets)+len(locked))
 	seen := map[string]bool{}
 	for key := range sets {
@@ -572,7 +572,11 @@ func logMaterialization(s Settings, sets map[string]string, locked map[string]bo
 		if locked[key] {
 			logger("[CONFIG] %s locked by environment", key)
 		} else {
-			logger("[CONFIG] %s set from settings.json", key)
+			source := sources[key]
+			if source == "" {
+				source = "settings.json"
+			}
+			logger("[CONFIG] %s set from %s", key, source)
 		}
 	}
 }
@@ -635,7 +639,7 @@ func envengineStartup() {
 				logger("[CONFIG] could not set %s: %v", key, err)
 			}
 		}
-		logMaterializationSources(sets, locked, sources)
+		logMaterialization(sets, locked, sources)
 	} else {
 		for key, value := range s.Vars {
 			if !locked[key] && os.Getenv(key) == value {
@@ -661,32 +665,10 @@ func envengineStartup() {
 	envDockerManaged = supervised
 	envEngineMu.Unlock()
 	if supervised {
-		logMaterialization(s, sets, locked)
+		logMaterialization(sets, locked, nil)
 	}
 	withWatchdog = envBoolTrueOrOne(os.Getenv("CC_WATCHDOG"))
 	warnIfConfigNotPersistent()
-}
-
-func logMaterializationSources(sets map[string]string, locked map[string]bool, sources map[string]string) {
-	keys := make([]string, 0, len(sets)+len(locked))
-	seen := map[string]bool{}
-	for key := range sets {
-		keys = append(keys, key)
-		seen[key] = true
-	}
-	for key := range locked {
-		if !seen[key] {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if locked[key] {
-			logger("[CONFIG] %s locked by environment", key)
-		} else {
-			logger("[CONFIG] %s set from %s", key, sources[key])
-		}
-	}
 }
 
 func envBoolTrueOrOne(value string) bool {

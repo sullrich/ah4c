@@ -212,10 +212,21 @@ func prerollStartup() {
 // prerollInDir picks preroll.* from a directory if there is one, otherwise the
 // only file, otherwise the first by name with a note in the log. Hidden files
 func prerollInDir(dir string) string {
-	entries, err := os.ReadDir(dir)
+	pick, count, err := pickPrerollFile(dir)
 	if err != nil {
 		logger("[PREROLL] %s cannot be listed (%v); holds will use NULL packets", dir, err)
 		return ""
+	}
+	if count > 1 {
+		logger("[PREROLL] %s holds %d files; using %s (name one preroll.* to choose)", dir, count, filepath.Base(pick))
+	}
+	return pick
+}
+
+func pickPrerollFile(dir string) (string, int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", 0, err
 	}
 	var files []string
 	for _, e := range entries {
@@ -224,7 +235,7 @@ func prerollInDir(dir string) string {
 		}
 	}
 	if len(files) == 0 {
-		return ""
+		return "", 0, nil
 	}
 	sort.Strings(files)
 	pick := files[0]
@@ -234,10 +245,7 @@ func prerollInDir(dir string) string {
 			break
 		}
 	}
-	if len(files) > 1 {
-		logger("[PREROLL] %s holds %d files; using %s (name one preroll.* to choose)", dir, len(files), pick)
-	}
-	return filepath.Join(dir, pick)
+	return filepath.Join(dir, pick), len(files), nil
 }
 
 // preparePreroll turns the file at src into a transport stream at

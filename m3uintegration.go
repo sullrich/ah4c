@@ -135,7 +135,11 @@ func serverBaseURL(value, defaultPort string) (string, error) {
 		return "", fmt.Errorf("server address is empty")
 	}
 	if !strings.Contains(value, "://") {
-		value = "http://" + value
+		if net.ParseIP(value) != nil && strings.Contains(value, ":") {
+			value = "http://[" + value + "]"
+		} else {
+			value = "http://" + value
+		}
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -143,6 +147,9 @@ func serverBaseURL(value, defaultPort string) (string, error) {
 	}
 	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("server address must not include a path")
+	}
+	if err := validateURLPort(parsed); err != nil {
+		return "", err
 	}
 	port := parsed.Port()
 	if port == "" {
