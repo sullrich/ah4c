@@ -1095,13 +1095,11 @@ function restartReasonLabels() {
 }
 
 function showRestartPrompt() {
-    const reasons = restartReasonLabels();
-    const detail = reasons.length ? ` to apply ${readableList(reasons)}` : ' to apply these changes';
     const confirmButton = byId('restart-prompt-confirm');
     byId('restart-prompt-title').textContent = 'Restart container?';
     byId('restart-prompt-message').textContent = state.dockerManaged
-        ? `Settings saved. Restart the container${detail}.`
-        : `Settings saved. Restart the container manually${detail}.`;
+        ? 'Settings saved. Restart the container to apply these changes.'
+        : 'Settings saved. Restart the container manually to apply these changes.';
     byId('restart-prompt-warning').classList.add('hidden');
     confirmButton.dataset.force = 'false';
     confirmButton.textContent = 'Restart container';
