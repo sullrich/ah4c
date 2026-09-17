@@ -260,6 +260,27 @@
                 <button id="tuner-preview-retry" class="btn btn-primary" type="button">Retry preview</button>
             </div>
             <p id="tuner-preview-hint" class="modal-hint"></p>
+            <div class="remote">
+                <div class="remote-dpad">
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="up" type="button" title="Up"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg></button>
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="left" type="button" title="Left"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 6 8 12 14 18"/></svg></button>
+                    <button class="btn dpad-center" data-tuner-preview-action="select" type="button" title="Select">OK</button>
+                    <button class="btn" data-tuner-preview-action="right" type="button" title="Right"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 6 16 12 10 18"/></svg></button>
+                    <span></span>
+                    <button class="btn" data-tuner-preview-action="down" type="button" title="Down"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 10 12 16 18 10"/></svg></button>
+                    <span></span>
+                </div>
+                <div class="remote-keys">
+                    <button class="btn btn-sm" data-tuner-preview-action="back" type="button">Back</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="home" type="button">Home</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="play" type="button">Play / Pause</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="wake" type="button">Wake</button>
+                    <button class="btn btn-sm" data-tuner-preview-action="sleep" type="button">Sleep</button>
+                    <button class="btn btn-danger btn-sm" data-tuner-preview-action="reboot" type="button">Reboot</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -834,6 +855,18 @@ function closeTunerPreview() {
     byId('tuner-preview-modal').classList.remove('open');
 }
 
+async function sendTunerPreviewKey(action) {
+    if (tunerPreviewNumber === null) return;
+    if (action === 'reboot' && !window.confirm('Reboot this device?')) return;
+    const hint = byId('tuner-preview-hint');
+    try {
+        const response = await fetch(`/api/tuner/${tunerPreviewNumber}/control/${action}`, {method:'POST'});
+        if (!response.ok) throw new Error();
+    } catch (_) {
+        hint.textContent = 'Control failed. This device may not be reachable over ADB.';
+    }
+}
+
 function selectedStreamerPath(root = document) {
     const custom = root.querySelector('[data-custom-streamer]')?.value.trim();
     const selected = root.querySelector('[data-setting="STREAMER_APP"]')?.value.trim() || '';
@@ -1388,6 +1421,9 @@ byId('tuner-order-modal').addEventListener('click', event => {
 });
 byId('tuner-preview-close').addEventListener('click', closeTunerPreview);
 byId('tuner-preview-retry').addEventListener('click', startTunerPreview);
+document.querySelectorAll('[data-tuner-preview-action]').forEach(button => {
+    button.addEventListener('click', () => sendTunerPreviewKey(button.dataset.tunerPreviewAction));
+});
 byId('tuner-preview-modal').addEventListener('click', event => {
     if (event.target === byId('tuner-preview-modal')) closeTunerPreview();
 });
