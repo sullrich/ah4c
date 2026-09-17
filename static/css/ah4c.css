@@ -507,6 +507,8 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .settings-actions { display: flex; align-items: center; gap: .7rem; padding: 1rem 1.15rem; margin-top: .9rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); }
 .settings-actions .btn { flex: 0 0 auto; white-space: nowrap; }
 #save-status { flex: 1 1 16rem; min-width: 0; }
+.m3u-delete-modal { width: min(460px, 100%); }
+.m3u-delete-modal p { margin: 0; color: var(--text-muted); line-height: 1.5; }
 .m3u-upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
 .m3u-upload-row input[type="file"] { width: 100%; padding: .42rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: .76rem; }
 .m3u-upload-row input[type="file"]::file-selector-button { margin-right: .6rem; padding: .3rem .55rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }

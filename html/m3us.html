@@ -109,9 +109,21 @@
 
         <div class="btn-row"><button class="btn" onclick="window.location.href='/'">Back to home</button></div>
     </div>
+
+    <div id="m3u-delete-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="m3u-delete-title">
+        <div class="modal m3u-delete-modal">
+            <div id="m3u-delete-title" class="card-title">Delete channel list?</div>
+            <p id="m3u-delete-message"></p>
+            <div class="btn-row">
+                <button id="m3u-delete-confirm" class="btn btn-danger" type="button">Delete</button>
+                <button id="m3u-delete-cancel" class="btn" type="button">Cancel</button>
+            </div>
+        </div>
+    </div>
     <script>
         const setup = document.getElementById('m3u-setup');
         const choice = document.getElementById('m3u-choice');
+        let pendingM3UDelete = '';
 
         function normalizedBase(value, defaultPort) {
             value = String(value || '').trim();
@@ -244,9 +256,21 @@
             }
         }
 
+        function requestDeleteM3U(file) {
+            pendingM3UDelete = file;
+            document.getElementById('m3u-delete-message').textContent = `Are you sure you want to delete ${file}?`;
+            document.getElementById('m3u-delete-modal').classList.add('open');
+        }
+
+        function closeDeleteM3U() {
+            pendingM3UDelete = '';
+            document.getElementById('m3u-delete-modal').classList.remove('open');
+        }
+
         async function deleteM3U(file) {
-            if (!confirm(`Are you sure you want to delete ${file}? This removes the complete channel-list file.`)) return;
+            if (!file) return;
             const status = document.getElementById('m3u-file-status');
+            closeDeleteM3U();
             status.className = 'm3u-action-status muted';
             status.textContent = `Deleting ${file}…`;
             try {
@@ -264,7 +288,16 @@
 
         document.getElementById('upload-m3u').addEventListener('click', uploadM3U);
         document.querySelectorAll('[data-delete-m3u]').forEach(button => {
-            button.addEventListener('click', () => deleteM3U(button.dataset.deleteM3u));
+            button.addEventListener('click', () => requestDeleteM3U(button.dataset.deleteM3u));
+        });
+
+        document.getElementById('m3u-delete-confirm').addEventListener('click', () => deleteM3U(pendingM3UDelete));
+        document.getElementById('m3u-delete-cancel').addEventListener('click', closeDeleteM3U);
+        document.getElementById('m3u-delete-modal').addEventListener('click', event => {
+            if (event.target === document.getElementById('m3u-delete-modal')) closeDeleteM3U();
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && document.getElementById('m3u-delete-modal').classList.contains('open')) closeDeleteM3U();
         });
 
         if (choice) {
