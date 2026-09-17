@@ -245,7 +245,7 @@
         }
 
         async function deleteM3U(file) {
-            if (!confirm(`Delete ${file}? This removes the complete channel-list file.`)) return;
+            if (!confirm(`Are you sure you want to delete ${file}? This removes the complete channel-list file.`)) return;
             const status = document.getElementById('m3u-file-status');
             status.className = 'm3u-action-status muted';
             status.textContent = `Deleting ${file}…`;
