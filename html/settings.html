@@ -1068,7 +1068,7 @@ async function saveSettings(restartAfter = false) {
     }
     state = payload;
     status.classList.remove('validation-error');
-    status.textContent = 'Saved.';
+    status.textContent = '';
     renderCatalog(); suggestWizardTimezone(); renderTuners(); renderExtra(); renderHost(); updateRestartUI();
     if (restartAfter && state.restartNeeded) {
         await restart();
