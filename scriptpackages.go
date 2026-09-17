@@ -35,6 +35,30 @@ type githubContentsEntry struct {
 // installScriptPackage downloads one explicitly selected scripts/package or
 // scripts/device/app package. It stages every file beside the destination and swaps the complete
 // directory into place, so a network failure cannot damage a working package.
+func installSelectedScriptPackages(ctx context.Context, selection string, update bool) error {
+	selection = canonicalStreamerSelection(selection)
+	target := filepath.Join(strings.Split(selection, "/")...)
+	if scriptPackageComplete(target) && !update {
+		return nil
+	}
+	if err := installScriptPackage(ctx, selection); err != nil {
+		return err
+	}
+	if selection != "scripts/all/all" || !update {
+		return nil
+	}
+	var failures []error
+	for _, installed := range discoverLocalStreamers() {
+		if installed == selection {
+			continue
+		}
+		if err := installScriptPackage(ctx, installed); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", installed, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
 func installScriptPackage(ctx context.Context, selection string) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
