@@ -39,14 +39,6 @@ var (
 	holdAsked time.Duration
 )
 
-// holdMost is as long as a tune is held, whatever PLAYBACK_DELAY asks for.
-// Forty-five seconds is the longest hold watched land at the live edge; sixty
-// and ninety come in behind the guide and stay there. Why is not yet settled
-// — see holdRate — so this is lifted to ten minutes only to test longer holds,
-// and is not a claim that they work. It is a guard against a typo, not a
-// measured limit. Put it back to forty-five if a real answer does not arrive.
-const holdMost = 10 * time.Minute
-
 const (
 	// The wait's byte diet: volume through the DVR's detection window, then
 	// a keepalive. Every byte here is one the DVR stores ahead of the show.
@@ -132,11 +124,6 @@ func tuneHoldStartup() {
 		} else {
 			holdDelay = d
 			holdAsked = d
-			if holdDelay > holdMost {
-				logger("[HOLD] PLAYBACK_DELAY %s is longer than %s, which is as long as this build will hold a tune; holding for %s",
-					holdWords(holdDelay), holdWords(holdMost), holdWords(holdMost))
-				holdDelay = holdMost
-			}
 		}
 	}
 	prerollStartup()
