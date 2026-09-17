@@ -130,18 +130,41 @@
             }
         }
 
+        function copyAddressWithoutClipboardAPI(value) {
+            const copyArea = document.createElement('textarea');
+            copyArea.value = value;
+            copyArea.setAttribute('readonly', '');
+            copyArea.style.position = 'fixed';
+            copyArea.style.left = '0';
+            copyArea.style.top = '0';
+            copyArea.style.width = '1px';
+            copyArea.style.height = '1px';
+            copyArea.style.opacity = '0';
+            document.body.appendChild(copyArea);
+            copyArea.focus();
+            copyArea.select();
+            copyArea.setSelectionRange(0, copyArea.value.length);
+            const copied = document.execCommand('copy');
+            copyArea.remove();
+            return copied;
+        }
+
         async function copyAddress() {
             const input = document.getElementById('m3u-address');
             if (!input.value) return;
-            try {
-                await navigator.clipboard.writeText(input.value);
-            } catch (_) {
-                input.select();
-                document.execCommand('copy');
+            let copied = false;
+            if (window.isSecureContext && navigator.clipboard?.writeText) {
+                try {
+                    await navigator.clipboard.writeText(input.value);
+                    copied = true;
+                } catch (_) {}
             }
+            if (!copied) copied = copyAddressWithoutClipboardAPI(input.value);
             const status = document.getElementById('m3u-action-status');
-            status.className = 'm3u-action-status connection-state--ready';
-            status.textContent = 'Address copied. Paste it into the Custom Channels M3U URL box.';
+            status.className = copied ? 'm3u-action-status connection-state--ready' : 'm3u-action-status connection-state--error';
+            status.textContent = copied
+                ? 'Address copied. Paste it into the Custom Channels M3U URL box.'
+                : 'Your browser blocked copying. Open “Adding it by hand,” select the address, and copy it.';
         }
 
         async function addToChannels() {
