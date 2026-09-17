@@ -508,19 +508,6 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 		if key == "STREAMER_APP" {
 			value = canonicalStreamerSelection(value)
 		}
-		if key == "IPADDRESS" || key == "CHANNELSIP" {
-			defaultPort := "7654"
-			if key == "CHANNELSIP" {
-				defaultPort = "8089"
-			}
-			if value != "" {
-				var err error
-				value, err = serverBaseURL(value, defaultPort)
-				if err != nil {
-					return Settings{}, fmt.Errorf("%s: %v", key, err)
-				}
-			}
-		}
 		if value == "" {
 			continue
 		}
@@ -838,7 +825,7 @@ func environmentSetupReady(lookup func(string) string) bool {
 }
 
 func discoverLocalStreamers() []string {
-	return mergeStreamers(discoverLocalStreamersAt("scripts"), discoverLocalStreamersAt("/tmp/scripts"))
+	return discoverLocalStreamersAt("scripts")
 }
 
 func discoverLocalStreamersAt(root string) []string {

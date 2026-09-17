@@ -3,22 +3,35 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-var localScriptsRootOverride string
+const (
+	localScriptFileLimit  = 8 << 20
+	localScriptTotalLimit = 32 << 20
+)
+
+var (
+	localScriptsRootOverride string
+	scriptUploadMu           sync.Mutex
+)
 
 func registerScriptConfigRoutes(r *gin.Engine) {
 	r.GET("/api/config/streamers", streamersConfigHandler)
 	r.GET("/api/config/local-scripts", localScriptsConfigHandler)
+	r.POST("/api/config/local-scripts", uploadLocalScriptsConfigHandler)
 }
 
 func streamersConfigHandler(c *gin.Context) {
@@ -77,6 +90,135 @@ func localScriptsRoot() (string, error) {
 		return filepath.Abs(localScriptsRootOverride)
 	}
 	return filepath.Abs("scripts")
+}
+
+func uploadLocalScriptsConfigHandler(c *gin.Context) {
+	scriptUploadMu.Lock()
+	defer scriptUploadMu.Unlock()
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, localScriptTotalLimit+(1<<20))
+	if err := c.Request.ParseMultipartForm(localScriptTotalLimit); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "The script upload is too large or could not be read."})
+		return
+	}
+	defer c.Request.MultipartForm.RemoveAll()
+	root, err := localScriptsRoot()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not locate the local scripts folder"})
+		return
+	}
+	selection, err := createLocalScriptPackage(root, c.PostForm("device"), c.PostForm("app"), c.Request.MultipartForm.File["files"])
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, os.ErrExist) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"selection": selection, "message": "Scripts uploaded."})
+}
+
+func createLocalScriptPackage(root, device, app string, files []*multipart.FileHeader) (string, error) {
+	device = strings.TrimSpace(device)
+	app = strings.TrimSpace(app)
+	if !validScriptPathPart(device) || (app != "" && !validScriptPathPart(app)) {
+		return "", fmt.Errorf("package, device and app names may use letters, numbers, dots, underscores and hyphens")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("choose the script files to upload")
+	}
+	seen := make(map[string]bool, len(files))
+	total := int64(0)
+	for _, file := range files {
+		name := file.Filename
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			return "", fmt.Errorf("script filename %q is not safe", name)
+		}
+		if seen[name] {
+			return "", fmt.Errorf("script filename %q was selected more than once", name)
+		}
+		seen[name] = true
+		if file.Size < 0 || file.Size > localScriptFileLimit {
+			return "", fmt.Errorf("%s is larger than the 8 MB per-file limit", name)
+		}
+		total += file.Size
+		if total > localScriptTotalLimit {
+			return "", fmt.Errorf("the selected scripts are larger than the 32 MB upload limit")
+		}
+	}
+	var missing []string
+	for _, required := range requiredStreamerFiles {
+		if !seen[required] {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("the package is missing required files: %s", strings.Join(missing, ", "))
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return "", fmt.Errorf("could not create the local scripts folder: %w", err)
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("could not open the local scripts folder: %w", err)
+	}
+	parent := rootReal
+	packageName := device
+	selection := "scripts/" + device
+	if app != "" {
+		deviceDir := filepath.Join(rootReal, device)
+		if err := os.MkdirAll(deviceDir, 0755); err != nil {
+			return "", fmt.Errorf("could not create the device folder: %w", err)
+		}
+		deviceReal, err := filepath.EvalSymlinks(deviceDir)
+		if err != nil || filepath.Dir(deviceReal) != rootReal {
+			return "", fmt.Errorf("the device folder is outside the local scripts folder")
+		}
+		parent = deviceReal
+		packageName = app
+		selection += "/" + app
+	}
+	target := filepath.Join(parent, packageName)
+	if _, err := os.Lstat(target); err == nil {
+		return "", fmt.Errorf("%s already exists: %w", selection, os.ErrExist)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("could not check the destination folder: %w", err)
+	}
+	temporary, err := os.MkdirTemp(parent, "."+packageName+"-upload-")
+	if err != nil {
+		return "", fmt.Errorf("could not prepare the script upload: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+	for _, header := range files {
+		source, err := header.Open()
+		if err != nil {
+			return "", fmt.Errorf("could not read %s: %w", header.Filename, err)
+		}
+		destination, err := os.OpenFile(filepath.Join(temporary, header.Filename), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
+		if err != nil {
+			source.Close()
+			return "", fmt.Errorf("could not create %s: %w", header.Filename, err)
+		}
+		written, copyErr := io.Copy(destination, io.LimitReader(source, localScriptFileLimit+1))
+		closeErr := destination.Close()
+		source.Close()
+		if copyErr != nil || closeErr != nil {
+			return "", fmt.Errorf("could not save %s", header.Filename)
+		}
+		if written > localScriptFileLimit {
+			return "", fmt.Errorf("%s is larger than the 8 MB per-file limit", header.Filename)
+		}
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		return "", fmt.Errorf("could not finish the script package: %w", err)
+	}
+	committed = true
+	return selection, nil
 }
 
 func readLocalScriptDirectory(root, relative string) (localScriptDirectory, error) {
