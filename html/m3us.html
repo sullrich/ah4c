@@ -19,6 +19,7 @@
 			<a href="/status/andlogs">Activity &amp; Logs</a>
 			<a href="/logs">Logs</a>
 			<a href="/captions">Closed Captions</a>
+			<a href="/settings">Settings</a>
 			<a href="/m3us" class="active">Channel M3Us</a>
 			<a href="/allm3u">Create all.m3u</a>
 			<a href="/routes">API Routes</a>
@@ -30,25 +31,289 @@
 	</div>
 
     <div class="page">
+        <div class="card" id="m3u-file-manager">
+            <div class="card-title">Manage channel-list files</div>
+            <p class="section-help" style="margin-top:0;">Upload an <code>.m3u</code> file into AH4C's persistent M3U folder. Existing files with the same name can be replaced after confirmation.</p>
+            <div class="m3u-upload-row">
+                <input id="m3u-upload-file" type="file" accept=".m3u,application/x-mpegURL,audio/x-mpegurl">
+                <button class="btn btn-primary" id="upload-m3u" type="button">Upload M3U</button>
+            </div>
+            <div id="m3u-file-status" class="m3u-action-status muted" role="status"></div>
+        </div>
 
+        <div class="card" id="m3u-setup" data-proxy-address="{{.proxyAddress}}" data-channels-dvr="{{.channelsDVR}}" data-selected-m3u="{{.selectedM3U}}">
+            <div class="card-title">Add your channels to Channels DVR</div>
+            {{if .m3us}}
+            <p class="section-help" style="margin-top:0;">A channel list is the group of stations that will appear in the Channels DVR guide. Choose one list below; ah4c handles the address and the Channels DVR setup for you.</p>
+            <div class="settings-grid">
+                <div class="setting-field">
+                    <div class="setting-label"><label for="m3u-choice">Which channel list do you want to use?</label></div>
+                    <select id="m3u-choice">
+                        {{range .m3us}}<option value="{{.}}">{{.}}</option>{{end}}
+                    </select>
+                    <div class="setting-description"><span class="mono">all.m3u</span> is the combined list when you created one on the Create all.m3u page.</div>
+                </div>
+                <div class="setting-field">
+                    <div class="setting-label"><label>Channels DVR server</label></div>
+                    <div class="m3u-readout mono" id="channels-dvr-readout">{{if .channelsDVR}}{{.channelsDVR}}{{else}}Not set yet{{end}}</div>
+                    <div class="setting-description">This comes from the Channels DVR host in Settings.</div>
+                </div>
+            </div>
+
+            <div class="m3u-choice-summary">
+                <div>
+                    <span class="m3u-choice-label">Selected channel list</span>
+                    <strong class="mono" id="selected-m3u-name"></strong>
+                </div>
+                <span id="current-m3u" class="badge badge-idle">Not added yet</span>
+            </div>
+
+            <p class="section-help">Pressing the button creates or updates one source named <strong>AH4C</strong> in Channels DVR. Choosing another list later changes only that AH4C source; it does not touch your other TV sources.</p>
+            <div class="btn-row">
+                <button class="btn btn-primary" id="add-to-channels" type="button">Add this list to Channels DVR</button>
+                <button class="btn" id="copy-m3u" type="button">Copy address instead</button>
+            </div>
+            <div id="m3u-action-status" class="m3u-action-status muted" role="status"></div>
+
+            <details class="m3u-copy-details">
+                <summary>Adding it by hand</summary>
+                <p class="section-help">Copy this address, then open Channels DVR and go to <strong>Settings → Sources → Add Source → Custom Channels</strong>. Paste it into the M3U URL box and choose MPEG-TS.</p>
+                <div class="m3u-copy-row">
+                    <input type="text" id="m3u-address" class="mono" readonly>
+                    <button class="btn btn-sm" id="copy-m3u-second" type="button">Copy address</button>
+                </div>
+            </details>
+            {{else}}
+            <div class="empty-state"><strong>No channel lists are available yet.</strong> Add an M3U file to the m3u folder or create <span class="mono">all.m3u</span> first.</div>
+            {{end}}
+        </div>
+
+        {{if .m3us}}
         <div class="card">
+            <div class="card-title">Edit channel lists</div>
+            <p class="section-help">These are the channel lists stored in ah4c. Editing one changes what Channels DVR receives the next time it refreshes that list.</p>
             <div class="menu-grid">
                 {{range .m3us}}
-                <a href="/editm3u/{{.}}" class="menu-item">
-                    <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
-                    <span class="menu-label mono">{{.}}</span>
-                </a>
+                <div class="m3u-file-item menu-item" data-m3u-file="{{.}}">
+                    <a href="/editm3u/{{.}}" class="m3u-file-link">
+                        <span class="menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="8 3 12 7 16 3"/></svg></span>
+                        <span class="menu-label mono">{{.}}</span>
+                        <span class="menu-desc">Open and edit this channel list</span>
+                    </a>
+                    <button class="btn btn-danger btn-sm" data-delete-m3u="{{.}}" type="button">Delete</button>
+                </div>
                 {{end}}
             </div>
         </div>
+        {{end}}
 
-        <div class="btn-row">
-            <button class="btn btn-danger" onclick="cancel()">Cancel</button>
+        <div class="btn-row"><button class="btn" onclick="window.location.href='/'">Back to home</button></div>
+    </div>
+
+    <div id="m3u-delete-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="m3u-delete-title">
+        <div class="modal m3u-delete-modal">
+            <div id="m3u-delete-title" class="card-title">Delete channel list?</div>
+            <p id="m3u-delete-message"></p>
+            <div class="btn-row">
+                <button id="m3u-delete-confirm" class="btn btn-danger" type="button">Delete</button>
+                <button id="m3u-delete-cancel" class="btn" type="button">Cancel</button>
+            </div>
         </div>
     </div>
     <script>
-        function cancel() {
-            window.location.href = "/";
+        const setup = document.getElementById('m3u-setup');
+        const choice = document.getElementById('m3u-choice');
+        let pendingM3UDelete = '';
+
+        function normalizedBase(value, defaultPort) {
+            value = String(value || '').trim();
+            if (!value) return '';
+            if (!value.includes('://')) value = 'http://' + value;
+            try {
+                const parsed = new URL(value);
+                if (!parsed.port) parsed.port = defaultPort;
+                return parsed.origin;
+            } catch (_) {
+                return '';
+            }
+        }
+
+        function updateChoice() {
+            if (!choice) return;
+            const file = choice.value;
+            const base = normalizedBase(setup.dataset.proxyAddress, '7654');
+            const unavailable = !base;
+            document.getElementById('selected-m3u-name').textContent = file;
+            document.getElementById('m3u-address').value = unavailable ? '' : base + '/m3u/' + encodeURIComponent(file);
+            document.getElementById('add-to-channels').disabled = unavailable;
+            document.getElementById('copy-m3u').disabled = unavailable;
+            document.getElementById('copy-m3u-second').disabled = unavailable;
+            if (unavailable) {
+                const status = document.getElementById('m3u-action-status');
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'Set “This ah4c address” in Settings before adding or copying a channel list.';
+            }
+        }
+
+        function copyAddressWithoutClipboardAPI(value) {
+            const copyArea = document.createElement('textarea');
+            copyArea.value = value;
+            copyArea.setAttribute('readonly', '');
+            copyArea.style.position = 'fixed';
+            copyArea.style.left = '0';
+            copyArea.style.top = '0';
+            copyArea.style.width = '1px';
+            copyArea.style.height = '1px';
+            copyArea.style.opacity = '0';
+            document.body.appendChild(copyArea);
+            copyArea.focus();
+            copyArea.select();
+            copyArea.setSelectionRange(0, copyArea.value.length);
+            const copied = document.execCommand('copy');
+            copyArea.remove();
+            return copied;
+        }
+
+        async function copyAddress() {
+            const input = document.getElementById('m3u-address');
+            if (!input.value) return;
+            let copied = false;
+            if (window.isSecureContext && navigator.clipboard?.writeText) {
+                try {
+                    await navigator.clipboard.writeText(input.value);
+                    copied = true;
+                } catch (_) {}
+            }
+            if (!copied) copied = copyAddressWithoutClipboardAPI(input.value);
+            const status = document.getElementById('m3u-action-status');
+            status.className = copied ? 'm3u-action-status connection-state--ready' : 'm3u-action-status connection-state--error';
+            status.textContent = copied
+                ? 'Address copied. Paste it into the Custom Channels M3U URL box.'
+                : 'Your browser blocked copying. Open “Adding it by hand,” select the address, and copy it.';
+        }
+
+        async function addToChannels() {
+            const button = document.getElementById('add-to-channels');
+            const status = document.getElementById('m3u-action-status');
+            button.disabled = true;
+            status.className = 'm3u-action-status muted';
+            status.textContent = 'Adding ' + choice.value + ' to Channels DVR…';
+            try {
+                const response = await fetch('/api/m3u/add-to-channels', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({file: choice.value})
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Channels DVR did not accept the channel list.');
+                const current = document.getElementById('current-m3u');
+                current.className = 'badge badge-active';
+                current.textContent = 'In Channels DVR: ' + payload.file;
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = payload.file + ' was added to Channels DVR. You are done.' + (payload.message ? ' ' + payload.message : '');
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            } finally {
+                button.disabled = !normalizedBase(setup.dataset.proxyAddress, '7654');
+            }
+        }
+
+        async function uploadM3U() {
+            const input = document.getElementById('m3u-upload-file');
+            const button = document.getElementById('upload-m3u');
+            const status = document.getElementById('m3u-file-status');
+            const file = input.files?.[0];
+            if (!file) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'Choose an .m3u file first.';
+                return;
+            }
+            if (!file.name.endsWith('.m3u') || file.name.trim() !== file.name) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = 'Use a plain filename ending in lowercase .m3u, with no leading or trailing spaces.';
+                return;
+            }
+            const replacing = [...document.querySelectorAll('[data-m3u-file]')].some(item => item.dataset.m3uFile === file.name);
+            if (replacing && !confirm(`Replace ${file.name}?`)) return;
+            button.disabled = true;
+            status.className = 'm3u-action-status muted';
+            status.textContent = replacing ? `Replacing ${file.name}…` : `Uploading ${file.name}…`;
+            try {
+                const form = new FormData();
+                form.append('file', file, file.name);
+                const response = await fetch('/api/m3u/files', {method:'POST', body:form});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'M3U upload failed.');
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = `${payload.file} was ${payload.replaced ? 'replaced' : 'uploaded'}. Reloading…`;
+                location.reload();
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function requestDeleteM3U(file) {
+            pendingM3UDelete = file;
+            document.getElementById('m3u-delete-message').textContent = `Are you sure you want to delete ${file}?`;
+            document.getElementById('m3u-delete-modal').classList.add('open');
+        }
+
+        function closeDeleteM3U() {
+            pendingM3UDelete = '';
+            document.getElementById('m3u-delete-modal').classList.remove('open');
+        }
+
+        async function deleteM3U(file) {
+            if (!file) return;
+            const status = document.getElementById('m3u-file-status');
+            closeDeleteM3U();
+            status.className = 'm3u-action-status muted';
+            status.textContent = `Deleting ${file}…`;
+            try {
+                const response = await fetch('/api/m3u/files/' + encodeURIComponent(file), {method:'DELETE'});
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'M3U deletion failed.');
+                status.className = 'm3u-action-status connection-state--ready';
+                status.textContent = `${file} was deleted. Reloading…`;
+                location.reload();
+            } catch (error) {
+                status.className = 'm3u-action-status connection-state--error';
+                status.textContent = error.message;
+            }
+        }
+
+        document.getElementById('upload-m3u').addEventListener('click', uploadM3U);
+        document.querySelectorAll('[data-delete-m3u]').forEach(button => {
+            button.addEventListener('click', () => requestDeleteM3U(button.dataset.deleteM3u));
+        });
+
+        document.getElementById('m3u-delete-confirm').addEventListener('click', () => deleteM3U(pendingM3UDelete));
+        document.getElementById('m3u-delete-cancel').addEventListener('click', closeDeleteM3U);
+        document.getElementById('m3u-delete-modal').addEventListener('click', event => {
+            if (event.target === document.getElementById('m3u-delete-modal')) closeDeleteM3U();
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && document.getElementById('m3u-delete-modal').classList.contains('open')) closeDeleteM3U();
+        });
+
+        if (choice) {
+            const saved = setup.dataset.selectedM3u;
+            const options = Array.from(choice.options).map(option => option.value);
+            choice.value = options.includes(saved) ? saved : (options.includes('all.m3u') ? 'all.m3u' : options[0]);
+            if (options.includes(saved)) {
+                const current = document.getElementById('current-m3u');
+                current.className = 'badge badge-active';
+                current.textContent = 'In Channels DVR: ' + saved;
+            }
+            choice.addEventListener('change', updateChoice);
+            document.getElementById('add-to-channels').addEventListener('click', addToChannels);
+            document.getElementById('copy-m3u').addEventListener('click', copyAddress);
+            document.getElementById('copy-m3u-second').addEventListener('click', copyAddress);
+            updateChoice();
         }
     </script>
 </body>

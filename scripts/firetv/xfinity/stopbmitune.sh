@@ -5,7 +5,9 @@
 #Debug on if uncommented
 set -x
 
-dvr="$CHANNELSIP:8089"
+dvr="${CHANNELSIP%/}"
+[[ "$dvr" =~ ^https?:// ]] || dvr="http://$dvr"
+[[ "${dvr#*://}" == *:* ]] || dvr="$dvr:8089"
 streamerIP="$1"
 streamerNoPort="${streamerIP%%:*}"
 channelNameID="$2"
@@ -13,7 +15,7 @@ adbTarget="adb -s $streamerIP"
 packageName="com.xfinity.cloudtvr.tenfoot"
 m3uName="${STREAMER_APP#*/*/}.m3u"
 m3uChannelID=$(grep -B1 "/play/tuner/$channelNameID" "/opt/m3u/$m3uName" | awk -F 'channel-id="' 'NF>1 {split($2, a, "\""); print a[1]}')
-channelNumber=$(curl -s http://$dvr/api/v1/channels | jq -r '.[] | select(.id == "'$m3uChannelID'") | .number')
+channelNumber=$(curl -s "$dvr/api/v1/channels" | jq -r '.[] | select(.id == "'$m3uChannelID'") | .number')
 [[ $SPEED_MODE == "" ]] && speedMode="false" || speedMode="$SPEED_MODE"
 read -a autoCropChannels <<< "$AUTOCROP_CHANNELS"
 printf "%s\n" "${autoCropChannels[@]}" | grep -qx "$channelNumber" && croppedChannel="true"
