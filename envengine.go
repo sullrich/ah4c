@@ -72,7 +72,7 @@ var varCatalog = []VarSpec{
 	{Key: "ALERT_WEBHOOK_URL", Label: "Alert webhook URL", Desc: "URL to GET when tuning fails; $reason is replaced with the encoded failure message.", Type: varURL, Applies: applyLive},
 	{Key: "LIVETV_ATTEMPTS", Label: "Live TV attempts", Desc: "Maximum attempts at finding a channel with Fire TV Live Guide tuning.", Placeholder: "3", Type: varInt, Applies: applyLive, ScriptVaries: true},
 	{Key: "CREATE_M3US", Label: "Create device M3Us", Desc: "Create device-specific M3Us for Amazon Prime Premium channels at startup.", Type: varBool, Applies: applyRestart},
-	{Key: "UPDATE_SCRIPTS", Label: "Refresh bundled scripts", Desc: "Replace the selected scripts with the copy bundled in the container image when ah4c starts.", Type: varBool, Applies: applyRestart},
+	{Key: "UPDATE_SCRIPTS", Label: "Update selected GitHub scripts", Desc: "Yes checks for a newer copy of only your selected scripts when ah4c starts. No keeps the stored copy unchanged. If GitHub is unavailable, ah4c keeps using the stored copy.", Type: varBool, Applies: applyRestart},
 	{Key: "UPDATE_M3US", Label: "Update sample M3Us", Desc: "Replace bundled sample M3Us at startup.", Type: varBool, Applies: applyRestart},
 	{Key: "USER_SCRIPT", Label: "Custom startup script", Desc: "Path to a custom script run alongside ah4c at container startup.", Type: varPath, Applies: applyRestart},
 	{Key: "TZ", Label: "Time zone", Desc: "Local time zone used for logs and scheduled behavior.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
@@ -91,22 +91,11 @@ var varCatalog = []VarSpec{
 }
 
 var environmentOnlyKeys = map[string]bool{
-	"AH4C_ENV_LOCKED":            true,
-	"AH4C_ENV_OWNED":             true,
-	"ALLOW_DEBUG_VIDEO_PREVIEW":  true,
-	"CC_WATCHDOG":                true,
-	"CONTAINER_NAME":             true,
-	"DOCKER_RUNTIME":             true,
-	"DOMAIN":                     true,
-	"GPU_DEVICE":                 true,
-	"HOST_DIR":                   true,
-	"HOST_PORT":                  true,
-	"HOSTNAME":                   true,
-	"NVIDIA_DRIVER_CAPABILITIES": true,
-	"NVIDIA_VISIBLE_DEVICES":     true,
-	"PREROLL_FILE":               true,
-	"SETUP_WIZARD":               true,
-	"TAG":                        true,
+	"AH4C_ENV_LOCKED":           true,
+	"AH4C_ENV_OWNED":            true,
+	"ALLOW_DEBUG_VIDEO_PREVIEW": true,
+	"CC_WATCHDOG":               true,
+	"SETUP_WIZARD":              true,
 }
 
 var hostCatalog = []VarSpec{
@@ -725,6 +714,14 @@ func envBoolTrueOrOne(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), "true") || strings.TrimSpace(value) == "1"
 }
 
+func mountPointPersistent(dir string) (bool, string) {
+	mounted, abs, _ := mountPointState(dir)
+	if mounted {
+		return true, ""
+	}
+	return false, abs
+}
+
 func mountPointState(dir string) (bool, string, string) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -765,6 +762,11 @@ type persistentMountRequirement struct {
 func requiredPersistentMounts() []persistentMountRequirement {
 	return []persistentMountRequirement{
 		{Label: "Settings", CheckPath: filepath.Dir(settingsFilePath()), ContainerPath: "/opt/config", InvalidMountRoot: "/ah4c/config"},
+		{Label: "Streaming-app controls", CheckPath: "/opt/scripts", ContainerPath: "/opt/scripts", InvalidMountRoot: "/ah4c/scripts"},
+		{Label: "Channel lists", CheckPath: "/opt/m3u", ContainerPath: "/opt/m3u", InvalidMountRoot: "/ah4c/m3u"},
+		{Label: "Android connection keys", CheckPath: "/root/.android", ContainerPath: "/root/.android", InvalidMountRoot: "/ah4c/adb"},
+		{Label: "Closed-caption files", CheckPath: "/opt/captions", ContainerPath: "/opt/captions", InvalidMountRoot: "/ah4c/captions"},
+		{Label: "Pre-roll files", CheckPath: "/opt/preroll", ContainerPath: "/opt/preroll", InvalidMountRoot: "/ah4c/preroll"},
 	}
 }
 

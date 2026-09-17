@@ -535,7 +535,7 @@ func captionStatusPayload() captionStatus {
 	persistent, dir := captionDirPersistent()
 	persistWarning := ""
 	if !persistent {
-		persistWarning = fmt.Sprintf("%s is not a bind mount, so anything downloaded here is lost when the container is recreated. Add this to your compose file and recreate it:  - ${HOST_DIR}/ah4c/captions:/opt/captions", dir)
+		persistWarning = fmt.Sprintf("%s is not a persistent folder, so anything downloaded here is lost when the container is recreated. Map a persistent host folder to /opt/captions in your container settings, then recreate the container.", dir)
 	}
 	drivers := make([]captionStatusDriver, 0, len(gpuRuntimes))
 	for _, g := range gpuRuntimes {
