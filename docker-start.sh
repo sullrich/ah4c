@@ -229,6 +229,8 @@ checkVersions() {
 # Fix hostname resolution, connect tuners, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
+  eval "$(./ah4c -print-env)"
+
   fixTunerDNS $(expandVars TUNER)
   fixEncoderDNS $(expandVars ENCODER)
 

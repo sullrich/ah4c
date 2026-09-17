@@ -101,6 +101,8 @@ atvConnections() {
   done
 }
 
+expandVars() { local v; for v in $(compgen -v "$1"); do echo "${!v}"; done; }
+
 # Check if a given script is already present in the appropriate scripts directory, and if not, copy it
 checkScripts() {
 
@@ -184,9 +186,11 @@ checkVersions() {
 # Fix hostanme resolution, connect adb devices, copy scripts and M3U files as needed, start ws-scrcpy and ah4c
 main() {
 
-  fixTunerDNS $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
-  fixEncoderDNS $ENCODER1_URL $ENCODER2_URL $ENCODER3_URL $ENCODER4_URL
-  atvConnections $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
+  eval "$(./ah4c -print-env)"
+
+  fixTunerDNS $(expandVars TUNER)
+  fixEncoderDNS $(expandVars ENCODER)
+  atvConnections $(expandVars TUNER)
   checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh atvpair.sh
   checkM3Us directv.m3u dtvosprey.m3u dtvstream.m3u foo-fighters.m3u fubo.m3u hulu.m3u livetv.m3u npo.m3u silicondust.m3u sling.m3u spectrum.m3u youtubetv_shield.m3u youtubetv.m3u
   #createM3Us $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
