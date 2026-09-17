@@ -9,7 +9,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -465,7 +464,7 @@ var gpuRuntimes = []gpuRuntime{
 		Desc:     "The Vulkan loader and the open source drivers, which cover Intel and AMD graphics. On NVIDIA the container runtime brings its own driver and only the loader is used.",
 		Packages: []string{"libvulkan1", "mesa-vulkan-drivers"},
 		Needs:    "libvulkan.so.1",
-		Note:     "Your compose file also has to pass the graphics device through, with a devices entry for /dev/dri.",
+		Note:     "Your container settings must also pass the /dev/dri graphics device through.",
 	},
 	cudaRuntime,
 }
@@ -1513,25 +1512,7 @@ func tailLines(s string, n int) string {
 // image. Downloading several hundred megabytes into somewhere that evaporates
 // is a miserable way to find that out, so it is checked and said out loud.
 func captionDirPersistent() (bool, string) {
-	abs, err := filepath.Abs(captionDir)
-	if err != nil {
-		return true, ""
-	}
-	f, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		// Not a Linux container; nothing to warn about.
-		return true, ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		// The mount point is the fifth field.
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 5 && fields[4] == abs {
-			return true, ""
-		}
-	}
-	return false, abs
+	return mountPointPersistent(captionDir)
 }
 
 // renderNodes lists the graphics devices visible inside the container.
@@ -1581,7 +1562,7 @@ func accelStatus() accelReport {
 		r.Detail = fmt.Sprintf("%s is selected but %s will not load. Download the required runtime below.", v.Name, missingEngineRequirement(v))
 	case v.Key == "vulkan" && len(r.Devices) == 0:
 		r.Headline = "Not accelerated: no graphics device in the container"
-		r.Detail = "The driver is in place but /dev/dri is not here. Add a devices entry for /dev/dri to your compose file and recreate the container."
+		r.Detail = "The driver is in place but /dev/dri is not here. Pass the /dev/dri device through in your container settings and recreate the container."
 	case !engineInstalled():
 		r.Headline = "Not accelerated: the engine build is not downloaded"
 		r.Detail = fmt.Sprintf("Download the %s build above.", v.Name)

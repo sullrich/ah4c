@@ -6,7 +6,9 @@
 set -x
 
 #Global
-dvr="$CHANNELSIP:8089"
+dvr="${CHANNELSIP%/}"
+[[ "$dvr" =~ ^https?:// ]] || dvr="http://$dvr"
+[[ "${dvr#*://}" == *:* ]] || dvr="$dvr:8089"
 channelNameID="$1"
 channelID=$(echo $1 | awk -F- '{print $2}')
 channelName=$(echo $1 | awk -F- '{print $1}')
@@ -18,7 +20,7 @@ packageName=com.xfinity.cloudtvr.tenfoot
 packageAction=com.xfinity.common.view.LaunchActivity
 m3uName="${STREAMER_APP#*/*/}.m3u"
 m3uChannelID=$(grep -B1 "/play/tuner/$channelNameID" "/opt/m3u/$m3uName" | awk -F 'channel-id="' 'NF>1 {split($2, a, "\""); print a[1]}')
-channelNumber=$(curl -s http://$dvr/api/v1/channels | jq -r '.[] | select(.id == "'$m3uChannelID'") | .number')
+channelNumber=$(curl -s "$dvr/api/v1/channels" | jq -r '.[] | select(.id == "'$m3uChannelID'") | .number')
 [[ $SPEED_MODE == "" ]] && speedMode="false" || speedMode="$SPEED_MODE"
 read -a autoCropChannels <<< "$AUTOCROP_CHANNELS"
 
@@ -66,7 +68,7 @@ activeAudioCheck() {
   local sleepBeforeAudioCheck=$3
   local sleepAfterAudioCheck=$4
   local preTuneAudioCheck=$2
-  
+
   while true; do
     sleep $sleepBeforeAudioCheck
     checkLoudness=$(ffmpeg -t 1 -i $encoderURL -filter:a ebur128 -map 0:a -f null -hide_banner - 2>&1 | awk '/I:        /{print $2}')
@@ -138,7 +140,7 @@ specialChannels() {
       echo "Not a special channel (exit nor reboot)"
       #if appFocusCheck; then
         #echo "$packageName is the app in focus, OK to tune"
-      #fi      
+      #fi
     fi
 }
 
@@ -254,8 +256,8 @@ determineCrop() {
 
 currentAiring() {
   while true; do
-    currentAiringJSON=$(curl -s "http://$dvr/devices/ANY/guide/now?time=$(date +%s)" | 
-      jq '[.[] | .Airings[] | select(.Channel == "'$channelNumber'") | 
+    currentAiringJSON=$(curl -s "$dvr/devices/ANY/guide/now?time=$(date +%s)" |
+      jq '[.[] | .Airings[] | select(.Channel == "'$channelNumber'") |
         {
           "Channel": .Channel,
           "Title": .Title,

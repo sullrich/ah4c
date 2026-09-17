@@ -16,6 +16,7 @@ services:
       - AH4C_COMPOSE=2026.09.03 # Compose file date stamp - do not change. The startup log flags it when out of date.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
+      - SETUP_WIZARD=${SETUP_WIZARD:-false} # Full environment-managed installs skip the web setup wizard. Set to true to allow it.
       # ── Tuners ──────────────────────────────────────────────────────────────
       # One trio per tuner: TUNERn_IP is the box to tune; video comes from CMDn if set, otherwise ENCODERn_URL.
       - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP, ENCODERn_URL and CMDn trio below for each beyond 9
@@ -88,6 +89,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # For the CUDA caption engine and/or an NVENC CMDn. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
       - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Set to compute,utility for the CUDA caption engine. A CMDn using h264_nvenc/hevc_nvenc also needs video - use compute,utility,video (or all).
     volumes:
+      - ${HOST_DIR}/ah4c/config:/opt/config # Settings saved from the web interface
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys

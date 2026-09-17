@@ -16,5 +16,5 @@ var cudaRuntime = gpuRuntime{
 	Packages:  []string{"libcudart12", "libcublas12"},
 	Needs:     "libcuda.so.1",
 	AlsoNeeds: cudaRuntimeLibraries,
-	Note:      "Your compose file also has to use the NVIDIA container runtime and expose the GPU with compute and utility capabilities.",
+	Note:      "Your container settings must also use the NVIDIA runtime and expose the GPU with compute and utility capabilities.",
 }
