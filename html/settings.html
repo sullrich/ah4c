@@ -237,13 +237,13 @@
 
 <script>
 const sectionKeys = {
-    proxy: ['IPADDRESS', 'CHANNELSIP'],
+    proxy: ['IPADDRESS', 'CHANNELSIP', 'TZ'],
     streamer: ['STREAMER_APP', 'UPDATE_SCRIPTS'],
     tuners: ['PYATV'],
     playback: ['NULL_FRAME_INSERTION', 'PLAYBACK_DETECTION', 'PLAYBACK_STATIC_TIMEOUT', 'PLAYBACK_DELAY', 'ENCODER_CODEC'],
     alerts: ['ALERT_SMTP_SERVER', 'ALERT_AUTH_SERVER', 'ALERT_EMAIL_FROM', 'ALERT_EMAIL_PASS', 'ALERT_EMAIL_TO', 'ALERT_EMAIL_USE_SENDMAIL', 'ALERT_WEBHOOK_URL'],
     scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD', 'HEARTBEAT_INTERVAL'],
-    startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT', 'TZ', 'CC_WATCHDOG']
+    startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT', 'CC_WATCHDOG']
 };
 let state = null;
 let localStreamerChoices = [];
@@ -491,7 +491,7 @@ function render() {
     byId('settings-content').classList.remove('hidden');
     if (state.persistWarning && !wizard) showNotice(state.persistWarning, 'danger');
     renderCatalog();
-    placeWizardTimezone();
+    suggestWizardTimezone();
     renderTuners();
     renderExtra();
     renderHost();
@@ -510,12 +510,10 @@ function renderCatalog() {
     });
 }
 
-function placeWizardTimezone() {
+function suggestWizardTimezone() {
     if (!wizard) return;
     const wrap = document.querySelector('[data-key="TZ"]');
-    const target = byId('section-proxy');
-    if (!wrap || !target) return;
-    target.appendChild(wrap);
+    if (!wrap) return;
     const input = wrap.querySelector('[data-setting="TZ"]');
     if (!input || input.disabled || input.value.trim()) return;
     const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
@@ -823,7 +821,6 @@ function validateExtraRow(row) {
 
 function validateSettingsForm(section = '') {
     const keys = section ? new Set(sectionKeys[section] || []) : null;
-    if (wizard && section === 'proxy') keys.add('TZ');
     let firstInvalid = null;
     state.catalog.forEach(spec => {
         if (keys && !keys.has(spec.key)) return;
@@ -1061,7 +1058,7 @@ async function saveSettings(restartAfter = false) {
     state = payload;
     status.classList.remove('validation-error');
     status.textContent = 'Saved.';
-    renderCatalog(); placeWizardTimezone(); renderTuners(); renderExtra(); renderHost(); updateRestartUI();
+    renderCatalog(); suggestWizardTimezone(); renderTuners(); renderExtra(); renderHost(); updateRestartUI();
     if (restartAfter && state.restartNeeded) {
         await restart();
     } else if (restartAfter) {
