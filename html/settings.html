@@ -297,6 +297,12 @@ const sectionKeys = {
 let state = null;
 let tunerPreviewPlayer = null;
 let tunerPreviewNumber = null;
+let tunerPreviewStallTimer = null;
+let tunerPreviewRestartTimer = null;
+let tunerPreviewLastFrames = 0;
+let tunerPreviewStallTicks = 0;
+let tunerPreviewDeadline = 0;
+const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
 let wizard = false;
@@ -809,6 +815,14 @@ function openTunerPreview(card) {
     byId('tuner-preview-number').textContent = tunerPreviewNumber;
     byId('tuner-preview-title').textContent = `Tuner ${tunerPreviewNumber} preview`;
     byId('tuner-preview-modal').classList.add('open');
+    startTunerPreviewClicked();
+}
+
+function startTunerPreviewClicked() {
+    if (tunerPreviewNumber === null) return;
+    tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+    byId('tuner-preview-start').classList.add('hidden');
+    byId('tuner-preview-video').classList.remove('hidden');
     startTunerPreview();
 }
 
@@ -817,8 +831,6 @@ function startTunerPreview() {
     const video = byId('tuner-preview-video');
     const retry = byId('tuner-preview-start');
     const hint = byId('tuner-preview-hint');
-    retry.classList.add('hidden');
-    video.classList.remove('hidden');
     hint.textContent = 'Loading the encoder output from the currently running configuration…';
     if (!window.mpegts || !mpegts.isSupported()) {
         video.classList.add('hidden');
@@ -832,25 +844,83 @@ function startTunerPreview() {
         video.currentTime = video.duration;
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
     }, {once:true});
-    tunerPreviewPlayer.on(mpegts.Events.ERROR, () => {
-        stopTunerPreview();
-        video.classList.add('hidden');
-        retry.classList.remove('hidden');
-        hint.textContent = 'No preview is available. Save and restart first if this tuner was just added or changed.';
-    });
+    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
+    tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
     tunerPreviewPlayer.load();
     tunerPreviewPlayer.play().catch(() => {});
+    startTunerPreviewWatchdog();
 }
 
 function stopTunerPreview() {
+    stopTunerPreviewWatchdog();
     if (tunerPreviewPlayer) {
         tunerPreviewPlayer.destroy();
         tunerPreviewPlayer = null;
     }
 }
 
+function startTunerPreviewWatchdog() {
+    tunerPreviewLastFrames = 0;
+    tunerPreviewStallTicks = 0;
+    tunerPreviewStallTimer = window.setInterval(() => {
+        if (!tunerPreviewPlayer || tunerPreviewNumber === null) return;
+        const video = byId('tuner-preview-video');
+        if (video.paused && !video.ended) {
+            tunerPreviewStallTicks = 0;
+            return;
+        }
+        const frames = tunerPreviewPlayer.statisticsInfo?.decodedFrames || 0;
+        if (frames === tunerPreviewLastFrames) {
+            tunerPreviewStallTicks++;
+            if (tunerPreviewStallTicks >= 3) {
+                restartTunerPreview();
+                return;
+            }
+        } else {
+            tunerPreviewStallTicks = 0;
+            tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+            byId('tuner-preview-hint').textContent = 'Showing the encoder output from the currently running configuration.';
+        }
+        tunerPreviewLastFrames = frames;
+    }, 2000);
+}
+
+function stopTunerPreviewWatchdog() {
+    if (tunerPreviewStallTimer) {
+        window.clearInterval(tunerPreviewStallTimer);
+        tunerPreviewStallTimer = null;
+    }
+    if (tunerPreviewRestartTimer) {
+        window.clearTimeout(tunerPreviewRestartTimer);
+        tunerPreviewRestartTimer = null;
+    }
+}
+
+function restartTunerPreviewSoon() {
+    if (tunerPreviewRestartTimer) return;
+    tunerPreviewRestartTimer = window.setTimeout(() => {
+        tunerPreviewRestartTimer = null;
+        restartTunerPreview();
+    }, 2000);
+}
+
+function restartTunerPreview() {
+    if (tunerPreviewNumber === null || document.hidden) return;
+    if (Date.now() > tunerPreviewDeadline) {
+        stopTunerPreview();
+        tunerPreviewDeadline = 0;
+        byId('tuner-preview-video').classList.add('hidden');
+        byId('tuner-preview-start').classList.remove('hidden');
+        byId('tuner-preview-hint').textContent = 'No video from the encoder. If the device was asleep, give it a moment and retry.';
+        return;
+    }
+    byId('tuner-preview-hint').textContent = 'Waiting for video from the encoder…';
+    startTunerPreview();
+}
+
 function closeTunerPreview() {
     stopTunerPreview();
+    tunerPreviewDeadline = 0;
     tunerPreviewNumber = null;
     byId('tuner-preview-modal').classList.remove('open');
 }
@@ -858,6 +928,7 @@ function closeTunerPreview() {
 async function sendTunerPreviewKey(action) {
     if (tunerPreviewNumber === null) return;
     if (action === 'reboot' && !window.confirm('Reboot this device?')) return;
+    if (tunerPreviewDeadline) tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
     const hint = byId('tuner-preview-hint');
     try {
         const response = await fetch(`/api/tuner/${tunerPreviewNumber}/control/${action}`, {method:'POST'});
@@ -1420,7 +1491,7 @@ byId('tuner-order-modal').addEventListener('click', event => {
     if (event.target === byId('tuner-order-modal')) closeTunerOrderEditor();
 });
 byId('tuner-preview-close').addEventListener('click', closeTunerPreview);
-byId('tuner-preview-retry').addEventListener('click', startTunerPreview);
+byId('tuner-preview-retry').addEventListener('click', startTunerPreviewClicked);
 document.querySelectorAll('[data-tuner-preview-action]').forEach(button => {
     button.addEventListener('click', () => sendTunerPreviewKey(button.dataset.tunerPreviewAction));
 });
