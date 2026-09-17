@@ -32,78 +32,6 @@ ah4c WebUI:
 
 <img width="1666" height="844" alt="Screenshot 2026-08-23 at 11-03-06 ah4c - Organizr V2" src="https://github.com/user-attachments/assets/7859428d-6430-4025-8d2e-e5181f9dd970" />
 
-### Settings page
-
-Open **Settings** to configure ah4c without maintaining a large environment file. A fresh
-installation with no selected streamer script opens the first-run wizard automatically. Tuners
-are optional during setup; ah4c starts with zero tuners and you can add them later. Settings
-are stored in `/opt/config/settings.json`; persist them with:
-
-```yaml
-      - ${HOST_DIR}/ah4c/config:/opt/config
-```
-
-For a clean test install, set `HOST_DIR` in [`ah4c-minimal.env`](ah4c-minimal.env) to the
-folder where ah4c should keep its files, then start [`ah4c-minimal.yaml`](ah4c-minimal.yaml):
-
-```sh
-docker compose --env-file ah4c-minimal.env -f ah4c-minimal.yaml up -d
-```
-
-For Intel or AMD graphics, uncomment `GPU_DEVICE=/dev/dri` in the minimal environment file.
-Leave it commented on hosts without Intel or AMD graphics; the Compose file safely passes
-`/dev/null` instead.
-
-Ports, bind mounts, GPU device passthrough and the container runtime remain in Compose because
-they must exist before ah4c starts. The streamer script is optional while setting up the app;
-choose it in the wizard or Settings when you are ready, and add zero or more tuners there.
-Those choices are saved in `settings.json` rather than Compose.
-
-Precedence is: a non-empty container environment variable, then `settings.json`, then the
-legacy `./env` file, then the built-in default. Environment-owned fields are shown disabled
-with a badge. Empty compose substitutions do not lock a field. Tuner rows are unlimited,
-and setting `NUMBER_TUNERS` in the environment makes the complete tuner list environment-owned.
-
-Live settings apply to the next request or tune. Tuner topology, the selected streamer
-script and other startup settings require a restart; the page offers a safe restart and
-refuses while any tuner is active. Outside Docker, it asks you to restart ah4c manually.
-
-**Check connections** tests the tuner and encoder values currently typed into the page,
-including unsaved edits. For an Android device it verifies the address, persisted ADB keypair,
-authorization and a harmless shell command. For an encoder it opens and immediately closes a
-TCP connection to the configured host and port without opening the video stream. The check runs
-only when requested, never polls, and refuses to run while a tune is starting or active.
-
-`STREAMER_APP` is the selected script package, such as `scripts/firetv/hulu`. Scripts are
-not baked into the image. The **Check for scripts** button retrieves only folder metadata from
-`sullrich/ah4c` and caches the dropdown choices. At container startup, ah4c downloads only
-the selected package, and only when it is missing or `UPDATE_SCRIPTS=true`; it never downloads
-the full scripts tree. **Browse local scripts** opens the mounted `/opt/scripts` folder so you
-can choose a package you wrote or copied there. Local packages may use a simple
-`scripts/package` layout or the repository's `scripts/device/app` layout, and must contain
-`prebmitune.sh`, `bmitune.sh`, and
-`stopbmitune.sh`; additional helper files are allowed. `UPDATE_SCRIPTS=true` works when
-`STREAMER_APP` is set in compose or an environment file as well as when it is selected in the
-GUI. Updates are downloaded and validated in a staging folder before the complete package is
-swapped into place. A failed update leaves the existing package untouched.
-
-The **Create all.m3u** page keeps its multi-provider workflow without putting the full
-scripts tree back into the image. **Check for available scripts** refreshes folder names
-only. **Download selected scripts** then downloads, validates and installs only the packages
-chosen in the checked M3U rows, one package at a time. Downloads stop if a tune starts, and
-an unavailable GitHub never removes a complete local package.
-
-The **Channel M3Us** page makes one list the clear choice for Channels DVR. Pick a list and
-press **Add this list to Channels DVR**; ah4c uses the configured `CHANNELSIP` and the same
-Custom Channels API used by FastChannels to create or update a single source named `AH4C`.
-Changing the selection updates only that source. The page also shows the full M3U URL and a
-**Copy address instead** button for manual setup. A successful choice is saved as
-`CHANNELS_M3U`, so the page shows which list was last added after a restart.
-
-The Settings page is unauthenticated, like the rest of the ah4c Web UI. It can define `CMDn`,
-which executes a command inside the container. Keep ah4c on a trusted LAN and do not expose
-its Web UI directly to the internet.
-
 ### Activity:
 
 <img width="1920" height="2083" alt="screencapture-docker6-2026-08-19-19_09_55" src="https://github.com/user-attachments/assets/1e221fe5-cf23-48b6-81db-e733552ba4e7" />
@@ -420,10 +348,10 @@ time — the black clip is made once, at container start. The log prints all of 
 **The pre-roll** is a video or still image shown to the DVR instead of NULL packets,
 anywhere they would otherwise go: a tune held by `PLAYBACK_DELAY` or `PLAYBACK_DETECTION`,
 and an encoder stall covered by `NULL_FRAME_INSERTION`. Anything ffmpeg reads works. It is
-stored in the `/opt/preroll` bind mount. The simplest option is to upload, replace or delete
-it from **Settings → Pre-roll file**. You can also drop the file into
-`${HOST_DIR}/ah4c/preroll` on the host, or set `PREROLL_FILE` to a file on the host and mount
-that file instead:
+not a setting inside the container but a bind mount at `/opt/preroll`. Either drop the file
+into `${HOST_DIR}/ah4c/preroll` on the host, which sits beside the `scripts`, `m3u`, `adb`
+and `captions` directories ah4c already keeps there and is mounted by default, or set
+`PREROLL_FILE` to the file's path anywhere on the host and that file is mounted instead:
 
 ```
 PREROLL_FILE=/data/preroll.mp4
@@ -446,9 +374,8 @@ request is answered with the pre-roll already playing, before the pre script has
 box, and the tune runs underneath. With nothing holding the tune, the encoder takes over
 the instant its stream is up and the pre-roll simply stops, wherever it was; with
 `PLAYBACK_DELAY` or `PLAYBACK_DETECTION`, the same pre-roll carries on under the hold. A
-new file needs a container restart; the Settings page offers one after an upload or deletion.
-When `PREROLL_FILE` names a single host file, manage it on the host and recreate the
-container. The splice is cleanest when the pre-roll matches the encoder's resolution and codecs. If the
+new file needs a container restart, or recreating it when `PREROLL_FILE` names the file,
+since then the mount is of the file itself. The splice is cleanest when the pre-roll matches the encoder's resolution and codecs. If the
 file cannot be prepared the log says why under `[PREROLL]` and the tune falls back to NULL
 packets, so a pre-roll can never cost a recording.
 
@@ -527,7 +454,7 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
-      - AH4C_COMPOSE=2026.09.16 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_COMPOSE=2026.09.03 # Compose file date stamp - do not change. The startup log flags it when out of date.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       # ── Tuners ──────────────────────────────────────────────────────────────
@@ -561,10 +488,9 @@ services:
       - ENCODER9_URL=${ENCODER9_URL} # Tuner #9 source URL. Streamed directly when CMD9 is blank; otherwise referenced by CMD9 as ${ENCODER9_URL}.
       - CMD9=${CMD9} # Optional tuner #9 command; ah4c streams its stdout instead of fetching ENCODER9_URL. See CMD1.
       # ── Streaming app and DVR ───────────────────────────────────────────────
-      - STREAMER_APP=${STREAMER_APP} # Optional environment override. Normally choose scripts/device/app in Settings, where it is saved in settings.json.
-      - PYATV=${PYATV} # Set to TRUE to use Apple TV tuners through pyatv instead of adb.
+      - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
+      - PYATV=${PYATV:-false} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
       - CHANNELSIP=${CHANNELSIP} # Hostname or IP address of the Channels DVR server itself
-      - CHANNELS_M3U=${CHANNELS_M3U} # Last M3U added to the AH4C Custom Channels source. Normally set with the Channel M3Us page.
       - FASTCHANNELS_URL=${FASTCHANNELS_URL} # Base URL of your FastChannels container, so the firetv/fastchannels scripts can use its built-in ah4c integration to tune. A URL pre-filled into an exported script overrides this.
       # ── Failure alerts ──────────────────────────────────────────────────────
       # Email via SMTP and/or a webhook GET, sent when a tune fails. Leave blank to disable.
@@ -573,16 +499,15 @@ services:
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM} # The e-mail address you'd like your ah4c failure alert e-mails to show as being from.
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS} # Gmail and Yahoo both support the creation of app-specific e-mail passwords, and this is the way to go! It's NOT recommended to use your everyday e-mail password.
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO} # The e-mail address you'd like your alert e-mails sent to.
-      - ALERT_EMAIL_USE_SENDMAIL=${ALERT_EMAIL_USE_SENDMAIL} # Set to true to use sendmail instead of SMTP.
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL} # URL to GET when an alert fires (same failures that trigger the e-mail); put $reason in the URL and it's replaced with the URL-encoded message. Blank disables it.
       # ── Guide tuning and content updates ────────────────────────────────────
       - LIVETV_ATTEMPTS=${LIVETV_ATTEMPTS} # For FireTV Live Guide tuning only, set maximum number of attempts at finding the desired channel
-      - CREATE_M3US=${CREATE_M3US} # Set to true to create device-specific M3Us for use with Amazon Prime Premium channels -- requires a FireTV device
-      - UPDATE_SCRIPTS=${UPDATE_SCRIPTS} # Set to true to refresh only the selected STREAMER_APP package at startup; false downloads it only when missing
-      - UPDATE_M3US=${UPDATE_M3US} # Set to true if you'd like the sample m3us updated whether they exist or not
+      - CREATE_M3US=${CREATE_M3US:-false} # Set to true to create device-specific M3Us for use with Amazon Prime Premium channels -- requires a FireTV device
+      - UPDATE_SCRIPTS=${UPDATE_SCRIPTS:-true} # Set to true if you'd like the sample scripts and STREAMER_APP scripts updated whether they exist or not
+      - UPDATE_M3US=${UPDATE_M3US:-true} # Set to true if you'd like the sample m3us updated whether they exist or not
       # ── Timezone and session handling ───────────────────────────────────────
       - TZ=${TZ} # Your local timezone in Linux "tz" format
-      - SPEED_MODE=${SPEED_MODE} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
+      - SPEED_MODE=${SPEED_MODE:-false} # Set to false if you'd like the target streaming app to be closed after each tuning cycle (limited script support).
       - KEEP_WATCHING=${KEEP_WATCHING} # In supported scripts, set the delay before resending a tuning deeplink to prevent "Are you still watching?" type messages. Examples: Use 4h for 4 hours or 240m for 240 minutes.
       # ── Autocrop (LinkPi encoders only) ─────────────────────────────────────
       - AUTOCROP_CHANNELS=${AUTOCROP_CHANNELS} # Space separated list of channels (by number) with black borders on 4 sides to autocrop while maintaining aspect ratio. Requires LinkPi Encoder!
@@ -593,20 +518,17 @@ services:
       - USER_SCRIPT=${USER_SCRIPT} # Path to a custom script to run alongside ah4c at container startup. Blank runs nothing extra.
       # ── Recording continuity and playback timing ────────────────────────────
       # Keep recordings starting on the program and free of gaps within the DVR's 30s tune window.
-      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording.
-      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION} # Set to TRUE to hold the stream until the device reports audio playing and the picture moving, then start on a keyframe.
+      - NULL_FRAME_INSERTION=${NULL_FRAME_INSERTION:-false} # Set to TRUE to fill encoder stalls with MPEG-TS NULL packets (PID 0x1FFF) so the DVR never sees a zero-byte gap mid-recording. Case-insensitive (true/True/TRUE all work); anything else, including 1/yes, leaves the feature off.
+      - PLAYBACK_DETECTION=${PLAYBACK_DETECTION:-false} # Set to TRUE to hold the stream until the device reports audio playing and the picture moving, then start on a keyframe, so recording begins on the program, not the loading screen. Requires adb; network tuners only. Case-insensitive; anything but true leaves it off.
       - PLAYBACK_STATIC_TIMEOUT=${PLAYBACK_STATIC_TIMEOUT} # Only used with PLAYBACK_DETECTION=TRUE. Seconds the box may keep its prior player/session before the check falls back to gating on motion alone. Default 2 suits Ospreys; apps like DirecTV that hold one player across channel changes need more. 0 or unset uses the default.
       - PLAYBACK_DELAY=${PLAYBACK_DELAY} # Hold every tune this long before handing the DVR the program, so a slow-starting app still records within the DVR's 30s window. Black or a mounted pre-roll fills the wait; the box's own video is never passed through. Accepts a bare number (seconds) or a duration like 30s/1m, capped at 10m. Network tuners only. Empty or 0 disables it.
-      - ENCODER_CODEC=${ENCODER_CODEC} # The video codec your encoder outputs: h264 (default) or h265.
-      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL} # Seconds between supported scripts' keepalive keyevents. Default 180; set to 0 to disable.
-      - ALLOW_DEBUG_VIDEO_PREVIEW=${ALLOW_DEBUG_VIDEO_PREVIEW} # Set to true to enable browser video preview for debugging.
-      - CC_WATCHDOG=${CC_WATCHDOG} # Set to true (or legacy value 1) to enable the caption watchdog diagnostic.
+      - ENCODER_CODEC=${ENCODER_CODEC:-h264} # The video codec your encoder outputs: h264 (default) or h265. Filler black/pre-roll must match it, or playback won't cross to the program at hand-off. Pre-roll video is converted to match; an existing H.265 stream is copied. Leave at h264 unless your encoder is H.265. Case-insensitive; h265/hevc both work.
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-180} # In supported scripts (currently osprey), seconds between keepalive keyevents sent during playback to stop the app's UI inactivity timer from resetting the stream. Default 180; set to 0 to disable.
       # ── NVIDIA GPU ──────────────────────────────────────────────────────────
       # Used by the CUDA caption engine and any CMDn calling h264_nvenc/hevc_nvenc. Needs the NVIDIA container toolkit.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # For the CUDA caption engine and/or an NVENC CMDn. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
       - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Set to compute,utility for the CUDA caption engine. A CMDn using h264_nvenc/hevc_nvenc also needs video - use compute,utility,video (or all).
     volumes:
-      - ${HOST_DIR}/ah4c/config:/opt/config # settings.json from the Settings page
       - ${HOST_DIR}/ah4c/scripts:/opt/scripts # pre/stop/bmitune.sh scripts will be stored in this bound host directory under streamer/app
       - ${HOST_DIR}/ah4c/m3u:/opt/m3u # m3u files will be stored here and hosted at http://<hostname or ip>:7654/m3u for use in Channels DVR - Custom Channels settings
       - ${HOST_DIR}/ah4c/adb:/root/.android # Persistent data directory for adb keys
@@ -662,7 +584,6 @@ CMD9=
 STREAMER_APP=scripts/firetv/dtvstreamdeeplinks
 PYATV=false
 CHANNELSIP=media-server10
-CHANNELS_M3U=
 FASTCHANNELS_URL=
 ALERT_SMTP_SERVER=smtp.gmail.com:587
 ALERT_AUTH_SERVER=smtp.gmail.com
@@ -672,7 +593,7 @@ ALERT_EMAIL_TO=xxxxxxxxxx@gmail.com
 ALERT_WEBHOOK_URL=
 LIVETV_ATTEMPTS=
 CREATE_M3US=false
-UPDATE_SCRIPTS=false
+UPDATE_SCRIPTS=true
 UPDATE_M3US=true
 TZ=America/Denver
 SPEED_MODE=false
