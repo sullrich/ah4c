@@ -38,8 +38,11 @@
         </div>
 
         <section id="wizard-intro" class="card wizard-panel hidden">
-            <div class="card-title">Welcome to ah4c</div>
-            <p><strong>Welcome to ah4c.</strong> This proxy hands Channels DVR a video stream from your streaming devices and encoders. ah4c can start without choosing a streaming app or adding any tuners, so this short wizard is only here to make later setup easier.</p>
+            <div class="wizard-brand">
+                <img class="wizard-logo" src="/static/logos/androidhdmi-for-channels.jpeg" alt="AH4C">
+                <div class="card-title">Welcome to ah4c</div>
+            </div>
+            <p>This proxy hands Channels DVR a video stream from your streaming devices and encoders. ah4c can start without choosing a streaming app or adding any tuners, so this short wizard is only here to make later setup easier.</p>
             <p>Everything you set here is saved to <code>settings.json</code> in the container's persistent <code>/opt/config</code> folder, so it survives container updates and recreation. A setting supplied by your container remains in control and appears grayed out here.</p>
             <p>A few things live outside this page by design: ports, persistent folders, graphics-device access and the image tag must be configured before the container starts. For most installs the only host-side value you need is <code>HOST_DIR</code>.</p>
             <p>Your streaming-app choice tells ah4c how to prepare the device, open a channel, and stop afterward. You can choose it later because ah4c cannot safely guess which service and device you use. Tuners are optional too and can be added now or later.</p>
