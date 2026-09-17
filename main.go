@@ -1132,7 +1132,10 @@ func run() error {
 			}
 		}
 
-		c.HTML(http.StatusOK, "m3us.html", gin.H{"m3us": m3us})
+		c.HTML(http.StatusOK, "m3us.html", gin.H{
+			"m3us": m3us, "proxyAddress": os.Getenv("IPADDRESS"),
+			"channelsDVR": os.Getenv("CHANNELSIP"), "selectedM3U": os.Getenv("CHANNELS_M3U"),
+		})
 	})
 
 	r.GET("/editm3u/:file", func(c *gin.Context) {

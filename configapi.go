@@ -77,6 +77,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	registerScriptConfigRoutes(r)
 	registerConnectionConfigRoutes(r)
 	registerPrerollConfigRoutes(r)
+	registerM3UIntegrationRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
