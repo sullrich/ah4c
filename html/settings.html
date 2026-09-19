@@ -103,10 +103,10 @@
                     <p class="setting-description">Advanced users can keep custom controls in one folder or organize them by device and app. Helper files are allowed.</p>
                     <details class="local-script-create">
                         <summary>Advanced: upload custom control files</summary>
-                        <p class="setting-description">This is only for people providing their own controls. Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
+                        <p class="setting-description">This is only for people providing their own controls. Name the device folder and, optionally, the app folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
                         <div class="local-script-create-grid">
-                            <div class="field"><label for="local-script-device">Main folder</label><input id="local-script-device" type="text" placeholder="my-controls"></div>
-                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
+                            <div class="field"><label for="local-script-device">Device folder</label><input id="local-script-device" type="text" placeholder="my-device"></div>
+                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-app"></div>
                         </div>
                         <div class="field local-script-files"><label for="local-script-files">Control and helper files</label><input id="local-script-files" type="file" multiple></div>
                         <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Upload files</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
@@ -190,6 +190,9 @@
                 <button id="save-settings" class="btn btn-primary" data-save-settings type="button">Save settings</button>
                 <button id="restart-settings" class="btn hidden" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
+            </div>
+            <div class="settings-utility-actions">
+                <a class="btn btn-sm" href="/settings?wizard=1">Run setup wizard again</a>
             </div>
         </div>
     </main>
@@ -294,7 +297,7 @@ const sectionKeys = {
     tuners: ['PYATV'],
     playback: ['NULL_FRAME_INSERTION', 'PLAYBACK_DETECTION', 'PLAYBACK_STATIC_TIMEOUT', 'PLAYBACK_DELAY', 'ENCODER_CODEC'],
     alerts: ['ALERT_SMTP_SERVER', 'ALERT_AUTH_SERVER', 'ALERT_EMAIL_FROM', 'ALERT_EMAIL_PASS', 'ALERT_EMAIL_TO', 'ALERT_EMAIL_USE_SENDMAIL', 'ALERT_WEBHOOK_URL'],
-    scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD', 'HEARTBEAT_INTERVAL'],
+    scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD'],
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT']
 };
 let state = null;
@@ -496,7 +499,7 @@ async function uploadLocalScripts() {
     const button = byId('upload-local-scripts');
     const validPart = value => value && !value.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(value);
     if (!validPart(device) || (app && !validPart(app))) {
-        status.textContent = 'Enter a package name, and optionally an app folder, using letters, numbers, dots, underscores or hyphens.';
+        status.textContent = 'Enter a device folder and, optionally, an app folder using letters, numbers, dots, underscores or hyphens.';
         return;
     }
     if (!files.length) {

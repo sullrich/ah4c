@@ -88,7 +88,6 @@ var varCatalog = []VarSpec{
 	{Key: "PLAYBACK_STATIC_TIMEOUT", Label: "Static-player timeout", Desc: "Seconds the prior player may remain before playback detection falls back to motion alone.", Placeholder: "2", Type: varSeconds, Applies: applyLive},
 	{Key: "PLAYBACK_DELAY", Label: "Playback delay", Desc: "Hold each tune before handing the DVR the program; accepts bare seconds or a duration such as 30s, 2m or 1h.", Placeholder: "30s", Type: varDuration, Applies: applyRestart},
 	{Key: "ENCODER_CODEC", Label: "Encoder codec", Desc: "Video codec emitted by the encoder; filler and pre-roll are prepared to match it.", Type: varEnum, Applies: applyRestart, Enum: []string{"h264", "h265"}},
-	{Key: "HEARTBEAT_INTERVAL", Label: "Heartbeat interval", Desc: "Seconds between supported scripts' keepalive keyevents; 0 disables them.", Placeholder: "180", Type: varSeconds, Applies: applyLive, ScriptVaries: true},
 }
 
 var environmentOnlyKeys = map[string]bool{

@@ -122,7 +122,7 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 	device = strings.TrimSpace(device)
 	app = strings.TrimSpace(app)
 	if !validScriptPathPart(device) || (app != "" && !validScriptPathPart(app)) {
-		return "", fmt.Errorf("package, device and app names may use letters, numbers, dots, underscores and hyphens")
+		return "", fmt.Errorf("device and app folder names may use letters, numbers, dots, underscores and hyphens")
 	}
 	if len(files) == 0 {
 		return "", fmt.Errorf("choose the script files to upload")

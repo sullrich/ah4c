@@ -390,6 +390,8 @@ select:focus {
 }
 
 .settings-page { max-width: 1180px; }
+.settings-utility-actions { display: flex; justify-content: flex-end; margin-top: .75rem; }
+.wizard-mode .settings-utility-actions { display: none; }
 .settings-section + .settings-section { margin-top: 0.9rem; }
 .settings-section-title { justify-content: space-between; }
 .settings-section-title > span { min-width: 0; }

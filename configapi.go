@@ -38,7 +38,6 @@ var defaultValues = map[string]string{
 	"PLAYBACK_DETECTION":       "false",
 	"PLAYBACK_STATIC_TIMEOUT":  "2",
 	"ENCODER_CODEC":            "h264",
-	"HEARTBEAT_INTERVAL":       "180",
 }
 
 type configSaveRequest struct {
