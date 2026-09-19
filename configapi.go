@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -168,6 +169,13 @@ func putConfigHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+var (
+	configRestartDelay = func() { time.Sleep(500 * time.Millisecond) }
+	configExit         = os.Exit
+	configExecutable   = os.Executable
+	configExec         = syscall.Exec
+)
+
 func restartConfigHandler(c *gin.Context) {
 	force := c.Query("force") == "true"
 	active, blocked := restartTuneConflict()
@@ -178,23 +186,38 @@ func restartConfigHandler(c *gin.Context) {
 	envEngineMu.RLock()
 	dockerManaged := envDockerManaged
 	envEngineMu.RUnlock()
-	if !dockerManaged {
-		c.JSON(http.StatusOK, gin.H{"restart": "manual"})
+	if err := scheduleConfigRestart(dockerManaged); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("could not restart ah4c: %v", err)})
 		return
 	}
-	logger("[CONFIG] restarting to apply settings")
+	if dockerManaged {
+		logger("[CONFIG] restarting container to apply settings")
+	} else {
+		logger("[CONFIG] restarting ah4c to apply settings")
+	}
 	c.JSON(http.StatusOK, gin.H{"restart": "scheduled"})
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		if !force {
-			active, blocked := restartTuneConflict()
-			if blocked {
-				logger("[CONFIG] restart canceled because a tune started or became active: %v", active)
-				return
-			}
+}
+
+func scheduleConfigRestart(dockerManaged bool) error {
+	executable := ""
+	if !dockerManaged {
+		var err error
+		executable, err = configExecutable()
+		if err != nil {
+			return err
 		}
-		os.Exit(0)
+	}
+	go func() {
+		configRestartDelay()
+		if dockerManaged {
+			configExit(0)
+			return
+		}
+		if err := configExec(executable, os.Args, os.Environ()); err != nil {
+			logger("[CONFIG] could not restart ah4c: %v", err)
+		}
 	}()
+	return nil
 }
 
 func validScriptPathPart(value string) bool {
@@ -273,15 +296,20 @@ func configResponse() gin.H {
 	for _, spec := range hostCatalog {
 		host = append(host, gin.H{"key": spec.Key, "label": spec.Label, "value": os.Getenv(spec.Key)})
 	}
+	extra := make(map[string]string, len(s.Extra))
 	extraLocked := map[string]bool{}
-	for key := range s.Extra {
+	for key, value := range s.Extra {
 		extraLocked[key] = locked[key]
+		if locked[key] {
+			value = os.Getenv(key)
+		}
+		extra[key] = value
 	}
 	return gin.H{
 		"persistent": persistent, "persistWarning": warning, "dockerManaged": dockerManaged,
 		"missingPersistentMounts": persistentMountResponse(missingMounts),
 		"restartNeeded":           configRestartNeeded, "restartRequired": restartRequiredKeys(), "wizard": setupWizardNeeded(), "wizardDisabled": setupWizardDisabled(os.Getenv), "catalog": catalog,
-		"tuners": tunerResponse(s, locked), "extra": s.Extra, "extraLocked": extraLocked, "host": host,
+		"tuners": tunerResponse(s, locked), "extra": extra, "extraLocked": extraLocked, "host": host,
 	}
 }
 
@@ -348,7 +376,8 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		if fieldLocks["teecmd"] {
 			values["teecmd"] = os.Getenv("TEECMD" + n)
 		}
-		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
+		previewAvailable := i < len(tuners) && strings.TrimSpace(tuners[i].url) != ""
+		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks, "previewAvailable": previewAvailable})
 	}
 	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "list": items}
 }
@@ -578,7 +607,7 @@ func validateCatalogValue(spec VarSpec, value string) error {
 		return nil
 	}
 	if spec.Key == "STREAMER_APP" && value != "" && !validStreamerSelection(value) {
-		return fmt.Errorf("must use scripts/package or scripts/device/app")
+		return fmt.Errorf("must use scripts/device or scripts/device/app")
 	}
 	if spec.Key == "CHANNELS_M3U" && value != "" {
 		if _, err := validM3UFile(value); err != nil {

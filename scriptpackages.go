@@ -32,8 +32,8 @@ type githubContentsEntry struct {
 	DownloadURL string `json:"download_url"`
 }
 
-// installScriptPackage downloads one explicitly selected scripts/package or
-// scripts/device/app package. It stages every file beside the destination and swaps the complete
+// installScriptPackage downloads one explicitly selected scripts/device or
+// scripts/device/app folder. It stages every file beside the destination and swaps the complete
 // directory into place, so a network failure cannot damage a working package.
 func installScriptPackage(ctx context.Context, selection string) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -44,7 +44,7 @@ func installScriptPackage(ctx context.Context, selection string) error {
 func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) error {
 	selection = canonicalStreamerSelection(selection)
 	if !validStreamerSelection(selection) {
-		return fmt.Errorf("script package must use scripts/package or scripts/device/app")
+		return fmt.Errorf("script folder must use scripts/device or scripts/device/app")
 	}
 	parts := strings.Split(selection, "/")
 	if !allowed() {

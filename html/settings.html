@@ -64,13 +64,13 @@
 
         <div id="settings-content" class="hidden">
             <section class="card settings-section" data-section="proxy">
-                <div class="card-title settings-section-title"><span>Addresses &amp; time zone</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Addresses &amp; time zone</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Tip:</strong> These addresses may be entered with or without a port. When no port is entered, ah4c assumes <code>7654</code> for this ah4c server and <code>8089</code> for Channels DVR. If either service uses a different port, include it in the address. For Channels DVR, open Channels in another browser tab and copy the address from its address bar. During initial setup, ah4c also suggests the time zone reported by this browser; change it if the server is somewhere else.</p>
                 <div id="section-proxy" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="streamer">
-                <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Optional during initial setup:</strong> ah4c uses a small set of scripts to open your streaming app, switch to the requested channel, and stop playback when finished. You do not need to read or edit them. The official choices come from the <a href="https://github.com/sullrich/ah4c/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts folder in sullrich/ah4c on GitHub</a>.</p>
                 <div class="btn-row compact-row">
                     <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Browse local scripts</button>
@@ -115,7 +115,7 @@
             </section>
 
             <section class="card settings-section" data-section="tuners">
-                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
@@ -131,12 +131,12 @@
             </section>
 
             <section class="card settings-section" data-section="playback">
-                <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-playback" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="preroll">
-                <div class="card-title settings-section-title"><span>Pre-roll file</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Pre-roll file</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">Upload an image or video to show while a stream is getting ready. The file is saved in the mounted pre-roll folder so it survives container updates. Uploading or deleting a file requires a restart.</p>
                 <div class="preroll-manager">
                     <div class="setting-field">
@@ -157,23 +157,23 @@
             </section>
 
             <section class="card settings-section" data-section="alerts">
-                <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-alerts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="scripts">
-                <div class="card-title settings-section-title"><span>Streaming app options</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Streaming app options</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">These options depend on the streaming app you selected. Leave them blank unless that app's instructions tell you what to enter.</p>
                 <div id="section-scripts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="startup">
-                <div class="card-title settings-section-title"><span>Startup &amp; content</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Startup &amp; content</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-startup" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="extra">
-                <div class="card-title settings-section-title"><span>Additional variables</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Additional variables</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">Free-form environment variables for custom scripts. Names must use uppercase letters, numbers and underscores.</p>
                 <div id="extra-vars"></div>
                 <div class="btn-row"><button id="add-extra" class="btn btn-sm" type="button">Add variable</button></div>
@@ -527,8 +527,8 @@ async function uploadLocalScripts() {
         if (!response.ok) throw new Error(payload.error || 'The files could not be uploaded.');
         byId('local-script-files').value = '';
         chooseLocalScript(payload.selection);
-        status.textContent = 'Files uploaded.';
-        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged.`;
+        status.textContent = 'Files uploaded and selected. Save all changes to apply them.';
+        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged. Save all changes to apply it.`;
     } catch (error) {
         status.textContent = error.message;
     } finally {
@@ -617,13 +617,19 @@ function renderFieldInto(spec, target, replace = false) {
     const source = spec.locked ? `<span class="badge config-lock" title="${title}">set by environment</span>` : '';
     wrap.innerHTML = `<div class="setting-label"><label>${escapeHTML(spec.label)}</label>${source}</div>${control}<div class="setting-description">${escapeHTML(spec.desc)}${spec.type === 'seconds' ? ' (seconds)' : ''}</div>${spec.scriptVaries ? `<div class="setting-script-note">This setting depends on the selected streaming app. Leave it blank unless that app's instructions tell you what to enter.</div>` : ''}<div class="field-validation" data-validation-for="${spec.key}" aria-live="polite"></div>`;
     if (spec.key === 'STREAMER_APP') {
-        wrap.querySelector('select')?.addEventListener('change', event => {
+        const streamerSelect = wrap.querySelector('select');
+        const customInput = wrap.querySelector('[data-custom-streamer]');
+        streamerSelect?.addEventListener('change', event => {
+            if (customInput && event.target.value) customInput.value = '';
             const choice = decodeStreamerChoice(event.target.value);
             const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
             if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
             if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
             if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
+        });
+        customInput?.addEventListener('input', () => {
+            if (customInput.value.trim()) streamerSelect.value = '';
         });
     }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
@@ -654,8 +660,9 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const lock = tuner.locked || {};
     const number = Number.isInteger(tuner.number) ? tuner.number : index;
     card.dataset.tunerNumber = String(number);
+    card.dataset.previewAvailable = tuner.previewAvailable ? 'true' : 'false';
     if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button" ${String(tuner.encoderURL || '').trim() ? '' : 'disabled title="Add an encoder URL to enable preview"'}>Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
@@ -683,9 +690,10 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
 
 function updateTunerPreviewButton(card) {
     const button = card.querySelector('[data-tuner-preview]');
+    const available = card.dataset.previewAvailable === 'true';
     const configured = Boolean(card.querySelector('[data-tuner="encoderURL"]')?.value.trim());
-    button.disabled = !configured;
-    button.title = configured ? '' : 'Add an encoder URL to enable preview';
+    button.disabled = !available;
+    button.title = available ? '' : (configured ? 'Save and restart ah4c to preview this encoder URL' : 'Add an encoder URL to enable preview');
 }
 
 function canDeleteTunerCard(card) {
@@ -1005,7 +1013,7 @@ function catalogValidationMessage(spec, value) {
     if (/\r|\n/.test(value)) return 'Use one line only.';
     if (spec.key === 'STREAMER_APP') {
         const canonical = value.trim().replace(/^\.\//, '').replace(/\/+$/, '');
-        return /^scripts\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(canonical) ? '' : 'Use scripts/package or scripts/device/app.';
+        return /^scripts\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(canonical) ? '' : 'Use scripts/device or scripts/device/app.';
     }
     if (spec.key === 'IPADDRESS' || spec.key === 'CHANNELSIP') {
         try { parsedServerAddress(value, true); return ''; } catch (_) {
@@ -1342,19 +1350,19 @@ function restartReasonLabels() {
 
 function showRestartPrompt() {
     const confirmButton = byId('restart-prompt-confirm');
-    byId('restart-prompt-title').textContent = 'Restart container?';
+    byId('restart-prompt-title').textContent = state.dockerManaged ? 'Restart container?' : 'Restart ah4c?';
     byId('restart-prompt-message').textContent = state.dockerManaged
         ? 'Settings saved. Restart the container to apply these changes.'
-        : 'Settings saved. Restart the container manually to apply these changes.';
+        : 'Settings saved. Restart ah4c to apply these changes.';
     byId('restart-prompt-warning').classList.add('hidden');
     confirmButton.dataset.force = 'false';
-    confirmButton.textContent = 'Restart container';
+    confirmButton.textContent = state.dockerManaged ? 'Restart container' : 'Restart ah4c';
     confirmButton.classList.add('btn-primary');
     confirmButton.classList.remove('btn-danger');
-    confirmButton.classList.toggle('hidden', !state.dockerManaged);
-    byId('restart-prompt-cancel').textContent = state.dockerManaged ? 'Not now' : 'Close';
+    confirmButton.classList.remove('hidden');
+    byId('restart-prompt-cancel').textContent = 'Not now';
     byId('restart-prompt-modal').classList.add('open');
-    (state.dockerManaged ? confirmButton : byId('restart-prompt-cancel')).focus();
+    confirmButton.focus();
 }
 
 function showRestartTuneWarning(payload) {
@@ -1384,7 +1392,7 @@ function closeRestartPrompt() {
 function updateRestartUI() {
     byId('restart-banner').classList.toggle('hidden', !state.restartNeeded);
     byId('restart-settings').classList.toggle('hidden', !state.restartNeeded);
-    const text = state.dockerManaged ? 'Restart container' : 'Restart container manually';
+    const text = state.dockerManaged ? 'Restart container' : 'Restart ah4c';
     byId('restart-settings').textContent = text;
     byId('restart-top').textContent = text;
     const labels = restartReasonLabels();
@@ -1393,10 +1401,6 @@ function updateRestartUI() {
 }
 
 async function restart(force = false) {
-    if (!state.dockerManaged) {
-        showNotice('Settings are saved. Restart the container manually to apply startup changes.', 'warning');
-        return;
-    }
     const response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
     const payload = await response.json();
     if (response.status === 409 && !force) {
@@ -1587,7 +1591,7 @@ async function handleSaveClick() {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = button.id === 'save-settings' && wizard && wizardStep === wizardSections().length ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
+            button.textContent = button.id === 'save-settings' && wizard && wizardStep === wizardSections().length ? 'Save setup' : (button.dataset.idleLabel || 'Save all changes');
         });
     }
 }
