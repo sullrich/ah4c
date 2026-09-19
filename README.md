@@ -440,7 +440,7 @@ took over along with how much filler was sent.
 
 ```yaml
 services:
-  # 2026.09.03
+  # 2026.09.16
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
@@ -454,7 +454,7 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
-      - AH4C_COMPOSE=2026.09.03 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_COMPOSE=2026.09.16 # Compose file date stamp - do not change. The startup log flags it when out of date.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       # ── Tuners ──────────────────────────────────────────────────────────────
