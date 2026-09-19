@@ -352,6 +352,10 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 	if allLocked || (len(list) == 0 && currentEnvTuners() > 0) {
 		list = tunersFromEnvironment()
 	}
+	previewAvailable := make([]bool, len(tuners))
+	for i := range tuners {
+		previewAvailable[i] = strings.TrimSpace(tuners[i].url) != ""
+	}
 	items := make([]gin.H, 0, len(list))
 	for i, tuner := range list {
 		n := strconv.Itoa(i + 1)
@@ -376,10 +380,9 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		if fieldLocks["teecmd"] {
 			values["teecmd"] = os.Getenv("TEECMD" + n)
 		}
-		previewAvailable := i < len(tuners) && strings.TrimSpace(tuners[i].url) != ""
-		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks, "previewAvailable": previewAvailable})
+		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
 	}
-	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "list": items}
+	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "previewAvailable": previewAvailable, "list": items}
 }
 
 func tunerTopologyLocked(locked map[string]bool) bool {

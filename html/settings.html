@@ -34,8 +34,8 @@
     <main class="page settings-page">
         <div id="notice" class="config-notice hidden" role="status" aria-live="polite"></div>
         <div id="restart-banner" class="config-notice config-notice--warning hidden">
-            <span id="restart-reasons">Restart the container to apply startup settings.</span>
-            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart container</button>
+            <span id="restart-reasons">Restart ah4c to apply startup settings.</span>
+            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart ah4c</button>
         </div>
 
         <section id="wizard-intro" class="card wizard-panel hidden">
@@ -660,7 +660,6 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const lock = tuner.locked || {};
     const number = Number.isInteger(tuner.number) ? tuner.number : index;
     card.dataset.tunerNumber = String(number);
-    card.dataset.previewAvailable = tuner.previewAvailable ? 'true' : 'false';
     if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
     card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
@@ -690,7 +689,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
 
 function updateTunerPreviewButton(card) {
     const button = card.querySelector('[data-tuner-preview]');
-    const available = card.dataset.previewAvailable === 'true';
+    const available = Boolean(state.tuners.previewAvailable?.[tunerNumber(card)]);
     const configured = Boolean(card.querySelector('[data-tuner="encoderURL"]')?.value.trim());
     button.disabled = !available;
     button.title = available ? '' : (configured ? 'Save and restart ah4c to preview this encoder URL' : 'Add an encoder URL to enable preview');
@@ -747,6 +746,7 @@ function renumberTuners() {
         card.dataset.tunerNumber = String(index);
         card.querySelector('.tuner-number').textContent = index;
         card.querySelector('h3').textContent = `Tuner ${index}`;
+        updateTunerPreviewButton(card);
         const remove = card.querySelector('.delete-tuner');
         remove.disabled = !canDeleteTunerCard(card);
         if (card.dataset.fixedTunerNumber !== undefined) {
@@ -1372,7 +1372,7 @@ function showRestartTuneWarning(payload) {
         : 'A recording or live TV stream is starting.';
     const confirmButton = byId('restart-prompt-confirm');
     byId('restart-prompt-title').textContent = 'A tuner is in use';
-    byId('restart-prompt-message').textContent = 'The container was not restarted.';
+    byId('restart-prompt-message').textContent = state.dockerManaged ? 'The container was not restarted.' : 'ah4c was not restarted.';
     byId('restart-prompt-warning').textContent = `${activity} Restarting now will interrupt the recording or live TV stream.`;
     byId('restart-prompt-warning').classList.remove('hidden');
     confirmButton.dataset.force = 'true';
@@ -1397,7 +1397,7 @@ function updateRestartUI() {
     byId('restart-top').textContent = text;
     const labels = restartReasonLabels();
     const reasons = labels.length ? `: ${readableList(labels)}` : '';
-    byId('restart-reasons').textContent = `Restart the container to apply${reasons}.`;
+    byId('restart-reasons').textContent = state.dockerManaged ? `Restart the container to apply${reasons}.` : `Restart ah4c to apply${reasons}.`;
 }
 
 async function restart(force = false) {
@@ -1412,7 +1412,7 @@ async function restart(force = false) {
         return;
     }
     closeRestartPrompt();
-    showNotice('Restarting the container…', 'warning');
+    showNotice(state.dockerManaged ? 'Restarting the container…' : 'Restarting ah4c…', 'warning');
     setTimeout(waitForRestart, 1200);
 }
 

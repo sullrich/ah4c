@@ -101,10 +101,10 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	}
 	var entries []githubContentsEntry
 	if err := json.Unmarshal(contents, &entries); err != nil {
-		return fmt.Errorf("could not read the script package list: %w", err)
+		return fmt.Errorf("could not read the script folder list: %w", err)
 	}
 	if len(entries) == 0 || len(entries) > maxPackageFiles {
-		return fmt.Errorf("the selected script package has an unexpected number of files")
+		return fmt.Errorf("the selected script folder has an unexpected number of files")
 	}
 
 	root, err := filepath.Abs(scriptsRoot)
@@ -157,7 +157,7 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 		}
 		total += int64(len(data))
 		if total > maxPackageBytes {
-			return fmt.Errorf("the selected script package is larger than the safe download limit")
+			return fmt.Errorf("the selected script folder is larger than the safe download limit")
 		}
 		mode := os.FileMode(0644)
 		if strings.HasSuffix(entry.Name, ".sh") {
@@ -182,17 +182,17 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	hadTarget := false
 	if _, err := os.Lstat(target); err == nil {
 		if err := os.Rename(target, backup); err != nil {
-			return fmt.Errorf("could not preserve the current script package: %w", err)
+			return fmt.Errorf("could not preserve the current script folder: %w", err)
 		}
 		hadTarget = true
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("could not inspect the current script package: %w", err)
+		return fmt.Errorf("could not inspect the current script folder: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
 		if hadTarget {
 			_ = os.Rename(backup, target)
 		}
-		return fmt.Errorf("could not activate the downloaded script package: %w", err)
+		return fmt.Errorf("could not activate the downloaded script folder: %w", err)
 	}
 	if hadTarget {
 		if err := os.RemoveAll(backup); err != nil {
