@@ -185,10 +185,17 @@
                 <div id="host-vars" class="settings-grid"></div>
             </details>
 
+            <section class="card settings-section" data-section="restart">
+                <div class="card-title">Restart container</div>
+                <p id="restart-guidance" class="section-help"><strong>Before restarting:</strong> Stop any recording in Channels DVR first. Release lock only ends the current ah4c stream; it does not cancel the Channels recording, so Channels may immediately acquire the tuner again. Restarting the container interrupts every active recording and live TV stream. If Channels has stopped recording but a tuner still appears in use, restart the container to clear it.</p>
+                <div class="btn-row">
+                    <button id="restart-settings" class="btn" type="button" aria-describedby="restart-guidance">Restart container</button>
+                </div>
+            </section>
+
             <div class="settings-actions">
                 <button id="wizard-back" class="btn hidden" type="button">Back</button>
                 <button id="save-settings" class="btn btn-primary" data-save-settings type="button">Save settings</button>
-                <button id="restart-settings" class="btn" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
             </div>
         </div>
@@ -1337,12 +1344,16 @@ function restartReasonLabels() {
     return (state.restartRequired || []).map(key => special[key] || state.catalog.find(spec => spec.key === key)?.label || key);
 }
 
-function showRestartPrompt() {
+function showRestartPrompt(manual = false) {
     const confirmButton = byId('restart-prompt-confirm');
     byId('restart-prompt-title').textContent = 'Restart container?';
-    byId('restart-prompt-message').textContent = state.dockerManaged
-        ? 'Settings saved. Restart the container to apply these changes.'
-        : 'Settings saved. Restart the container manually to apply these changes.';
+    byId('restart-prompt-message').textContent = manual
+        ? (state.dockerManaged
+            ? 'Restart the container now? Any active recording or live TV stream will be interrupted.'
+            : 'Restart the container manually. Any active recording or live TV stream will be interrupted.')
+        : (state.dockerManaged
+            ? 'Settings saved. Restart the container to apply these changes.'
+            : 'Settings saved. Restart the container manually to apply these changes.');
     byId('restart-prompt-warning').classList.add('hidden');
     confirmButton.dataset.force = 'false';
     confirmButton.textContent = 'Restart container';
@@ -1588,7 +1599,7 @@ async function handleSaveClick() {
     }
 }
 document.querySelectorAll('[data-save-settings]').forEach(button => button.addEventListener('click', handleSaveClick));
-byId('restart-settings').addEventListener('click', () => restart());
+byId('restart-settings').addEventListener('click', () => showRestartPrompt(true));
 byId('restart-top').addEventListener('click', () => restart());
 loadSettings().catch(error => showNotice(error.message, 'danger'));
 </script>
