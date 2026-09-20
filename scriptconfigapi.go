@@ -122,13 +122,13 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 	device = strings.TrimSpace(device)
 	app = strings.TrimSpace(app)
 	if !validScriptPathPart(device) || (app != "" && !validScriptPathPart(app)) {
-		return "", fmt.Errorf("package, device and app names may use letters, numbers, dots, underscores and hyphens")
+		return "", fmt.Errorf("device and app folder names may use letters, numbers, dots, underscores and hyphens")
 	}
 	if len(files) == 0 {
 		return "", fmt.Errorf("choose the script files to upload")
 	}
 	if len(files) > maxPackageFiles {
-		return "", fmt.Errorf("the package has more than %d files", maxPackageFiles)
+		return "", fmt.Errorf("the script folder has more than %d files", maxPackageFiles)
 	}
 	seen := make(map[string]bool, len(files))
 	total := int64(0)
@@ -156,7 +156,7 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 		}
 	}
 	if len(missing) > 0 {
-		return "", fmt.Errorf("the package is missing required files: %s", strings.Join(missing, ", "))
+		return "", fmt.Errorf("the script folder is missing required files: %s", strings.Join(missing, ", "))
 	}
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return "", fmt.Errorf("could not create the local scripts folder: %w", err)
@@ -218,7 +218,7 @@ func createLocalScriptPackage(root, device, app string, files []*multipart.FileH
 		}
 	}
 	if err := os.Rename(temporary, target); err != nil {
-		return "", fmt.Errorf("could not finish the script package: %w", err)
+		return "", fmt.Errorf("could not finish the script folder upload: %w", err)
 	}
 	committed = true
 	return selection, nil

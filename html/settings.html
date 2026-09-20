@@ -34,8 +34,8 @@
     <main class="page settings-page">
         <div id="notice" class="config-notice hidden" role="status" aria-live="polite"></div>
         <div id="restart-banner" class="config-notice config-notice--warning hidden">
-            <span id="restart-reasons">Restart the container to apply startup settings.</span>
-            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart container</button>
+            <span id="restart-reasons">Restart ah4c to apply startup settings.</span>
+            <button id="restart-top" class="btn btn-sm btn-primary" type="button">Restart ah4c</button>
         </div>
 
         <section id="wizard-intro" class="card wizard-panel hidden">
@@ -64,13 +64,13 @@
 
         <div id="settings-content" class="hidden">
             <section class="card settings-section" data-section="proxy">
-                <div class="card-title settings-section-title"><span>Addresses &amp; time zone</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Addresses &amp; time zone</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Tip:</strong> These addresses may be entered with or without a port. When no port is entered, ah4c assumes <code>7654</code> for this ah4c server and <code>8089</code> for Channels DVR. If either service uses a different port, include it in the address. For Channels DVR, open Channels in another browser tab and copy the address from its address bar. During initial setup, ah4c also suggests the time zone reported by this browser; change it if the server is somewhere else.</p>
                 <div id="section-proxy" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="streamer">
-                <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Streaming app scripts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Optional during initial setup:</strong> ah4c uses a small set of scripts to open your streaming app, switch to the requested channel, and stop playback when finished. You do not need to read or edit them. The official choices come from the <a href="https://github.com/sullrich/ah4c/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts folder in sullrich/ah4c on GitHub</a>.</p>
                 <div class="btn-row compact-row">
                     <button id="browse-local-scripts" class="btn btn-sm btn-primary" type="button">Browse local scripts</button>
@@ -103,10 +103,10 @@
                     <p class="setting-description">Advanced users can keep custom controls in one folder or organize them by device and app. Helper files are allowed.</p>
                     <details class="local-script-create">
                         <summary>Advanced: upload custom control files</summary>
-                        <p class="setting-description">This is only for people providing their own controls. Name the folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
+                        <p class="setting-description">This is only for people providing their own controls. Name the device folder and, optionally, the app folder, then select <code>prebmitune.sh</code>, <code>bmitune.sh</code>, and <code>stopbmitune.sh</code>. You may also select helper files. Nothing is saved unless all three required files are included.</p>
                         <div class="local-script-create-grid">
-                            <div class="field"><label for="local-script-device">Main folder</label><input id="local-script-device" type="text" placeholder="my-controls"></div>
-                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-service"></div>
+                            <div class="field"><label for="local-script-device">Device folder</label><input id="local-script-device" type="text" placeholder="my-device"></div>
+                            <div class="field"><label for="local-script-app">App folder <span class="hint">— optional</span></label><input id="local-script-app" type="text" placeholder="my-app"></div>
                         </div>
                         <div class="field local-script-files"><label for="local-script-files">Control and helper files</label><input id="local-script-files" type="file" multiple></div>
                         <div class="btn-row compact-row"><button id="upload-local-scripts" class="btn btn-sm btn-primary" type="button">Upload files</button><span id="local-script-upload-status" class="muted" aria-live="polite"></span></div>
@@ -115,7 +115,7 @@
             </section>
 
             <section class="card settings-section" data-section="tuners">
-                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. An encoder URL or CMD tells ah4c where each tuner's video comes from; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
@@ -131,12 +131,12 @@
             </section>
 
             <section class="card settings-section" data-section="playback">
-                <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-playback" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="preroll">
-                <div class="card-title settings-section-title"><span>Pre-roll file</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Pre-roll file</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">Upload an image or video to show while a stream is getting ready. The file is saved in the mounted pre-roll folder so it survives container updates. Uploading or deleting a file requires a restart.</p>
                 <div class="preroll-manager">
                     <div class="setting-field">
@@ -157,23 +157,23 @@
             </section>
 
             <section class="card settings-section" data-section="alerts">
-                <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Alerts</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-alerts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="scripts">
-                <div class="card-title settings-section-title"><span>Streaming app options</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Streaming app options</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">These options depend on the streaming app you selected. Leave them blank unless that app's instructions tell you what to enter.</p>
                 <div id="section-scripts" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="startup">
-                <div class="card-title settings-section-title"><span>Startup &amp; content</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Startup &amp; content</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <div id="section-startup" class="settings-grid"></div>
             </section>
 
             <section class="card settings-section" data-section="extra">
-                <div class="card-title settings-section-title"><span>Additional variables</span><button class="btn btn-sm section-save" data-save-settings type="button">Save changes</button></div>
+                <div class="card-title settings-section-title"><span>Additional variables</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">Free-form environment variables for custom scripts. Names must use uppercase letters, numbers and underscores.</p>
                 <div id="extra-vars"></div>
                 <div class="btn-row"><button id="add-extra" class="btn btn-sm" type="button">Add variable</button></div>
@@ -190,6 +190,9 @@
                 <button id="save-settings" class="btn btn-primary" data-save-settings type="button">Save settings</button>
                 <button id="restart-settings" class="btn push-right" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
+            </div>
+            <div class="settings-utility-actions">
+                <a class="btn btn-sm" href="/settings?wizard=1">Run setup wizard again</a>
             </div>
         </div>
     </main>
@@ -294,7 +297,7 @@ const sectionKeys = {
     tuners: ['PYATV'],
     playback: ['NULL_FRAME_INSERTION', 'PLAYBACK_DETECTION', 'PLAYBACK_STATIC_TIMEOUT', 'PLAYBACK_DELAY', 'ENCODER_CODEC'],
     alerts: ['ALERT_SMTP_SERVER', 'ALERT_AUTH_SERVER', 'ALERT_EMAIL_FROM', 'ALERT_EMAIL_PASS', 'ALERT_EMAIL_TO', 'ALERT_EMAIL_USE_SENDMAIL', 'ALERT_WEBHOOK_URL'],
-    scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD', 'HEARTBEAT_INTERVAL'],
+    scripts: ['FASTCHANNELS_URL', 'LIVETV_ATTEMPTS', 'SPEED_MODE', 'KEEP_WATCHING', 'AUTOCROP_CHANNELS', 'LINKPI_HOSTNAME', 'LINKPI_USERNAME', 'LINKPI_PASSWORD'],
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT']
 };
 let state = null;
@@ -308,6 +311,8 @@ let tunerPreviewDeadline = 0;
 const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
+let streamerLoadGeneration = 0;
+let settingsSaveInProgress = false;
 let wizard = false;
 let wizardStep = 0;
 let localScriptDirectory = null;
@@ -315,7 +320,11 @@ let prerollState = null;
 let appleTVPairSession = '';
 let appleTVPairCard = null;
 let appleTVPairAbort = null;
+let appleTVPairFinishAbort = null;
+let appleTVPairGeneration = 0;
 let tunerOrderCards = [];
+let restartWaitStarted = 0;
+let restartWaitLimit = 30000;
 
 const byId = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -323,7 +332,7 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'
 async function loadSettings() {
     const response = await fetch('/api/config');
     state = await response.json();
-    wizard = !state.wizardDisabled && (new URLSearchParams(location.search).get('wizard') === '1' || state.wizard);
+    wizard = new URLSearchParams(location.search).get('wizard') === '1' || (!state.wizardDisabled && state.wizard);
     await Promise.all([loadStreamers(false), loadPreroll()]);
     render();
 }
@@ -367,7 +376,7 @@ function renderPreroll() {
     message.textContent = prerollState.message || (prerollState.restartNeeded ? 'Restart ah4c to apply this change.' : 'Images and videos are prepared when ah4c starts.');
     picker.disabled = !prerollState.managed;
     upload.disabled = !prerollState.managed || !picker.files.length;
-    remove.disabled = !prerollState.managed || !prerollState.present;
+    remove.disabled = !prerollState.deletable;
 }
 
 function applyPrerollRestartState() {
@@ -402,7 +411,7 @@ async function uploadPreroll() {
 }
 
 async function deletePreroll() {
-    if (!prerollState?.present || !confirm(`Delete ${prerollState.name}?`)) return;
+    if (!prerollState?.deletable || !confirm(`Delete ${prerollState.name}?`)) return;
     const status = byId('preroll-status');
     const button = byId('delete-preroll');
     button.disabled = true;
@@ -423,26 +432,33 @@ async function deletePreroll() {
 
 async function loadStreamers(remote) {
     const status = byId('streamer-query-status');
-    const typedChoice = selectedStreamerPath();
+    const generation = ++streamerLoadGeneration;
     if (status && remote) status.textContent = 'Checking sullrich/ah4c on GitHub for scripts…';
     try {
         const query = new URLSearchParams({details:'true'});
         if (remote) query.set('remote', 'true');
         const response = await fetch('/api/config/streamers?' + query);
         const payload = await response.json();
+        if (generation !== streamerLoadGeneration) return;
         if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
         if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
+        if (settingsSaveInProgress) {
+            if (status && remote) status.textContent = response.ok
+                ? `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`
+                : 'GitHub is unavailable right now. Showing local and previously saved scripts.';
+            return;
+        }
+        const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
+        const currentChoice = document.querySelector('[data-setting="STREAMER_APP"]') ? selectedStreamerPath() : spec?.value || '';
         if (!response.ok) {
             if (status) status.textContent = 'GitHub is unavailable right now. Showing local and previously saved scripts.';
-            const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
-            if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+            if (spec) renderFieldInto({...spec, value:currentChoice}, byId('section-streamer'), true);
             return;
         }
         if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`;
-        const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
-        if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+        if (spec) renderFieldInto({...spec, value:currentChoice}, byId('section-streamer'), true);
     } catch (error) {
-        if (status) status.textContent = error.message;
+        if (generation === streamerLoadGeneration && status) status.textContent = error.message;
     }
 }
 
@@ -496,7 +512,7 @@ async function uploadLocalScripts() {
     const button = byId('upload-local-scripts');
     const validPart = value => value && !value.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(value);
     if (!validPart(device) || (app && !validPart(app))) {
-        status.textContent = 'Enter a package name, and optionally an app folder, using letters, numbers, dots, underscores or hyphens.';
+        status.textContent = 'Enter a device folder and, optionally, an app folder using letters, numbers, dots, underscores or hyphens.';
         return;
     }
     if (!files.length) {
@@ -524,8 +540,8 @@ async function uploadLocalScripts() {
         if (!response.ok) throw new Error(payload.error || 'The files could not be uploaded.');
         byId('local-script-files').value = '';
         chooseLocalScript(payload.selection);
-        status.textContent = 'Files uploaded.';
-        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged.`;
+        status.textContent = 'Files uploaded and selected. Save all changes to apply them.';
+        byId('streamer-query-status').textContent = `Selected ${payload.selection} from this server. ah4c will keep your copy unchanged. Save all changes to apply it.`;
     } catch (error) {
         status.textContent = error.message;
     } finally {
@@ -593,12 +609,14 @@ function renderFieldInto(spec, target, replace = false) {
         const local = [...new Set(localStreamerChoices)].sort();
         const remote = [...new Set(remoteStreamerChoices)].sort();
         const known = [...new Set([...local, ...remote])];
-        const updateValue = state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
+        const updateValue = document.querySelector('[data-setting="UPDATE_SCRIPTS"]')?.value
+            || state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
         const preferGitHub = String(updateValue).toLowerCase() === 'true';
         const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="">Choose scripts for your streaming app…</option>${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
+        const clearOption = '<option value="none::">No streaming app selected</option>';
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="" disabled ${!spec.value ? 'selected' : ''}>Choose scripts for your streaming app…</option>${clearOption}${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -614,17 +632,28 @@ function renderFieldInto(spec, target, replace = false) {
     const source = spec.locked ? `<span class="badge config-lock" title="${title}">set by environment</span>` : '';
     wrap.innerHTML = `<div class="setting-label"><label>${escapeHTML(spec.label)}</label>${source}</div>${control}<div class="setting-description">${escapeHTML(spec.desc)}${spec.type === 'seconds' ? ' (seconds)' : ''}</div>${spec.scriptVaries ? `<div class="setting-script-note">This setting depends on the selected streaming app. Leave it blank unless that app's instructions tell you what to enter.</div>` : ''}<div class="field-validation" data-validation-for="${spec.key}" aria-live="polite"></div>`;
     if (spec.key === 'STREAMER_APP') {
-        wrap.querySelector('select')?.addEventListener('change', event => {
+        const streamerSelect = wrap.querySelector('select');
+        const customInput = wrap.querySelector('[data-custom-streamer]');
+        streamerSelect?.addEventListener('change', event => {
+            if (customInput && event.target.value) customInput.value = '';
             const choice = decodeStreamerChoice(event.target.value);
             const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
             if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
             if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
+            if (updateScripts && !updateScripts.disabled && choice.source === 'none') updateScripts.value = 'false';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
             if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
+            if (byId('streamer-query-status') && choice.source === 'none') byId('streamer-query-status').textContent = 'The streaming app selection will be cleared when you save all changes.';
+        });
+        customInput?.addEventListener('input', () => {
+            if (customInput.value.trim()) streamerSelect.value = '';
         });
     }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
-    if (spec.key === 'PYATV') wrap.querySelector('select')?.addEventListener('input', updateTunerDeviceLabels);
+    if (spec.key === 'PYATV') wrap.querySelector('select')?.addEventListener('input', () => {
+        updateTunerDeviceLabels();
+        document.querySelectorAll('.tuner-card').forEach(card => setConnectionState(card, 'device', 'skipped'));
+    });
     validateCatalogField(spec, wrap);
     if (replace && existing) existing.replaceWith(wrap); else target.appendChild(wrap);
 }
@@ -652,7 +681,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const number = Number.isInteger(tuner.number) ? tuner.number : index;
     card.dataset.tunerNumber = String(number);
     if (Object.values(lock).some(Boolean)) card.dataset.fixedTunerNumber = String(number);
-    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button" ${String(tuner.encoderURL || '').trim() ? '' : 'disabled title="Add an encoder URL to enable preview"'}>Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
+    card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
@@ -671,6 +700,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         input.classList.remove('input-invalid');
         const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
         if (output) output.textContent = '';
+        setConnectionState(card, input.dataset.tuner === 'tunerIP' ? 'device' : 'encoder', 'skipped');
         updateTunerDeviceLabels();
         if (input.dataset.tuner === 'encoderURL') updateTunerPreviewButton(card);
     }));
@@ -680,9 +710,10 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
 
 function updateTunerPreviewButton(card) {
     const button = card.querySelector('[data-tuner-preview]');
+    const available = Boolean(state.tuners.previewAvailable?.[tunerNumber(card)]);
     const configured = Boolean(card.querySelector('[data-tuner="encoderURL"]')?.value.trim());
-    button.disabled = !configured;
-    button.title = configured ? '' : 'Add an encoder URL to enable preview';
+    button.disabled = !available;
+    button.title = available ? '' : (configured ? 'Save and restart ah4c to preview this encoder URL' : 'Add an encoder URL to enable preview');
 }
 
 function canDeleteTunerCard(card) {
@@ -736,6 +767,7 @@ function renumberTuners() {
         card.dataset.tunerNumber = String(index);
         card.querySelector('.tuner-number').textContent = index;
         card.querySelector('h3').textContent = `Tuner ${index}`;
+        updateTunerPreviewButton(card);
         const remove = card.querySelector('.delete-tuner');
         remove.disabled = !canDeleteTunerCard(card);
         if (card.dataset.fixedTunerNumber !== undefined) {
@@ -958,7 +990,7 @@ function selectedStreamerPath(root = document) {
 }
 
 function decodeStreamerChoice(value) {
-    const match = /^(local|github|saved)::(.*)$/.exec(value || '');
+    const match = /^(local|github|saved|none)::(.*)$/.exec(value || '');
     return match ? {source:match[1], path:match[2]} : {source:'', path:value || ''};
 }
 
@@ -1002,7 +1034,7 @@ function catalogValidationMessage(spec, value) {
     if (/\r|\n/.test(value)) return 'Use one line only.';
     if (spec.key === 'STREAMER_APP') {
         const canonical = value.trim().replace(/^\.\//, '').replace(/\/+$/, '');
-        return /^scripts\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(canonical) ? '' : 'Use scripts/package or scripts/device/app.';
+        return /^scripts\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(canonical) ? '' : 'Use scripts/device or scripts/device/app.';
     }
     if (spec.key === 'IPADDRESS' || spec.key === 'CHANNELSIP') {
         try { parsedServerAddress(value, true); return ''; } catch (_) {
@@ -1063,13 +1095,23 @@ function validateExtraRow(row) {
     if (row.dataset.locked === 'true') return true;
     const key = row.querySelector('[data-extra-key]').value.trim();
     const value = row.querySelector('[data-extra-value]').value;
+    const duplicate = key && [...document.querySelectorAll('.extra-row')]
+        .filter(item => item.querySelector('[data-extra-key]').value.trim() === key).length > 1;
     let message = '';
-    if (key && !/^[A-Z][A-Z0-9_]*$/.test(key)) message = 'Names use uppercase letters, numbers and underscores, and must start with a letter.';
+    if (!key && value) message = 'A variable name is required when a value is entered.';
+    else if (key && !/^[A-Z][A-Z0-9_]*$/.test(key)) message = 'Names use uppercase letters, numbers and underscores, and must start with a letter.';
     else if (key && (state.catalog.some(spec => spec.key === key) || /^(NUMBER_TUNERS|TUNER\d+_IP|ENCODER\d+_URL|CMD\d+|TEECMD\d+)$/.test(key))) message = 'This name is already managed by another field.';
+    else if (duplicate) message = 'This variable name is already used by another row.';
     else if (/\r|\n/.test(value)) message = 'Values must use one line.';
     row.classList.toggle('field-invalid', Boolean(message));
     row.querySelector('[data-extra-error]').textContent = message;
     return !message;
+}
+
+function validateAllExtraRows() {
+    let valid = true;
+    document.querySelectorAll('.extra-row').forEach(row => { valid = validateExtraRow(row) && valid; });
+    return valid;
 }
 
 function validateSettingsForm(section = '') {
@@ -1091,9 +1133,7 @@ function validateSettingsForm(section = '') {
         });
     }
     if (!section) {
-        document.querySelectorAll('.extra-row').forEach(row => {
-            if (!validateExtraRow(row) && !firstInvalid) firstInvalid = row;
-        });
+        if (!validateAllExtraRows() && !firstInvalid) firstInvalid = document.querySelector('.extra-row.field-invalid');
     }
     const status = byId('save-status');
     status.classList.toggle('validation-error', Boolean(firstInvalid));
@@ -1118,8 +1158,23 @@ function setConnectionState(card, kind, stateName, message = '') {
     }
 }
 
+function tunerConfigurationSnapshot() {
+    return JSON.stringify({
+        pyatv: document.querySelector('[data-setting="PYATV"]')?.value || '',
+        tuners: [...byId('tuners').children].map(card => ({
+            number: tunerNumber(card),
+            values: Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]))
+        }))
+    });
+}
+
 function openAppleTVPairing(card) {
     const target = card.querySelector('[data-tuner="tunerIP"]').value.trim();
+    const generation = ++appleTVPairGeneration;
+    appleTVPairAbort?.abort();
+    appleTVPairAbort = null;
+    appleTVPairFinishAbort?.abort();
+    appleTVPairFinishAbort = null;
     appleTVPairCard = card;
     card.querySelector('[data-pair-apple-tv]').disabled = true;
     appleTVPairSession = '';
@@ -1134,10 +1189,10 @@ function openAppleTVPairing(card) {
     byId('apple-tv-pin').value = '';
     byId('apple-tv-pair-modal').classList.add('open');
     byId('apple-tv-pair-modal').dataset.target = target;
-    startAppleTVPairing();
+    startAppleTVPairing(generation);
 }
 
-async function startAppleTVPairing() {
+async function startAppleTVPairing(generation) {
     const modal = byId('apple-tv-pair-modal');
     const status = byId('apple-tv-pair-status');
     const controller = new AbortController();
@@ -1145,6 +1200,7 @@ async function startAppleTVPairing() {
     try {
         const response = await fetch('/api/config/apple-tv-pairing/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({target:modal.dataset.target}), signal:controller.signal});
         const payload = await response.json();
+        if (generation !== appleTVPairGeneration) return;
         if (!response.ok) throw new Error(payload.error || 'Could not start Apple TV pairing');
         appleTVPairSession = payload.sessionId;
         byId('apple-tv-pin-panel').classList.remove('hidden');
@@ -1152,13 +1208,15 @@ async function startAppleTVPairing() {
         status.textContent = payload.message;
         byId('apple-tv-pin').focus();
     } catch (error) {
-        if (error.name !== 'AbortError') status.textContent = error.message;
+        if (generation === appleTVPairGeneration && error.name !== 'AbortError') status.textContent = error.message;
     } finally {
         if (appleTVPairAbort === controller) appleTVPairAbort = null;
     }
 }
 
 async function finishAppleTVPairing() {
+    const button = byId('apple-tv-pair-submit');
+    if (button.disabled) return;
     const pin = byId('apple-tv-pin').value.trim();
     const error = byId('apple-tv-pin-error');
     if (!/^\d{4}$/.test(pin)) {
@@ -1167,32 +1225,46 @@ async function finishAppleTVPairing() {
         return;
     }
     error.textContent = '';
-    const button = byId('apple-tv-pair-submit');
     const status = byId('apple-tv-pair-status');
+    const generation = appleTVPairGeneration;
+    const sessionID = appleTVPairSession;
+    const card = appleTVPairCard;
+    const controller = new AbortController();
+    appleTVPairFinishAbort = controller;
     button.disabled = true;
     status.textContent = 'Finishing pairing…';
     try {
-        const response = await fetch('/api/config/apple-tv-pairing/pin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession, pin})});
+        const response = await fetch('/api/config/apple-tv-pairing/pin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:sessionID, pin}), signal:controller.signal});
         const payload = await response.json();
+        if (generation !== appleTVPairGeneration || sessionID !== appleTVPairSession || card !== appleTVPairCard) return;
         if (!response.ok) throw new Error(payload.error || 'Apple TV pairing did not finish');
         status.textContent = payload.message;
-        if (appleTVPairCard) setConnectionState(appleTVPairCard, 'device', 'ready', 'Apple TV is reachable and paired');
+        if (card) setConnectionState(card, 'device', 'ready', 'Apple TV is reachable and paired');
         if (wizard) showNotice('Apple TV paired. Pair each remaining Apple TV, then restart ah4c to apply pyatv.', 'warning');
         button.classList.add('hidden');
         byId('apple-tv-pair-cancel').textContent = 'Done';
     } catch (pairError) {
-        status.textContent = pairError.message;
-        button.disabled = false;
+        if (generation === appleTVPairGeneration && pairError.name !== 'AbortError') {
+            status.textContent = pairError.message;
+            button.disabled = false;
+        }
+    } finally {
+        if (appleTVPairFinishAbort === controller) appleTVPairFinishAbort = null;
     }
 }
 
 async function closeAppleTVPairing() {
+    const sessionID = appleTVPairSession;
+    appleTVPairGeneration++;
     appleTVPairAbort?.abort();
     appleTVPairAbort = null;
-    if (appleTVPairSession) {
-        fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession})}).catch(() => {});
+    appleTVPairFinishAbort?.abort();
+    appleTVPairFinishAbort = null;
+    if (sessionID) {
+        fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:sessionID})}).catch(() => {});
     }
     appleTVPairSession = '';
+    appleTVPairCard = null;
     byId('apple-tv-pair-cancel').textContent = 'Cancel';
     byId('apple-tv-pair-modal').classList.remove('open');
     updateTunerDeviceLabels();
@@ -1215,6 +1287,12 @@ async function checkConnections() {
         firstInvalid.querySelector('.input-invalid')?.focus();
         return false;
     }
+    const configuration = tunerConfigurationSnapshot();
+    const checks = cards.map(card => ({
+        card,
+        number: tunerNumber(card),
+        tuner: Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]))
+    }));
     button.disabled = true;
     summary.textContent = 'Checking the values currently shown…';
     cards.forEach(card => {
@@ -1228,10 +1306,9 @@ async function checkConnections() {
     async function worker() {
         while (cursor < cards.length) {
             const index = cursor++;
-            const card = cards[index];
-            const tuner = Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]));
+            const {card, number, tuner} = checks[index];
             try {
-                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:tunerNumber(card), tuner, usePyatv:pyatv})});
+                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:number, tuner, usePyatv:pyatv})});
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload.error || 'Connection check failed');
                 setConnectionState(card, 'device', payload.device.state, payload.device.message);
@@ -1249,7 +1326,15 @@ async function checkConnections() {
         }
     }
     await Promise.all(Array.from({length:Math.min(3, cards.length)}, () => worker()));
-    button.disabled = false;
+    button.disabled = byId('tuners').children.length === 0;
+    if (configuration !== tunerConfigurationSnapshot()) {
+        document.querySelectorAll('.tuner-card').forEach(card => {
+            setConnectionState(card, 'device', 'skipped');
+            setConnectionState(card, 'encoder', 'skipped');
+        });
+        summary.textContent = 'Tuner settings changed while connections were being checked. Check them again.';
+        return false;
+    }
     summary.textContent = blockedMessage || 'Connection check finished.';
     return allReady && !blockedMessage;
 }
@@ -1265,10 +1350,10 @@ function addExtraRow(key = '', value = '', locked = false) {
     row.className = 'extra-row' + (locked ? ' locked' : '');
     row.dataset.locked = locked ? 'true' : 'false';
     row.innerHTML = `<input type="text" data-extra-key value="${escapeHTML(key)}" placeholder="VARIABLE_NAME" ${locked ? 'disabled' : ''}><input type="text" data-extra-value value="${escapeHTML(value)}" placeholder="value" ${locked ? 'disabled' : ''}><button class="btn btn-danger btn-sm" type="button" ${locked ? 'disabled' : ''}>Remove</button>${locked ? '<span class="badge config-lock">set by environment</span>' : ''}<div class="field-validation extra-validation" data-extra-error aria-live="polite"></div>`;
-    row.querySelector('button').addEventListener('click', () => row.remove());
-    row.querySelectorAll('input').forEach(input => input.addEventListener('input', () => validateExtraRow(row)));
+    row.querySelector('button').addEventListener('click', () => { row.remove(); validateAllExtraRows(); });
+    row.querySelectorAll('input').forEach(input => input.addEventListener('input', validateAllExtraRows));
     byId('extra-vars').appendChild(row);
-    validateExtraRow(row);
+    validateAllExtraRows();
 }
 
 function renderHost() {
@@ -1300,11 +1385,34 @@ function collectPayload() {
     return payload;
 }
 
+function setSettingsControlsBusy() {
+    const controls = [...document.querySelectorAll('#settings-content input, #settings-content select, #settings-content button')]
+        .filter(control => !control.disabled);
+    controls.forEach(control => { control.disabled = true; });
+    return () => controls.forEach(control => {
+        if (control.isConnected) control.disabled = false;
+    });
+}
+
 async function saveSettings(restartAfter = false) {
     const status = byId('save-status');
+    settingsSaveInProgress = true;
+    const restoreControls = setSettingsControlsBusy();
     status.textContent = 'Saving…';
-    const response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectPayload())});
-    const payload = await response.json();
+    let response;
+    let payload;
+    try {
+        response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectPayload())});
+        payload = await response.json();
+    } catch (error) {
+        settingsSaveInProgress = false;
+        restoreControls();
+        status.classList.add('validation-error');
+        status.textContent = `Save failed: ${error.message || 'Could not reach ah4c.'}`;
+        return false;
+    }
+    settingsSaveInProgress = false;
+    restoreControls();
     if (!response.ok) {
         status.classList.add('validation-error');
         status.textContent = payload.error || 'Save failed';
@@ -1339,23 +1447,23 @@ function restartReasonLabels() {
 
 function showRestartPrompt(manual = false) {
     const confirmButton = byId('restart-prompt-confirm');
-    byId('restart-prompt-title').textContent = 'Restart container?';
+    byId('restart-prompt-title').textContent = state.dockerManaged ? 'Restart container?' : 'Restart ah4c?';
     byId('restart-prompt-message').textContent = manual
         ? (state.dockerManaged
             ? 'Restart the container now? Any active recording or live TV stream will be interrupted.'
-            : 'Restart the container manually. Any active recording or live TV stream will be interrupted.')
+            : 'Restart ah4c now? Any active recording or live TV stream will be interrupted.')
         : (state.dockerManaged
             ? 'Settings saved. Restart the container to apply these changes.'
-            : 'Settings saved. Restart the container manually to apply these changes.');
+            : 'Settings saved. Restart ah4c to apply these changes.');
     byId('restart-prompt-warning').classList.add('hidden');
     confirmButton.dataset.force = 'false';
-    confirmButton.textContent = 'Restart container';
+    confirmButton.textContent = state.dockerManaged ? 'Restart container' : 'Restart ah4c';
     confirmButton.classList.add('btn-primary');
     confirmButton.classList.remove('btn-danger');
-    confirmButton.classList.toggle('hidden', !state.dockerManaged);
-    byId('restart-prompt-cancel').textContent = state.dockerManaged ? 'Not now' : 'Close';
+    confirmButton.classList.remove('hidden');
+    byId('restart-prompt-cancel').textContent = 'Not now';
     byId('restart-prompt-modal').classList.add('open');
-    (state.dockerManaged ? confirmButton : byId('restart-prompt-cancel')).focus();
+    confirmButton.focus();
 }
 
 function showRestartTuneWarning(payload) {
@@ -1365,7 +1473,7 @@ function showRestartTuneWarning(payload) {
         : 'A recording or live TV stream is starting.';
     const confirmButton = byId('restart-prompt-confirm');
     byId('restart-prompt-title').textContent = 'A tuner is in use';
-    byId('restart-prompt-message').textContent = 'The container was not restarted.';
+    byId('restart-prompt-message').textContent = state.dockerManaged ? 'The container was not restarted.' : 'ah4c was not restarted.';
     byId('restart-prompt-warning').textContent = `${activity} Restarting now will interrupt the recording or live TV stream.`;
     byId('restart-prompt-warning').classList.remove('hidden');
     confirmButton.dataset.force = 'true';
@@ -1384,39 +1492,50 @@ function closeRestartPrompt() {
 
 function updateRestartUI() {
     byId('restart-banner').classList.toggle('hidden', !state.restartNeeded);
-    const text = state.dockerManaged ? 'Restart container' : 'Restart container manually';
+    const text = state.dockerManaged ? 'Restart container' : 'Restart ah4c';
     byId('restart-settings').textContent = text;
     byId('restart-top').textContent = text;
     const labels = restartReasonLabels();
     const reasons = labels.length ? `: ${readableList(labels)}` : '';
-    byId('restart-reasons').textContent = `Restart the container to apply${reasons}.`;
+    byId('restart-reasons').textContent = state.dockerManaged ? `Restart the container to apply${reasons}.` : `Restart ah4c to apply${reasons}.`;
 }
 
 async function restart(force = false) {
-    if (!state.dockerManaged) {
-        showNotice('Settings are saved. Restart the container manually to apply startup changes.', 'warning');
-        return;
+    let response;
+    let payload;
+    try {
+        response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
+        payload = await response.json();
+    } catch (error) {
+        showNotice(`Restart request failed: ${error.message || 'Could not reach ah4c.'}`, 'danger');
+        return false;
     }
-    const response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
-    const payload = await response.json();
     if (response.status === 409 && !force) {
         showRestartTuneWarning(payload);
-        return;
+        return false;
     }
     if (!response.ok) {
-        showNotice(payload.error + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
-        return;
+        showNotice((payload.error || 'Restart request failed') + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
+        return false;
     }
     closeRestartPrompt();
-    showNotice('Restarting the container…', 'warning');
+    showNotice(state.dockerManaged ? 'Restarting the container…' : 'Restarting ah4c…', 'warning');
+    restartWaitStarted = Date.now();
+    restartWaitLimit = state.dockerManaged ? 180000 : 15000;
     setTimeout(waitForRestart, 1200);
+    return true;
 }
 
 async function waitForRestart() {
     try {
-        const response = await fetch('/api/version', {cache:'no-store'});
-        if (response.ok) { location.href = '/settings'; return; }
+        const response = await fetch('/api/config', {cache:'no-store'});
+        const payload = await response.json();
+        if (response.ok && !payload.restartNeeded) { location.href = '/settings'; return; }
     } catch (_) {}
+    if (Date.now() - restartWaitStarted >= restartWaitLimit) {
+        showNotice('ah4c did not restart. Check the logs and try again.', 'danger');
+        return;
+    }
     setTimeout(waitForRestart, 1000);
 }
 
@@ -1587,7 +1706,7 @@ async function handleSaveClick() {
         saveButtons.forEach(button => {
             button.dataset.busy = 'false';
             button.disabled = false;
-            button.textContent = button.id === 'save-settings' && wizard && wizardStep === wizardSections().length ? 'Save setup' : (button.dataset.idleLabel || 'Save changes');
+            button.textContent = button.id === 'save-settings' && wizard && wizardStep === wizardSections().length ? 'Save setup' : (button.dataset.idleLabel || 'Save all changes');
         });
     }
 }

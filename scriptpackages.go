@@ -32,8 +32,8 @@ type githubContentsEntry struct {
 	DownloadURL string `json:"download_url"`
 }
 
-// installScriptPackage downloads one explicitly selected scripts/package or
-// scripts/device/app package. It stages every file beside the destination and swaps the complete
+// installScriptPackage downloads one explicitly selected scripts/device or
+// scripts/device/app folder. It stages every file beside the destination and swaps the complete
 // directory into place, so a network failure cannot damage a working package.
 func installScriptPackage(ctx context.Context, selection string) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -44,7 +44,7 @@ func installScriptPackage(ctx context.Context, selection string) error {
 func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) error {
 	selection = canonicalStreamerSelection(selection)
 	if !validStreamerSelection(selection) {
-		return fmt.Errorf("script package must use scripts/package or scripts/device/app")
+		return fmt.Errorf("script folder must use scripts/device or scripts/device/app")
 	}
 	parts := strings.Split(selection, "/")
 	if !allowed() {
@@ -101,10 +101,10 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	}
 	var entries []githubContentsEntry
 	if err := json.Unmarshal(contents, &entries); err != nil {
-		return fmt.Errorf("could not read the script package list: %w", err)
+		return fmt.Errorf("could not read the script folder list: %w", err)
 	}
 	if len(entries) == 0 || len(entries) > maxPackageFiles {
-		return fmt.Errorf("the selected script package has an unexpected number of files")
+		return fmt.Errorf("the selected script folder has an unexpected number of files")
 	}
 
 	root, err := filepath.Abs(scriptsRoot)
@@ -157,7 +157,7 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 		}
 		total += int64(len(data))
 		if total > maxPackageBytes {
-			return fmt.Errorf("the selected script package is larger than the safe download limit")
+			return fmt.Errorf("the selected script folder is larger than the safe download limit")
 		}
 		mode := os.FileMode(0644)
 		if strings.HasSuffix(entry.Name, ".sh") {
@@ -182,17 +182,17 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	hadTarget := false
 	if _, err := os.Lstat(target); err == nil {
 		if err := os.Rename(target, backup); err != nil {
-			return fmt.Errorf("could not preserve the current script package: %w", err)
+			return fmt.Errorf("could not preserve the current script folder: %w", err)
 		}
 		hadTarget = true
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("could not inspect the current script package: %w", err)
+		return fmt.Errorf("could not inspect the current script folder: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
 		if hadTarget {
 			_ = os.Rename(backup, target)
 		}
-		return fmt.Errorf("could not activate the downloaded script package: %w", err)
+		return fmt.Errorf("could not activate the downloaded script folder: %w", err)
 	}
 	if hadTarget {
 		if err := os.RemoveAll(backup); err != nil {
