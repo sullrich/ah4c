@@ -1234,22 +1234,27 @@ body.release-popover-open { overflow: hidden; }
 .release-recording-panel legend { margin-bottom: .35rem; color: var(--text-muted); font-size: .76rem; font-weight: 500; }
 .release-recording-list { display: grid; gap: .5rem; margin-bottom: .55rem; }
 .release-recording-choice {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, 1fr);
-  align-items: flex-start;
-  column-gap: .8rem;
+  display: block;
+  width: 100%;
   padding: .65rem .7rem;
   color: var(--text);
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
+  font: inherit;
   line-height: 1.45;
+  text-align: left;
   cursor: pointer;
 }
 .release-recording-choice:hover,
-.release-recording-choice:focus-within { border-color: var(--danger); }
-.release-recording-choice input { width: 1rem; height: 1rem; margin: .16rem 0 0; accent-color: var(--danger); }
-.release-recording-choice span { min-width: 0; overflow-wrap: anywhere; }
+.release-recording-choice:focus-visible,
+.release-recording-choice.is-selected {
+  outline: none;
+  color: var(--text);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.release-recording-choice span { display: block; min-width: 0; overflow-wrap: anywhere; }
 .release-tuner-modal .setting-description { margin-top: .35rem; }
 @media (max-width: 520px) {
   .release-tuner-modal .btn-row { align-items: stretch; flex-direction: column; }

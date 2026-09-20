@@ -373,12 +373,14 @@
             );
             var list = $('#release-recording-list').empty();
             $.each(recordings, function(position, recording) {
-                var choice = $('<label>').addClass('release-recording-choice');
-                $('<input>')
-                    .attr({ type: 'radio', name: 'release-recording-job' })
-                    .val(recording.jobID)
-                    .prop('checked', position === 0)
-                    .appendTo(choice);
+                var choice = $('<button>')
+                    .attr({ type: 'button', 'aria-pressed': position === 0 ? 'true' : 'false' })
+                    .addClass('release-recording-choice' + (position === 0 ? ' is-selected' : ''))
+                    .data('job-id', recording.jobID)
+                    .on('click', function() {
+                        $('.release-recording-choice').removeClass('is-selected').attr('aria-pressed', 'false');
+                        $(this).addClass('is-selected').attr('aria-pressed', 'true');
+                    });
                 $('<span>').text(recording.displayDetail).appendTo(choice);
                 choice.appendTo(list);
             });
@@ -499,7 +501,7 @@
 
         function stopRecordingAndReleaseTuner() {
             var index = releaseIndex;
-            var jobID = $('input[name="release-recording-job"]:checked').val();
+            var jobID = $('.release-recording-choice.is-selected').data('job-id');
             if (index === null || !jobID || releasing[index]) return;
             setReleaseBusy(index, 'Stopping recording…');
             $.ajax({
