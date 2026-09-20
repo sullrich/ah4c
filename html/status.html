@@ -152,6 +152,8 @@
         var tunerActive = [];
         var tunerLabels = [];
         var channelsRecordings = [];
+        var channelsRecordingSignature = '';
+        var channelsRecordingFetchInProgress = false;
         var releaseIndex = null;
 
         function esc(s) {
@@ -361,6 +363,26 @@
 
         function tunerIsRecording(index) {
             return channelsRecordings.some(function(recording) { return recordingMatchesTuner(recording, index); });
+        }
+
+        function refreshRecordingIndicators() {
+            $('.tuner-status-card[data-tuner-index]').each(function() {
+                var card = $(this);
+                var index = Number(card.attr('data-tuner-index'));
+                var timer = card.find('.tune-timer');
+                if (!timer.length) return;
+                var isRecording = tunerIsRecording(index);
+                card.toggleClass('is-recording', isRecording);
+                timer.toggleClass('is-recording', isRecording);
+                if (isRecording && !timer.find('.recording-dot').length) {
+                    timer.prepend('<span class="recording-dot" aria-hidden="true"></span>');
+                } else if (!isRecording) {
+                    timer.find('.recording-dot').remove();
+                }
+                var label = tunerLabels[index] || '';
+                var activityLabel = label ? label + (isRecording ? ' — recording' : ' — streaming') : (isRecording ? 'Recording' : 'Streaming');
+                timer.attr({ title: activityLabel, 'aria-label': activityLabel });
+            });
         }
 
         function showRecordingReleaseWarning(index, recordings) {
@@ -658,7 +680,7 @@
 		                    badge = `<span class="tune-timer${isRecording ? ' is-recording' : ''}" title="${esc(activityLabel)}" aria-label="${esc(activityLabel)}">${recordingDot}${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
 		                tunerHtml += `
-		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''} ${isRecording ? 'is-recording' : ''}">
+		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''} ${isRecording ? 'is-recording' : ''}" data-tuner-index="${index}">
 		                        <div class="tuner-status-head">
 		                            <span class="tuner-number">${index}</span>
 		                            <strong>Tuner ${index}</strong>
@@ -679,6 +701,7 @@
 		                `;
 		            });
 		            $('#tunerGrid').html(tunerHtml);
+                    refreshRecordingIndicators();
 
 		            // Populate Reader Status
 		            var readerStatusHtml = `
@@ -903,39 +926,67 @@
     </script>
     <script>
         $(document).ready(function() {
+            var channelsActivityTimer = null;
+
+            function scheduleChannelsActivityPoll() {
+                clearTimeout(channelsActivityTimer);
+                if (document.hidden) return;
+                var delay = tunerActive.some(Boolean) ? 1000 : 5000;
+                channelsActivityTimer = setTimeout(fetchDataAndUpdateDVR, delay);
+            }
+
+            function fetchEnrichedRecordings(signature) {
+                if (channelsRecordingFetchInProgress) return;
+                channelsRecordingFetchInProgress = true;
+                $.getJSON('/api/channels/recordings')
+                    .done(function(data) {
+                        if (channelsRecordingSignature !== signature) return;
+                        channelsRecordings = recordingActivities(data);
+                        refreshRecordingIndicators();
+                    })
+                    .fail(function() {
+                        if (channelsRecordingSignature === signature) channelsRecordingSignature = '';
+                    })
+                    .always(function() { channelsRecordingFetchInProgress = false; });
+            }
+
+            function renderDVRActivity(data) {
+                var status = data.busy ? '— Active' : '— Idle';
+                $('#activity').text(status);
+                var activityHtml = '';
+                var isempty = true;
+                $.each(data.activity || {}, function(key, details) {
+                    activityHtml += `<tr><td>${esc(details)}</td></tr>`;
+                    isempty = false;
+                });
+                if (isempty) activityHtml = `<tr><td>&nbsp;</td></tr>`;
+                $('#activityTable').html(activityHtml);
+            }
+
             function fetchDataAndUpdateDVR() {
                 if (document.hidden) return;
-                // Fetch data from /dvr
-                $.getJSON("/api/channels/recordings", function(data) {
-                    channelsRecordings = recordingActivities(data);
-					statusA = data.busy;
-					if(statusA == false) {
-						status = "— Idle";
-					} else {
-						status = "— Active";
-					}
-					$('#activity').text(status);
-					// Populate Activity Table
-                    var activityHtml = ``;
-					var isempty = true;
-                    $.each(data.activity, function(key, details) {
-                        activityHtml += `
-                            <tr>
-                                <td>${esc(details)}</td>
-                            </tr>
-                        `;
-						isempty = false;
-                    });
-					if(isempty == true) {
-						var activityHtml = `<tr><td>&nbsp;</td></tr>`;
-					}
-                    $('#activityTable').html(activityHtml);
-                });
+                $.getJSON("/status/channelsactivity")
+                    .done(function(data) {
+                        var detected = recordingActivities(data);
+                        var signature = $.map(detected, function(recording) { return recording.jobID; }).sort().join('|');
+                        if (signature !== channelsRecordingSignature) {
+                            channelsRecordingSignature = signature;
+                            channelsRecordings = [];
+                            refreshRecordingIndicators();
+                            if (signature) fetchEnrichedRecordings(signature);
+                        } else if (signature && !channelsRecordings.length && !channelsRecordingFetchInProgress) {
+                            fetchEnrichedRecordings(signature);
+                        }
+                        renderDVRActivity(data);
+                    })
+                    .always(scheduleChannelsActivityPoll);
             }
-            // Fetch data and update immediately
+
+            document.addEventListener('visibilitychange', function() {
+                clearTimeout(channelsActivityTimer);
+                if (!document.hidden) fetchDataAndUpdateDVR();
+            });
             fetchDataAndUpdateDVR();
-            // Set interval to fetch data every 1 seconds (1000 milliseconds)
-            setInterval(fetchDataAndUpdateDVR, 3000);
         });
     </script>
 </body>
