@@ -188,7 +188,7 @@
             <div class="settings-actions">
                 <button id="wizard-back" class="btn hidden" type="button">Back</button>
                 <button id="save-settings" class="btn btn-primary" data-save-settings type="button">Save settings</button>
-                <button id="restart-settings" class="btn hidden" type="button">Restart container</button>
+                <button id="restart-settings" class="btn" type="button">Restart container</button>
                 <span id="save-status" class="muted"></span>
             </div>
         </div>
@@ -1380,7 +1380,6 @@ function closeRestartPrompt() {
 
 function updateRestartUI() {
     byId('restart-banner').classList.toggle('hidden', !state.restartNeeded);
-    byId('restart-settings').classList.toggle('hidden', !state.restartNeeded);
     const text = state.dockerManaged ? 'Restart container' : 'Restart container manually';
     byId('restart-settings').textContent = text;
     byId('restart-top').textContent = text;
