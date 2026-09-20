@@ -200,12 +200,18 @@ func restartConfigHandler(c *gin.Context) {
 
 func scheduleConfigRestart(dockerManaged bool) error {
 	executable := ""
+	execEnvironment := os.Environ()
 	if !dockerManaged {
 		var err error
 		executable, err = configExecutable()
 		if err != nil {
 			return err
 		}
+		execEnvironment = make([]string, 0, len(startupEnvironment))
+		for key, value := range startupEnvironment {
+			execEnvironment = append(execEnvironment, key+"="+value)
+		}
+		sort.Strings(execEnvironment)
 	}
 	go func() {
 		configRestartDelay()
@@ -213,7 +219,7 @@ func scheduleConfigRestart(dockerManaged bool) error {
 			configExit(0)
 			return
 		}
-		if err := configExec(executable, os.Args, os.Environ()); err != nil {
+		if err := configExec(executable, os.Args, execEnvironment); err != nil {
 			logger("[CONFIG] could not restart ah4c: %v", err)
 		}
 	}()

@@ -311,6 +311,8 @@ let tunerPreviewDeadline = 0;
 const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
+let streamerLoadGeneration = 0;
+let settingsSaveInProgress = false;
 let wizard = false;
 let wizardStep = 0;
 let localScriptDirectory = null;
@@ -318,7 +320,11 @@ let prerollState = null;
 let appleTVPairSession = '';
 let appleTVPairCard = null;
 let appleTVPairAbort = null;
+let appleTVPairFinishAbort = null;
+let appleTVPairGeneration = 0;
 let tunerOrderCards = [];
+let restartWaitStarted = 0;
+let restartWaitLimit = 30000;
 
 const byId = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -370,7 +376,7 @@ function renderPreroll() {
     message.textContent = prerollState.message || (prerollState.restartNeeded ? 'Restart ah4c to apply this change.' : 'Images and videos are prepared when ah4c starts.');
     picker.disabled = !prerollState.managed;
     upload.disabled = !prerollState.managed || !picker.files.length;
-    remove.disabled = !prerollState.managed || !prerollState.present;
+    remove.disabled = !prerollState.deletable;
 }
 
 function applyPrerollRestartState() {
@@ -405,7 +411,7 @@ async function uploadPreroll() {
 }
 
 async function deletePreroll() {
-    if (!prerollState?.present || !confirm(`Delete ${prerollState.name}?`)) return;
+    if (!prerollState?.deletable || !confirm(`Delete ${prerollState.name}?`)) return;
     const status = byId('preroll-status');
     const button = byId('delete-preroll');
     button.disabled = true;
@@ -426,26 +432,33 @@ async function deletePreroll() {
 
 async function loadStreamers(remote) {
     const status = byId('streamer-query-status');
-    const typedChoice = selectedStreamerPath();
+    const generation = ++streamerLoadGeneration;
     if (status && remote) status.textContent = 'Checking sullrich/ah4c on GitHub for scripts…';
     try {
         const query = new URLSearchParams({details:'true'});
         if (remote) query.set('remote', 'true');
         const response = await fetch('/api/config/streamers?' + query);
         const payload = await response.json();
+        if (generation !== streamerLoadGeneration) return;
         if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
         if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
+        if (settingsSaveInProgress) {
+            if (status && remote) status.textContent = response.ok
+                ? `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`
+                : 'GitHub is unavailable right now. Showing local and previously saved scripts.';
+            return;
+        }
+        const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
+        const currentChoice = document.querySelector('[data-setting="STREAMER_APP"]') ? selectedStreamerPath() : spec?.value || '';
         if (!response.ok) {
             if (status) status.textContent = 'GitHub is unavailable right now. Showing local and previously saved scripts.';
-            const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
-            if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+            if (spec) renderFieldInto({...spec, value:currentChoice}, byId('section-streamer'), true);
             return;
         }
         if (status && remote) status.textContent = `Found ${remoteStreamerChoices.length} choices in sullrich/ah4c. No scripts were downloaded.`;
-        const spec = state?.catalog?.find(item => item.key === 'STREAMER_APP');
-        if (spec) renderFieldInto({...spec, value:typedChoice || spec.value}, byId('section-streamer'), true);
+        if (spec) renderFieldInto({...spec, value:currentChoice}, byId('section-streamer'), true);
     } catch (error) {
-        if (status) status.textContent = error.message;
+        if (generation === streamerLoadGeneration && status) status.textContent = error.message;
     }
 }
 
@@ -596,12 +609,14 @@ function renderFieldInto(spec, target, replace = false) {
         const local = [...new Set(localStreamerChoices)].sort();
         const remote = [...new Set(remoteStreamerChoices)].sort();
         const known = [...new Set([...local, ...remote])];
-        const updateValue = state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
+        const updateValue = document.querySelector('[data-setting="UPDATE_SCRIPTS"]')?.value
+            || state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
         const preferGitHub = String(updateValue).toLowerCase() === 'true';
         const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
         const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="" disabled ${!spec.value ? 'selected' : ''}>Choose scripts for your streaming app…</option>${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
+        const clearOption = '<option value="none::">No streaming app selected</option>';
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="" disabled ${!spec.value ? 'selected' : ''}>Choose scripts for your streaming app…</option>${clearOption}${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -625,15 +640,20 @@ function renderFieldInto(spec, target, replace = false) {
             const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
             if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
             if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
+            if (updateScripts && !updateScripts.disabled && choice.source === 'none') updateScripts.value = 'false';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
             if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
+            if (byId('streamer-query-status') && choice.source === 'none') byId('streamer-query-status').textContent = 'The streaming app selection will be cleared when you save all changes.';
         });
         customInput?.addEventListener('input', () => {
             if (customInput.value.trim()) streamerSelect.value = '';
         });
     }
     wrap.querySelectorAll('input, select').forEach(input => input.addEventListener('input', () => validateCatalogField(spec, wrap)));
-    if (spec.key === 'PYATV') wrap.querySelector('select')?.addEventListener('input', updateTunerDeviceLabels);
+    if (spec.key === 'PYATV') wrap.querySelector('select')?.addEventListener('input', () => {
+        updateTunerDeviceLabels();
+        document.querySelectorAll('.tuner-card').forEach(card => setConnectionState(card, 'device', 'skipped'));
+    });
     validateCatalogField(spec, wrap);
     if (replace && existing) existing.replaceWith(wrap); else target.appendChild(wrap);
 }
@@ -680,6 +700,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         input.classList.remove('input-invalid');
         const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
         if (output) output.textContent = '';
+        setConnectionState(card, input.dataset.tuner === 'tunerIP' ? 'device' : 'encoder', 'skipped');
         updateTunerDeviceLabels();
         if (input.dataset.tuner === 'encoderURL') updateTunerPreviewButton(card);
     }));
@@ -969,7 +990,7 @@ function selectedStreamerPath(root = document) {
 }
 
 function decodeStreamerChoice(value) {
-    const match = /^(local|github|saved)::(.*)$/.exec(value || '');
+    const match = /^(local|github|saved|none)::(.*)$/.exec(value || '');
     return match ? {source:match[1], path:match[2]} : {source:'', path:value || ''};
 }
 
@@ -1074,13 +1095,23 @@ function validateExtraRow(row) {
     if (row.dataset.locked === 'true') return true;
     const key = row.querySelector('[data-extra-key]').value.trim();
     const value = row.querySelector('[data-extra-value]').value;
+    const duplicate = key && [...document.querySelectorAll('.extra-row')]
+        .filter(item => item.querySelector('[data-extra-key]').value.trim() === key).length > 1;
     let message = '';
-    if (key && !/^[A-Z][A-Z0-9_]*$/.test(key)) message = 'Names use uppercase letters, numbers and underscores, and must start with a letter.';
+    if (!key && value) message = 'A variable name is required when a value is entered.';
+    else if (key && !/^[A-Z][A-Z0-9_]*$/.test(key)) message = 'Names use uppercase letters, numbers and underscores, and must start with a letter.';
     else if (key && (state.catalog.some(spec => spec.key === key) || /^(NUMBER_TUNERS|TUNER\d+_IP|ENCODER\d+_URL|CMD\d+|TEECMD\d+)$/.test(key))) message = 'This name is already managed by another field.';
+    else if (duplicate) message = 'This variable name is already used by another row.';
     else if (/\r|\n/.test(value)) message = 'Values must use one line.';
     row.classList.toggle('field-invalid', Boolean(message));
     row.querySelector('[data-extra-error]').textContent = message;
     return !message;
+}
+
+function validateAllExtraRows() {
+    let valid = true;
+    document.querySelectorAll('.extra-row').forEach(row => { valid = validateExtraRow(row) && valid; });
+    return valid;
 }
 
 function validateSettingsForm(section = '') {
@@ -1102,9 +1133,7 @@ function validateSettingsForm(section = '') {
         });
     }
     if (!section) {
-        document.querySelectorAll('.extra-row').forEach(row => {
-            if (!validateExtraRow(row) && !firstInvalid) firstInvalid = row;
-        });
+        if (!validateAllExtraRows() && !firstInvalid) firstInvalid = document.querySelector('.extra-row.field-invalid');
     }
     const status = byId('save-status');
     status.classList.toggle('validation-error', Boolean(firstInvalid));
@@ -1129,8 +1158,23 @@ function setConnectionState(card, kind, stateName, message = '') {
     }
 }
 
+function tunerConfigurationSnapshot() {
+    return JSON.stringify({
+        pyatv: document.querySelector('[data-setting="PYATV"]')?.value || '',
+        tuners: [...byId('tuners').children].map(card => ({
+            number: tunerNumber(card),
+            values: Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]))
+        }))
+    });
+}
+
 function openAppleTVPairing(card) {
     const target = card.querySelector('[data-tuner="tunerIP"]').value.trim();
+    const generation = ++appleTVPairGeneration;
+    appleTVPairAbort?.abort();
+    appleTVPairAbort = null;
+    appleTVPairFinishAbort?.abort();
+    appleTVPairFinishAbort = null;
     appleTVPairCard = card;
     card.querySelector('[data-pair-apple-tv]').disabled = true;
     appleTVPairSession = '';
@@ -1145,10 +1189,10 @@ function openAppleTVPairing(card) {
     byId('apple-tv-pin').value = '';
     byId('apple-tv-pair-modal').classList.add('open');
     byId('apple-tv-pair-modal').dataset.target = target;
-    startAppleTVPairing();
+    startAppleTVPairing(generation);
 }
 
-async function startAppleTVPairing() {
+async function startAppleTVPairing(generation) {
     const modal = byId('apple-tv-pair-modal');
     const status = byId('apple-tv-pair-status');
     const controller = new AbortController();
@@ -1156,6 +1200,7 @@ async function startAppleTVPairing() {
     try {
         const response = await fetch('/api/config/apple-tv-pairing/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({target:modal.dataset.target}), signal:controller.signal});
         const payload = await response.json();
+        if (generation !== appleTVPairGeneration) return;
         if (!response.ok) throw new Error(payload.error || 'Could not start Apple TV pairing');
         appleTVPairSession = payload.sessionId;
         byId('apple-tv-pin-panel').classList.remove('hidden');
@@ -1163,13 +1208,15 @@ async function startAppleTVPairing() {
         status.textContent = payload.message;
         byId('apple-tv-pin').focus();
     } catch (error) {
-        if (error.name !== 'AbortError') status.textContent = error.message;
+        if (generation === appleTVPairGeneration && error.name !== 'AbortError') status.textContent = error.message;
     } finally {
         if (appleTVPairAbort === controller) appleTVPairAbort = null;
     }
 }
 
 async function finishAppleTVPairing() {
+    const button = byId('apple-tv-pair-submit');
+    if (button.disabled) return;
     const pin = byId('apple-tv-pin').value.trim();
     const error = byId('apple-tv-pin-error');
     if (!/^\d{4}$/.test(pin)) {
@@ -1178,32 +1225,46 @@ async function finishAppleTVPairing() {
         return;
     }
     error.textContent = '';
-    const button = byId('apple-tv-pair-submit');
     const status = byId('apple-tv-pair-status');
+    const generation = appleTVPairGeneration;
+    const sessionID = appleTVPairSession;
+    const card = appleTVPairCard;
+    const controller = new AbortController();
+    appleTVPairFinishAbort = controller;
     button.disabled = true;
     status.textContent = 'Finishing pairing…';
     try {
-        const response = await fetch('/api/config/apple-tv-pairing/pin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession, pin})});
+        const response = await fetch('/api/config/apple-tv-pairing/pin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:sessionID, pin}), signal:controller.signal});
         const payload = await response.json();
+        if (generation !== appleTVPairGeneration || sessionID !== appleTVPairSession || card !== appleTVPairCard) return;
         if (!response.ok) throw new Error(payload.error || 'Apple TV pairing did not finish');
         status.textContent = payload.message;
-        if (appleTVPairCard) setConnectionState(appleTVPairCard, 'device', 'ready', 'Apple TV is reachable and paired');
+        if (card) setConnectionState(card, 'device', 'ready', 'Apple TV is reachable and paired');
         if (wizard) showNotice('Apple TV paired. Pair each remaining Apple TV, then restart ah4c to apply pyatv.', 'warning');
         button.classList.add('hidden');
         byId('apple-tv-pair-cancel').textContent = 'Done';
     } catch (pairError) {
-        status.textContent = pairError.message;
-        button.disabled = false;
+        if (generation === appleTVPairGeneration && pairError.name !== 'AbortError') {
+            status.textContent = pairError.message;
+            button.disabled = false;
+        }
+    } finally {
+        if (appleTVPairFinishAbort === controller) appleTVPairFinishAbort = null;
     }
 }
 
 async function closeAppleTVPairing() {
+    const sessionID = appleTVPairSession;
+    appleTVPairGeneration++;
     appleTVPairAbort?.abort();
     appleTVPairAbort = null;
-    if (appleTVPairSession) {
-        fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:appleTVPairSession})}).catch(() => {});
+    appleTVPairFinishAbort?.abort();
+    appleTVPairFinishAbort = null;
+    if (sessionID) {
+        fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:sessionID})}).catch(() => {});
     }
     appleTVPairSession = '';
+    appleTVPairCard = null;
     byId('apple-tv-pair-cancel').textContent = 'Cancel';
     byId('apple-tv-pair-modal').classList.remove('open');
     updateTunerDeviceLabels();
@@ -1226,6 +1287,12 @@ async function checkConnections() {
         firstInvalid.querySelector('.input-invalid')?.focus();
         return false;
     }
+    const configuration = tunerConfigurationSnapshot();
+    const checks = cards.map(card => ({
+        card,
+        number: tunerNumber(card),
+        tuner: Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]))
+    }));
     button.disabled = true;
     summary.textContent = 'Checking the values currently shown…';
     cards.forEach(card => {
@@ -1239,10 +1306,9 @@ async function checkConnections() {
     async function worker() {
         while (cursor < cards.length) {
             const index = cursor++;
-            const card = cards[index];
-            const tuner = Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]));
+            const {card, number, tuner} = checks[index];
             try {
-                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:tunerNumber(card), tuner, usePyatv:pyatv})});
+                const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:number, tuner, usePyatv:pyatv})});
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload.error || 'Connection check failed');
                 setConnectionState(card, 'device', payload.device.state, payload.device.message);
@@ -1260,7 +1326,15 @@ async function checkConnections() {
         }
     }
     await Promise.all(Array.from({length:Math.min(3, cards.length)}, () => worker()));
-    button.disabled = false;
+    button.disabled = byId('tuners').children.length === 0;
+    if (configuration !== tunerConfigurationSnapshot()) {
+        document.querySelectorAll('.tuner-card').forEach(card => {
+            setConnectionState(card, 'device', 'skipped');
+            setConnectionState(card, 'encoder', 'skipped');
+        });
+        summary.textContent = 'Tuner settings changed while connections were being checked. Check them again.';
+        return false;
+    }
     summary.textContent = blockedMessage || 'Connection check finished.';
     return allReady && !blockedMessage;
 }
@@ -1276,10 +1350,10 @@ function addExtraRow(key = '', value = '', locked = false) {
     row.className = 'extra-row' + (locked ? ' locked' : '');
     row.dataset.locked = locked ? 'true' : 'false';
     row.innerHTML = `<input type="text" data-extra-key value="${escapeHTML(key)}" placeholder="VARIABLE_NAME" ${locked ? 'disabled' : ''}><input type="text" data-extra-value value="${escapeHTML(value)}" placeholder="value" ${locked ? 'disabled' : ''}><button class="btn btn-danger btn-sm" type="button" ${locked ? 'disabled' : ''}>Remove</button>${locked ? '<span class="badge config-lock">set by environment</span>' : ''}<div class="field-validation extra-validation" data-extra-error aria-live="polite"></div>`;
-    row.querySelector('button').addEventListener('click', () => row.remove());
-    row.querySelectorAll('input').forEach(input => input.addEventListener('input', () => validateExtraRow(row)));
+    row.querySelector('button').addEventListener('click', () => { row.remove(); validateAllExtraRows(); });
+    row.querySelectorAll('input').forEach(input => input.addEventListener('input', validateAllExtraRows));
     byId('extra-vars').appendChild(row);
-    validateExtraRow(row);
+    validateAllExtraRows();
 }
 
 function renderHost() {
@@ -1311,11 +1385,34 @@ function collectPayload() {
     return payload;
 }
 
+function setSettingsControlsBusy() {
+    const controls = [...document.querySelectorAll('#settings-content input, #settings-content select, #settings-content button')]
+        .filter(control => !control.disabled);
+    controls.forEach(control => { control.disabled = true; });
+    return () => controls.forEach(control => {
+        if (control.isConnected) control.disabled = false;
+    });
+}
+
 async function saveSettings(restartAfter = false) {
     const status = byId('save-status');
+    settingsSaveInProgress = true;
+    const restoreControls = setSettingsControlsBusy();
     status.textContent = 'Saving…';
-    const response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectPayload())});
-    const payload = await response.json();
+    let response;
+    let payload;
+    try {
+        response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectPayload())});
+        payload = await response.json();
+    } catch (error) {
+        settingsSaveInProgress = false;
+        restoreControls();
+        status.classList.add('validation-error');
+        status.textContent = `Save failed: ${error.message || 'Could not reach ah4c.'}`;
+        return false;
+    }
+    settingsSaveInProgress = false;
+    restoreControls();
     if (!response.ok) {
         status.classList.add('validation-error');
         status.textContent = payload.error || 'Save failed';
@@ -1401,26 +1498,41 @@ function updateRestartUI() {
 }
 
 async function restart(force = false) {
-    const response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
-    const payload = await response.json();
+    let response;
+    let payload;
+    try {
+        response = await fetch(force ? '/api/config/restart?force=true' : '/api/config/restart', {method:'POST'});
+        payload = await response.json();
+    } catch (error) {
+        showNotice(`Restart request failed: ${error.message || 'Could not reach ah4c.'}`, 'danger');
+        return false;
+    }
     if (response.status === 409 && !force) {
         showRestartTuneWarning(payload);
-        return;
+        return false;
     }
     if (!response.ok) {
-        showNotice(payload.error + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
-        return;
+        showNotice((payload.error || 'Restart request failed') + (payload.tuners ? `: tuner ${payload.tuners.join(', ')}` : ''), 'danger');
+        return false;
     }
     closeRestartPrompt();
     showNotice(state.dockerManaged ? 'Restarting the container…' : 'Restarting ah4c…', 'warning');
+    restartWaitStarted = Date.now();
+    restartWaitLimit = state.dockerManaged ? 180000 : 15000;
     setTimeout(waitForRestart, 1200);
+    return true;
 }
 
 async function waitForRestart() {
     try {
-        const response = await fetch('/api/version', {cache:'no-store'});
-        if (response.ok) { location.href = '/settings'; return; }
+        const response = await fetch('/api/config', {cache:'no-store'});
+        const payload = await response.json();
+        if (response.ok && !payload.restartNeeded) { location.href = '/settings'; return; }
     } catch (_) {}
+    if (Date.now() - restartWaitStarted >= restartWaitLimit) {
+        showNotice('ah4c did not restart. Check the logs and try again.', 'danger');
+        return;
+    }
     setTimeout(waitForRestart, 1000);
 }
 

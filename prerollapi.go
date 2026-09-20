@@ -30,6 +30,7 @@ type prerollFileStatus struct {
 	Size          int64  `json:"size,omitempty"`
 	Directory     bool   `json:"directory"`
 	Managed       bool   `json:"managed"`
+	Deletable     bool   `json:"deletable"`
 	RestartNeeded bool   `json:"restartNeeded"`
 	Message       string `json:"message,omitempty"`
 }
@@ -87,6 +88,15 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 		return
 	}
 	target := filepath.Join(prerollAPIRoot, filename)
+	if target != previous {
+		if _, err := os.Lstat(target); err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("%s already exists outside Settings; rename the upload to preserve that file", filename)})
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not inspect the pre-roll destination: %v", err)})
+			return
+		}
+	}
 	temporary, err := os.CreateTemp(prerollAPIRoot, ".preroll-upload-*")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not create the pre-roll file: %v", err)})
@@ -139,10 +149,6 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 			return
 		}
 	}
-	if err := removeOtherManagedPrerolls(prerollAPIRoot, target); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but the previous pre-roll could not be removed: %v", err)})
-		return
-	}
 	markPrerollRestartNeeded()
 	logger("[PREROLL] uploaded %s (%s); restart required to prepare it", target, byteCount(written))
 	status, _ := inspectPrerollFile(prerollAPIRoot)
@@ -165,11 +171,20 @@ func deletePrerollConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No pre-roll file is stored"})
 		return
 	}
+	managed, err := managedPrerollSelection(prerollAPIRoot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if managed != selected {
+		c.JSON(http.StatusConflict, gin.H{"error": "This pre-roll file is managed outside Settings and cannot be deleted here"})
+		return
+	}
 	if err := os.Remove(selected); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not delete the pre-roll file: %v", err)})
 		return
 	}
-	if err := writePrerollSelection(prerollAPIRoot, ""); err != nil {
+	if err := clearPrerollSelection(prerollAPIRoot); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The pre-roll was deleted, but the selection could not be cleared: %v", err)})
 		return
 	}
@@ -217,6 +232,14 @@ func inspectPrerollFile(root string) (prerollFileStatus, error) {
 	status.Present = true
 	status.Name = filepath.Base(selected)
 	status.Size = file.Size()
+	managed, err := managedPrerollSelection(root)
+	if err != nil {
+		return status, fmt.Errorf("could not read the managed pre-roll selection: %w", err)
+	}
+	status.Deletable = managed == selected
+	if !status.Deletable {
+		status.Message = "This file is managed outside Settings. You can upload a replacement, but it cannot be deleted here."
+	}
 	return status, nil
 }
 
@@ -313,6 +336,14 @@ func writePrerollSelection(dir, name string) error {
 	return os.Rename(temporaryName, filepath.Join(dir, prerollSelectionName))
 }
 
+func clearPrerollSelection(dir string) error {
+	err := os.Remove(filepath.Join(dir, prerollSelectionName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func copyPrerollUpload(ctx context.Context, destination io.Writer, source io.Reader) (int64, error) {
 	buffer := make([]byte, 256*1024)
 	var total int64
@@ -343,23 +374,6 @@ func copyPrerollUpload(ctx context.Context, destination io.Writer, source io.Rea
 			return total, readErr
 		}
 	}
-}
-
-func removeOtherManagedPrerolls(dir, keep string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		if path == keep || !entry.Type().IsRegular() || !strings.HasPrefix(strings.ToLower(entry.Name()), "preroll.") {
-			continue
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func markPrerollRestartNeeded() {
