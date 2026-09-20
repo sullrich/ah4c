@@ -811,6 +811,27 @@ table.table {
 }
 
 .tune-timer .tune-clock { flex-shrink: 0; }
+.tune-timer.is-recording {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(224, 108, 94, 0.45);
+}
+.recording-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 rgba(224, 108, 94, 0.6);
+  animation: recording-pulse 1.6s ease-out infinite;
+}
+@keyframes recording-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(224, 108, 94, 0.6); }
+  70%, 100% { box-shadow: 0 0 0 6px rgba(224, 108, 94, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recording-dot { animation: none; }
+}
 
 .tuner-status-head strong { white-space: nowrap; }
 
@@ -1073,6 +1094,7 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
 }
 
 .tuner-status-card.is-active { border-left: 2px solid var(--live); }
+.tuner-status-card.is-recording { border-left-color: var(--danger); }
 
 .tuner-status-head {
   display: flex;
@@ -1206,6 +1228,32 @@ video { max-width: 100%; border-radius: var(--radius-sm); background: #000; }
   border: 1px solid rgba(224, 108, 94, 0.45);
   border-radius: var(--radius-sm);
   line-height: 1.5;
+}
+body.release-popover-open { overflow: hidden; }
+.release-recording-panel { min-width: 0; margin: .9rem 0 0; padding: 0; border: 0; }
+.release-recording-panel legend { margin-bottom: .35rem; color: var(--text-muted); font-size: .76rem; font-weight: 500; }
+.release-recording-list { display: grid; gap: .5rem; margin-bottom: .55rem; }
+.release-recording-choice {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  align-items: flex-start;
+  column-gap: .8rem;
+  padding: .65rem .7rem;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.release-recording-choice:hover,
+.release-recording-choice:focus-within { border-color: var(--danger); }
+.release-recording-choice input { width: 1rem; height: 1rem; margin: .16rem 0 0; accent-color: var(--danger); }
+.release-recording-choice span { min-width: 0; overflow-wrap: anywhere; }
+.release-tuner-modal .setting-description { margin-top: .35rem; }
+@media (max-width: 520px) {
+  .release-tuner-modal .btn-row { align-items: stretch; flex-direction: column; }
+  .release-tuner-modal .btn-row .btn { width: 100%; }
 }
 .apple-tv-pair-modal { width: min(520px, 100%); }
 .apple-tv-pair-modal .card-title { margin-bottom: .15rem; }
