@@ -374,11 +374,11 @@
                 var isRecording = tunerIsRecording(index);
                 card.toggleClass('is-recording', isRecording);
                 timer.toggleClass('is-recording', isRecording);
-                if (isRecording && !timer.find('.recording-dot').length) {
-                    timer.prepend('<span class="recording-dot" aria-hidden="true"></span>');
-                } else if (!isRecording) {
-                    timer.find('.recording-dot').remove();
+                var activityMarker = timer.find('.activity-marker');
+                if (!activityMarker.length) {
+                    activityMarker = $('<span class="activity-marker" aria-hidden="true"></span>').prependTo(timer);
                 }
+                activityMarker.text(isRecording ? 'REC' : 'LIVE');
                 var label = tunerLabels[index] || '';
                 var activityLabel = label ? label + (isRecording ? ' — recording' : ' — streaming') : (isRecording ? 'Recording' : 'Streaming');
                 timer.attr({ title: activityLabel, 'aria-label': activityLabel });
@@ -676,8 +676,8 @@
 		                    var labelHtml = label ? `<span class="tune-label">${esc(label)}</span>` : '';
                             isRecording = tunerIsRecording(index);
                             var activityLabel = label ? label + (isRecording ? ' — recording' : ' — streaming') : (isRecording ? 'Recording' : 'Streaming');
-                            var recordingDot = isRecording ? '<span class="recording-dot" aria-hidden="true"></span>' : '';
-		                    badge = `<span class="tune-timer${isRecording ? ' is-recording' : ''}" title="${esc(activityLabel)}" aria-label="${esc(activityLabel)}">${recordingDot}${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
+                            var activityMarker = `<span class="activity-marker" aria-hidden="true">${isRecording ? 'REC' : 'LIVE'}</span>`;
+		                    badge = `<span class="tune-timer${isRecording ? ' is-recording' : ''}" title="${esc(activityLabel)}" aria-label="${esc(activityLabel)}">${activityMarker}${labelHtml}<span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span>`;
 		                }
 		                tunerHtml += `
 		                    <div class="tuner-status-card ${tuner.Active ? 'is-active' : ''} ${isRecording ? 'is-recording' : ''}" data-tuner-index="${index}">
