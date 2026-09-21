@@ -383,6 +383,13 @@
                 var activityLabel = label ? label + (isRecording ? ' — recording' : ' — streaming') : (isRecording ? 'Recording' : 'Streaming');
                 timer.attr({ title: activityLabel, 'aria-label': activityLabel });
             });
+            $('#readerStatus .stream-state-marker[data-tuner-index]').each(function() {
+                var marker = $(this);
+                var isRecording = tunerIsRecording(Number(marker.attr('data-tuner-index')));
+                marker.toggleClass('is-recording', isRecording)
+                    .attr({ title: isRecording ? 'Recording' : 'Live', 'aria-label': isRecording ? 'Recording' : 'Live' });
+                marker.find('.activity-marker').text(isRecording ? 'REC' : 'LIVE');
+            });
         }
 
         function showRecordingReleaseWarning(index, recordings) {
@@ -707,18 +714,21 @@
 		            var readerStatusHtml = `
 		                <tr>
 		                    <th>Tuner</th>
+		                    <th>Status</th>
 		                    <th>Channel</th>
 		                    <th>Elapsed</th>
 		                    <th>File</th>
 		                    <th>CMD</th>
 		                </tr>`;
 		            if (!data.Readers || !data.Readers.length) {
-		                readerStatusHtml += `<tr><td colspan="5" class="muted">No active streams</td></tr>`;
+		                readerStatusHtml += `<tr><td colspan="6" class="muted">No active streams</td></tr>`;
 		            }
 		            $.each(data.Readers, function(index, reader) {
+		                var readerIsRecording = tunerIsRecording(reader.T);
 		                readerStatusHtml += `
 		                    <tr>
-		                        <td class="num">Tuner ${reader.T}</td>
+		                        <td>Tuner ${reader.T}</td>
+		                        <td><span class="tune-timer stream-state-marker${readerIsRecording ? ' is-recording' : ''}" data-tuner-index="${reader.T}" title="${readerIsRecording ? 'Recording' : 'Live'}" aria-label="${readerIsRecording ? 'Recording' : 'Live'}"><span class="activity-marker" aria-hidden="true">${readerIsRecording ? 'REC' : 'LIVE'}</span></span></td>
 		                        <td title="${esc(reader.Channel)}">${esc(reader.Name || reader.Channel)}</td>
 		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
 		                        <td class="mono">${esc(reader.FileName)}</td>
