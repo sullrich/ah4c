@@ -134,6 +134,11 @@
                 <div id="release-recording-list" class="release-recording-list"></div>
                 <div id="release-recording-help" class="setting-description">Choose the Channels DVR recording that is holding the tuner.</div>
             </fieldset>
+            <fieldset id="release-tuner-panel" class="field release-recording-panel hidden">
+                <legend>Tuner to release</legend>
+                <div id="release-tuner-list" class="release-recording-list"></div>
+                <div id="release-tuner-help" class="setting-description">Choose the tuner to release.</div>
+            </fieldset>
             <div class="btn-row">
                 <button id="release-recording-confirm" class="btn btn-danger hidden" type="button">Stop recording and release tuner</button>
                 <button id="release-popover-confirm" class="btn btn-danger" type="button">Release tuner</button>
@@ -151,12 +156,20 @@
         var tunerIps = [];
         var tunerActive = [];
         var tunerLabels = [];
+        var tunerElapsed = [];
+        var tunerStartedAt = [];
         var channelsRecordings = [];
         var channelsRecordingSignature = '';
         var channelsRecordingFetchInProgress = false;
         var channelsRecordingRetryAt = 0;
         var channelsRecordingRetryDelay = 1000;
         var releaseIndex = null;
+        var releaseSelectedTunerIndex = null;
+        var releaseSelectedTunerSnapshot = null;
+        var releaseRecordingCandidates = [];
+        var releaseCheckGeneration = 0;
+        var releaseOperationGeneration = 0;
+        var releaseOperationInProgress = false;
 
         function esc(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
@@ -313,20 +326,26 @@
             $('#release-popover-title').text(title);
             $('#release-popover-message').text(message);
             $('#release-popover-warning').text(warning || '').toggleClass('hidden', !warning);
-            $('#release-recording-panel').addClass('hidden');
+            $('#release-recording-panel, #release-tuner-panel').addClass('hidden');
             $('#release-recording-confirm').addClass('hidden').prop('disabled', false).text('Stop recording and release tuner');
             $('#release-popover-confirm').toggleClass('hidden', !canRelease).prop('disabled', false).text('Release tuner');
             $('#release-popover-cancel').prop('disabled', false).text(closeLabel || (canRelease ? 'Cancel' : 'Close'));
             $('body').addClass('release-popover-open');
+            $('body').children().not('#release-tuner-popover').attr('inert', '');
             $('#release-tuner-popover').addClass('open');
             (canRelease ? $('#release-popover-confirm') : $('#release-popover-cancel')).trigger('focus');
         }
 
         function closeReleasePopover() {
-            if (releaseIndex !== null && releasing[releaseIndex]) return;
+            if (releaseOperationInProgress) return;
+            releaseCheckGeneration++;
             $('#release-tuner-popover').removeClass('open');
             $('body').removeClass('release-popover-open');
+            $('body').children().removeAttr('inert');
             releaseIndex = null;
+            releaseSelectedTunerIndex = null;
+            releaseSelectedTunerSnapshot = null;
+            releaseRecordingCandidates = [];
         }
 
         function recordingDisplayDetail(detail) {
@@ -379,6 +398,79 @@
             return Boolean(tunerLabel && recordingLabel && (recordingLabel === tunerLabel || recordingLabel.indexOf(tunerLabel) === 0 || tunerLabel.indexOf(recordingLabel) === 0));
         }
 
+        function activeTunerIndexes() {
+            return $.map(tunerActive, function(active, index) { return active ? index : null; });
+        }
+
+        function matchingRecordingTunerIndexes(recording) {
+            if (!recording || !normalizeChannelLabel(recording.channelName)) return activeTunerIndexes();
+            return $.grep(activeTunerIndexes(), function(index) { return recordingMatchesTuner(recording, index); });
+        }
+
+        function matchingLiveTunerIndexes(index) {
+            var selectedLabel = normalizeChannelLabel(tunerLabels[index]);
+            if (!selectedLabel) return activeTunerIndexes();
+            return $.grep(activeTunerIndexes(), function(candidate) {
+                return normalizeChannelLabel(tunerLabels[candidate]) === selectedLabel;
+            });
+        }
+
+        function selectedReleaseTuner() {
+            return releaseSelectedTunerIndex === null ? releaseIndex : releaseSelectedTunerIndex;
+        }
+
+        function captureReleaseTunerSnapshot(index) {
+            return {
+                index: index,
+                label: normalizeChannelLabel(tunerLabels[index]),
+                displayLabel: tunerLabels[index] || 'Unknown channel',
+                elapsed: Math.max(0, Number(tunerElapsed[index]) || 0),
+                startedAt: Number(tunerStartedAt[index]) || 0
+            };
+        }
+
+        function selectReleaseTuner(index, snapshot) {
+            releaseSelectedTunerIndex = index;
+            snapshot = snapshot || captureReleaseTunerSnapshot(index);
+            releaseSelectedTunerSnapshot = $.extend({}, snapshot);
+        }
+
+        function renderReleaseTunerChoices(indexes, preferredIndex, helpText) {
+            var choices = [];
+            $.each(indexes, function(_, candidate) {
+                candidate = Number(candidate);
+                if (tunerActive[candidate] && choices.indexOf(candidate) < 0) choices.push(candidate);
+            });
+            if (!choices.length && preferredIndex !== null) choices.push(preferredIndex);
+            var snapshots = {};
+            $.each(choices, function(_, candidate) { snapshots[candidate] = captureReleaseTunerSnapshot(candidate); });
+            var initialIndex = choices.indexOf(preferredIndex) >= 0 ? preferredIndex : choices[0];
+            selectReleaseTuner(initialIndex, snapshots[initialIndex]);
+            var list = $('#release-tuner-list').empty();
+            $.each(choices, function(_, candidate) {
+                var snapshot = snapshots[candidate];
+                var selected = candidate === releaseSelectedTunerIndex;
+                var detail = snapshot.displayLabel + ' · active for ' + fmtElapsed(snapshot.elapsed);
+                var choice = $('<button>')
+                    .attr({ type: 'button', 'aria-pressed': selected ? 'true' : 'false', 'data-tuner-index': candidate })
+                    .addClass('release-recording-choice release-tuner-choice' + (selected ? ' is-selected' : ''))
+                    .data('tuner-snapshot', snapshot)
+                    .on('click', function() {
+                        $('.release-tuner-choice').removeClass('is-selected').attr('aria-pressed', 'false');
+                        $(this).addClass('is-selected').attr('aria-pressed', 'true');
+                        selectReleaseTuner(Number($(this).attr('data-tuner-index')), $(this).data('tuner-snapshot'));
+                    });
+                var text = $('<span>');
+                $('<strong>').text('Tuner ' + candidate).appendTo(text);
+                $('<span>').text(detail).appendTo(text);
+                text.appendTo(choice);
+                choice.appendTo(list);
+            });
+            $('#release-tuner-help').text(helpText);
+            $('#release-tuner-panel').toggleClass('hidden', choices.length < 2);
+            return choices.length > 1;
+        }
+
         function tunerIsRecording(index) {
             return channelsRecordings.some(function(recording) { return recordingMatchesTuner(recording, index); });
         }
@@ -410,7 +502,28 @@
             });
         }
 
+        function configureRecordingTunerChoice(recording, index) {
+            var candidateIndexes = normalizeChannelLabel(tunerLabels[index])
+                ? matchingRecordingTunerIndexes(recording)
+                : activeTunerIndexes();
+            var ambiguous = renderReleaseTunerChoices(
+                candidateIndexes,
+                index,
+                'ah4c cannot identify the owner automatically. Select the tuner you want released after the recording stops.'
+            );
+            if (ambiguous) {
+                $('#release-popover-title').text('Choose the tuner to release');
+                $('#release-popover-message').text('ah4c cannot determine which active tuner is carrying this recording because multiple tuners report the same channel identity.');
+                $('#release-recording-confirm').text('Stop recording and release selected tuner');
+            } else {
+                $('#release-popover-title').text('Stop the recording in Channels DVR');
+                $('#release-popover-message').text('Releasing Tuner ' + selectedReleaseTuner() + ' alone will not stop the recording. Channels DVR will acquire it again while the recording is active.');
+                $('#release-recording-confirm').text('Stop recording and release tuner');
+            }
+        }
+
         function showRecordingReleaseWarning(index, recordings) {
+            releaseRecordingCandidates = recordings;
             setReleasePopover(
                 'Stop the recording in Channels DVR',
                 'Releasing Tuner ' + index + ' alone will not stop the recording. Channels DVR will acquire it again while the recording is active.',
@@ -423,24 +536,41 @@
                 var choice = $('<button>')
                     .attr({ type: 'button', 'aria-pressed': position === 0 ? 'true' : 'false' })
                     .addClass('release-recording-choice' + (position === 0 ? ' is-selected' : ''))
-                    .data('job-id', recording.jobID)
+                    .data({ 'job-id': recording.jobID, 'recording-position': position })
                     .on('click', function() {
-                        $('.release-recording-choice').removeClass('is-selected').attr('aria-pressed', 'false');
+                        $('.release-recording-choice').not('.release-tuner-choice').removeClass('is-selected').attr('aria-pressed', 'false');
                         $(this).addClass('is-selected').attr('aria-pressed', 'true');
+                        configureRecordingTunerChoice(releaseRecordingCandidates[Number($(this).data('recording-position'))], index);
                     });
                 $('<span>').text(recording.displayDetail).appendTo(choice);
                 choice.appendTo(list);
             });
             $('#release-recording-help').text(recordings.length === 1
-                ? 'This Channels DVR recording is holding Tuner ' + index + '.'
-                : 'Choose the Channels DVR recording that is holding Tuner ' + index + '.');
+                ? 'This Channels DVR job will be stopped first.'
+                : 'Choose the Channels DVR recording to stop first.');
             $('#release-recording-panel').removeClass('hidden');
+            configureRecordingTunerChoice(recordings[0], index);
             $('#release-recording-confirm').removeClass('hidden').trigger('focus');
         }
 
+        function showAmbiguousLiveRelease(index, indexes) {
+            setReleasePopover(
+                'Choose the tuner to release',
+                'ah4c cannot determine which active tuner corresponds to this live TV stream because multiple tuners report the same channel identity.',
+                'Select the tuner you want to stop. This will release only the selected ah4c stream; no Channels DVR recording job will be cancelled.',
+                true,
+                'Cancel'
+            );
+            renderReleaseTunerChoices(indexes, index, 'The tuner you originally selected is preselected. Choose another tuner if needed.');
+            $('#release-popover-confirm').text('Release selected tuner');
+        }
+
         function releaseTuner(index) {
-            if (releasing[index]) return;
+            if (releaseOperationInProgress || releasing[index]) return;
             releaseIndex = index;
+            selectReleaseTuner(index);
+            releaseRecordingCandidates = [];
+            var generation = ++releaseCheckGeneration;
             setReleasePopover(
                 'Checking Channels DVR…',
                 'Checking for an active recording before releasing tuner ' + index + '.',
@@ -450,15 +580,22 @@
             );
             $.getJSON('/api/channels/recordings')
                 .done(function(data) {
-                    if (releaseIndex !== index) return;
+                    if (releaseCheckGeneration !== generation || releaseIndex !== index) return;
                     channelsRecordings = recordingActivities(data);
+                    var selectedHasIdentity = Boolean(normalizeChannelLabel(tunerLabels[index]));
                     var recordings = channelsRecordings.filter(function(recording) {
-                        return !recording.channelName || recordingMatchesTuner(recording, index);
+                        return !selectedHasIdentity || !recording.channelName || recordingMatchesTuner(recording, index);
                     });
                     if (recordings.length) {
                         showRecordingReleaseWarning(index, recordings);
                         return;
                     }
+                    var liveIndexes = matchingLiveTunerIndexes(index);
+                    if (liveIndexes.length > 1) {
+                        showAmbiguousLiveRelease(index, liveIndexes);
+                        return;
+                    }
+                    releaseSelectedTunerIndex = index;
                     var label = tunerLabels[index] ? ' It is streaming ' + tunerLabels[index] + '.' : '';
                     setReleasePopover(
                         'Release tuner ' + index + '?',
@@ -469,7 +606,7 @@
                     );
                 })
                 .fail(function() {
-                    if (releaseIndex !== index) return;
+                    if (releaseCheckGeneration !== generation || releaseIndex !== index) return;
                     setReleasePopover(
                         'Could not check Channels DVR',
                         'Tuner ' + index + ' was not released.',
@@ -481,14 +618,122 @@
         }
 
         function setReleaseBusy(index, buttonText) {
+            releaseOperationInProgress = true;
+            var token = ++releaseOperationGeneration;
             releasing[index] = true;
-            $('#release-popover-confirm, #release-recording-confirm').prop('disabled', true);
+            $('#release-popover-confirm, #release-recording-confirm, .release-recording-choice').prop('disabled', true);
             $('#release-popover-cancel').prop('disabled', true);
+            $('button[class*="release-btn-"]').prop('disabled', true);
             $('#release-recording-confirm').text(buttonText);
-            $('.release-btn-' + index).prop('disabled', true).text(buttonText);
+            $('.release-btn-' + index).text(buttonText);
+            return token;
         }
 
-        function finishReleaseRequest(index, recordingStopped, payload) {
+        function releaseOperationIsCurrent(token, index) {
+            return releaseOperationInProgress && token === releaseOperationGeneration && releasing[index];
+        }
+
+        function finishReleaseBusy(token, index) {
+            if (!releaseOperationIsCurrent(token, index)) return false;
+            releasing[index] = false;
+            releaseOperationInProgress = false;
+            $('#release-popover-cancel').prop('disabled', false);
+            $('button[class*="release-btn-"]').prop('disabled', false).text('Release tuner');
+            return true;
+        }
+
+        function classifySelectedTuner(data, index, snapshot) {
+            var reader = null;
+            $.each(data.Readers || [], function(_, candidate) {
+                if (Number(candidate.T) === index) reader = candidate;
+            });
+            var tuner = data.Tuners && data.Tuners[index];
+            if (!tuner || !tuner.Active) return 'idle';
+            if (!reader || !snapshot || snapshot.index !== index) return 'changed';
+            var label = normalizeChannelLabel(reader.Name || reader.Channel);
+            var startedAt = Math.floor(Date.now() / 1000) - Math.max(0, Number(reader.Elapsed) || 0);
+            return label === snapshot.label && Math.abs(startedAt - snapshot.startedAt) <= 3 ? 'same' : 'changed';
+        }
+
+        function fetchSelectedTunerState(token, index, onSuccess, onFailure) {
+            var snapshot = releaseSelectedTunerSnapshot;
+            var generation = releaseCheckGeneration;
+            $.ajax({ url: '/api/status', type: 'GET', timeout: 5000, dataType: 'json' })
+                .done(function(data) {
+                    if (!releaseOperationIsCurrent(token, index) || generation !== releaseCheckGeneration) return;
+                    onSuccess(classifySelectedTuner(data, index, snapshot));
+                })
+                .fail(function() {
+                    if (!releaseOperationIsCurrent(token, index) || generation !== releaseCheckGeneration) return;
+                    onFailure();
+                });
+        }
+
+        function revalidateSelectedTuner(token, index, onValid) {
+            fetchSelectedTunerState(token, index, function(state) {
+                if (state === 'same') {
+                    onValid();
+                    return;
+                }
+                finishReleaseBusy(token, index);
+                setReleasePopover(
+                    'Tuner changed while you were deciding',
+                    'No recording was stopped and no tuner was released.',
+                    'Activity changed after this confirmation opened. Close this message, review the current tuners, and try again.',
+                    false,
+                    'Close'
+                );
+            }, function() {
+                finishReleaseBusy(token, index);
+                setReleasePopover(
+                    'Could not verify the selected tuner',
+                    'No recording was stopped and no tuner was released.',
+                    'ah4c could not confirm that the selected tuner still carries the same stream. Check Activity and try again.',
+                    false,
+                    'Close'
+                );
+            });
+        }
+
+        function continueAfterRecordingStop(token, index) {
+            fetchSelectedTunerState(token, index, function(state) {
+                if (state === 'same') {
+                    $('#release-recording-confirm').text('Recording stopped. Releasing…');
+                    $('.release-btn-' + index).text('Releasing…');
+                    performReleaseRequest(index, true, token);
+                    return;
+                }
+                finishReleaseBusy(token, index);
+                if (state === 'idle') {
+                    setReleasePopover(
+                        'Recording stopped and tuner released',
+                        'Channels closed the stream and Tuner ' + index + ' is now idle.',
+                        '',
+                        false,
+                        'Close'
+                    );
+                    return;
+                }
+                setReleasePopover(
+                    'Recording stopped, but tuner changed',
+                    'The replacement stream on Tuner ' + index + ' was not released.',
+                    'Activity changed while Channels was stopping the recording. Review the current tuners before taking another action.',
+                    false,
+                    'Close'
+                );
+            }, function() {
+                finishReleaseBusy(token, index);
+                setReleasePopover(
+                    'Recording stopped, but tuner could not be verified',
+                    'ah4c did not release Tuner ' + index + '.',
+                    'Check Activity before taking another action.',
+                    false,
+                    'Close'
+                );
+            });
+        }
+
+        function finishReleaseRequest(index, recordingStopped, payload, token) {
             var status = payload && payload.status ? payload.status : 'stopped';
             var prefix = recordingStopped ? 'Recording stopped. ' : '';
             if (status === 'busy') {
@@ -520,10 +765,13 @@
             }
         }
 
-        function performReleaseRequest(index, recordingStopped) {
+        function performReleaseRequest(index, recordingStopped, token) {
             $.ajax({ url: '/api/tuner/' + index + '/release', type: 'POST', timeout: 30000, dataType: 'json' })
-                .done(function(payload) { finishReleaseRequest(index, recordingStopped, payload); })
+                .done(function(payload) {
+                    if (releaseOperationIsCurrent(token, index)) finishReleaseRequest(index, recordingStopped, payload, token);
+                })
                 .fail(function() {
+                    if (!releaseOperationIsCurrent(token, index)) return;
                     setReleasePopover(
                         recordingStopped ? 'Recording stopped, but tuner release failed' : 'Release failed for tuner ' + index,
                         'The tuner was not released.',
@@ -532,47 +780,52 @@
                         'Close'
                     );
                 })
-                .always(function() {
-                    releasing[index] = false;
-                    $('#release-popover-cancel').prop('disabled', false);
-                });
+                .always(function() { finishReleaseBusy(token, index); });
         }
 
         function confirmReleaseTuner() {
-            var index = releaseIndex;
-            if (index === null || releasing[index]) return;
-            setReleaseBusy(index, 'Releasing…');
-            $('#release-popover-confirm').text('Releasing…');
-            performReleaseRequest(index, false);
+            var index = selectedReleaseTuner();
+            if (index === null || releaseOperationInProgress || releasing[index]) return;
+            var token = setReleaseBusy(index, 'Verifying tuner…');
+            $('#release-popover-confirm').text('Verifying tuner…');
+            revalidateSelectedTuner(token, index, function() {
+                $('#release-popover-confirm').text('Releasing…');
+                $('.release-btn-' + index).text('Releasing…');
+                performReleaseRequest(index, false, token);
+            });
         }
 
         function stopRecordingAndReleaseTuner() {
-            var index = releaseIndex;
-            var jobID = $('.release-recording-choice.is-selected').data('job-id');
-            if (index === null || !jobID || releasing[index]) return;
-            setReleaseBusy(index, 'Stopping recording…');
-            $.ajax({
-                url: '/api/channels/recordings/' + encodeURIComponent(jobID),
-                type: 'DELETE',
-                timeout: 15000,
-                dataType: 'json'
-            })
-                .done(function() {
-                    $('#release-recording-confirm').text('Recording stopped. Releasing…');
-                    $('.release-btn-' + index).text('Releasing…');
-                    performReleaseRequest(index, true);
+            var index = selectedReleaseTuner();
+            var jobID = $('.release-recording-choice.is-selected').not('.release-tuner-choice').data('job-id');
+            if (index === null || !jobID || releaseOperationInProgress || releasing[index]) return;
+            var token = setReleaseBusy(index, 'Verifying tuner…');
+            revalidateSelectedTuner(token, index, function() {
+                $('#release-recording-confirm').text('Stopping recording…');
+                $.ajax({
+                    url: '/api/channels/recordings/' + encodeURIComponent(jobID),
+                    type: 'DELETE',
+                    timeout: 15000,
+                    dataType: 'json'
                 })
-                .fail(function(xhr) {
-                    releasing[index] = false;
-                    var error = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : 'Channels DVR did not stop the recording.';
-                    setReleasePopover(
-                        'Could not stop the recording',
-                        'Tuner ' + index + ' was not released.',
-                        error,
-                        false,
-                        'Close'
-                    );
-                });
+                    .done(function() {
+                        if (!releaseOperationIsCurrent(token, index)) return;
+                        $('#release-recording-confirm').text('Recording stopped. Verifying tuner…');
+                        continueAfterRecordingStop(token, index);
+                    })
+                    .fail(function(xhr) {
+                        if (!releaseOperationIsCurrent(token, index)) return;
+                        var error = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : 'Channels DVR did not stop the recording.';
+                        finishReleaseBusy(token, index);
+                        setReleasePopover(
+                            'Could not stop the recording',
+                            'Tuner ' + index + ' was not released.',
+                            error,
+                            false,
+                            'Close'
+                        );
+                    });
+            });
         }
 
         function fmtElapsed(s) {
@@ -686,8 +939,14 @@
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
 		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
 		            tunerLabels = [];
+                    tunerElapsed = [];
+                    tunerStartedAt = [];
 		            var readerByTuner = {};
-		            $.each(data.Readers, function(_, r) { readerByTuner[r.T] = r; });
+		            $.each(data.Readers, function(_, r) {
+                        readerByTuner[r.T] = r;
+                        tunerElapsed[r.T] = Math.max(0, Number(r.Elapsed) || 0);
+                        tunerStartedAt[r.T] = Math.floor(currentTimestamp / 1000) - tunerElapsed[r.T];
+                    });
 		            var tunerHtml = '';
 		            $.each(data.Tuners, function(index, tuner) {
 		                var badge = tuner.Active
