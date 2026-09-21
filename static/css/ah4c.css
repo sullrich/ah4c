@@ -752,6 +752,11 @@ table.table {
 .table td.mono, .mono { font-family: var(--mono); font-size: 0.78rem; }
 .table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
+@media (max-width: 520px) {
+  #readerStatus th,
+  #readerStatus td { padding-left: 0.45rem; padding-right: 0.45rem; }
+}
+
 /* Editable table cells (M3U editor) */
 .table td[contenteditable="true"] {
   cursor: text;
