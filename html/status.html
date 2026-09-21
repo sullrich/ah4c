@@ -717,11 +717,9 @@
 		                    <th>Status</th>
 		                    <th>Channel</th>
 		                    <th>Elapsed</th>
-		                    <th>File</th>
-		                    <th>CMD</th>
 		                </tr>`;
 		            if (!data.Readers || !data.Readers.length) {
-		                readerStatusHtml += `<tr><td colspan="6" class="muted">No active streams</td></tr>`;
+		                readerStatusHtml += `<tr><td colspan="4" class="muted">No active streams</td></tr>`;
 		            }
 		            $.each(data.Readers, function(index, reader) {
 		                var readerIsRecording = tunerIsRecording(reader.T);
@@ -731,8 +729,6 @@
 		                        <td><span class="tune-timer stream-state-marker${readerIsRecording ? ' is-recording' : ''}" data-tuner-index="${reader.T}" title="${readerIsRecording ? 'Recording' : 'Live'}" aria-label="${readerIsRecording ? 'Recording' : 'Live'}"><span class="activity-marker" aria-hidden="true">${readerIsRecording ? 'REC' : 'LIVE'}</span></span></td>
 		                        <td title="${esc(reader.Channel)}">${esc(reader.Name || reader.Channel)}</td>
 		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
-		                        <td class="mono">${esc(reader.FileName)}</td>
-		                        <td class="mono">${esc(reader.Cmd)}</td>
 		                    </tr>
 		                `;
 		            });
