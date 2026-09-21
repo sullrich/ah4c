@@ -154,6 +154,8 @@
         var channelsRecordings = [];
         var channelsRecordingSignature = '';
         var channelsRecordingFetchInProgress = false;
+        var channelsRecordingRetryAt = 0;
+        var channelsRecordingRetryDelay = 1000;
         var releaseIndex = null;
 
         function esc(s) {
@@ -353,6 +355,22 @@
 
         function normalizeChannelLabel(value) {
             return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        }
+
+        function recordingMetadataNeedsRefresh() {
+            return !channelsRecordings.length || channelsRecordings.some(function(recording) {
+                return !recording || !normalizeChannelLabel(recording.channelName);
+            });
+        }
+
+        function resetRecordingEnrichmentRetry() {
+            channelsRecordingRetryAt = 0;
+            channelsRecordingRetryDelay = 1000;
+        }
+
+        function deferRecordingEnrichmentRetry() {
+            channelsRecordingRetryAt = Date.now() + channelsRecordingRetryDelay;
+            channelsRecordingRetryDelay = Math.min(channelsRecordingRetryDelay * 2, 30000);
         }
 
         function recordingMatchesTuner(recording, index) {
@@ -948,10 +966,12 @@
                     .done(function(data) {
                         if (channelsRecordingSignature !== signature) return;
                         channelsRecordings = recordingActivities(data);
+                        if (recordingMetadataNeedsRefresh()) deferRecordingEnrichmentRetry();
+                        else resetRecordingEnrichmentRetry();
                         refreshRecordingIndicators();
                     })
                     .fail(function() {
-                        if (channelsRecordingSignature === signature) channelsRecordingSignature = '';
+                        if (channelsRecordingSignature === signature) deferRecordingEnrichmentRetry();
                     })
                     .always(function() { channelsRecordingFetchInProgress = false; });
             }
@@ -978,9 +998,10 @@
                         if (signature !== channelsRecordingSignature) {
                             channelsRecordingSignature = signature;
                             channelsRecordings = [];
+                            resetRecordingEnrichmentRetry();
                             refreshRecordingIndicators();
                             if (signature) fetchEnrichedRecordings(signature);
-                        } else if (signature && !channelsRecordings.length && !channelsRecordingFetchInProgress) {
+                        } else if (signature && recordingMetadataNeedsRefresh() && !channelsRecordingFetchInProgress && Date.now() >= channelsRecordingRetryAt) {
                             fetchEnrichedRecordings(signature);
                         }
                         renderDVRActivity(data);
