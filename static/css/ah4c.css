@@ -768,6 +768,33 @@ table.table {
   background: var(--bg);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+.table td[data-field] { overflow-wrap: break-word; }
+/* The editor carries ten columns, so its cells are tighter than the other
+   tables and the Order column, which is nothing but the two arrows, is tighter
+   still. Together they keep the whole table inside a 1280 px desktop. */
+#entriesTable th,
+#entriesTable td { padding-left: 0.5rem; padding-right: 0.5rem; }
+#entriesTable th.col-order,
+#entriesTable td.row-order {
+  width: 1%;
+  white-space: nowrap;
+  padding-left: 0.3rem;
+  padding-right: 0.3rem;
+}
+.row-order-buttons { display: flex; gap: 0.15rem; }
+.row-order-buttons .btn { padding: 0.3rem 0.3rem; }
+.editm3u-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem; }
+.editm3u-toolbar select { width: auto; min-width: 12rem; max-width: 100%; }
+.editor-status { font-size: 0.76rem; line-height: 1.45; }
+
+/* A channel number that another channel is already using, a cell holding text
+   the file cannot carry, and a number the renumbering has just written. */
+.table td.cell-duplicate, .table td.cell-duplicate:focus,
+.table td.cell-invalid, .table td.cell-invalid:focus { background: var(--danger-soft); box-shadow: inset 0 0 0 1px var(--danger); }
+.table td.cell-renumbered, .table td.cell-renumbered:focus { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+@media (prefers-reduced-motion: no-preference) {
+  .table td[data-field] { transition: background-color .3s ease, box-shadow .3s ease; }
+}
 
 /* --------------------------------------------------------------------------
    Badges
@@ -1288,6 +1315,46 @@ body.release-popover-open { overflow: hidden; }
 }
 .pairing-status { min-height: 1.4rem; margin-top: .8rem; }
 .apple-tv-pair-actions { margin-top: .6rem; }
+
+/* Renumber channels */
+.renumber-modal { width: min(560px, 100%); }
+.renumber-modal .restart-tune-warning { margin: .55rem 0 0; font-size: .78rem; }
+.renumber-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: .55rem .8rem; margin-top: .85rem; }
+.renumber-begin-field, .renumber-note { grid-column: 1 / -1; }
+.renumber-note { margin-top: 0; }
+.renumber-include { display: flex; align-items: center; gap: .45rem; margin-top: .85rem; color: var(--text); }
+.renumber-include input { flex: 0 0 auto; }
+.renumber-preview {
+  max-height: 15rem;
+  margin-top: .65rem;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.renumber-preview:empty { display: none; }
+.renumber-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .25rem .7rem;
+  align-items: baseline;
+  padding: .3rem .6rem;
+  font-size: .76rem;
+}
+.renumber-preview-row + .renumber-preview-row { border-top: 1px solid var(--border-soft); }
+.renumber-preview-row.is-muted { color: var(--text-muted); }
+.renumber-preview-row.is-collision { color: var(--danger); background: var(--danger-soft); }
+.renumber-preview-row > .field-validation { grid-column: 1 / -1; margin: 0; }
+.renumber-preview-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.renumber-preview-change { font-family: var(--mono); white-space: nowrap; }
+#renumber-summary { margin-top: .55rem; }
+@media (max-width: 520px) {
+  .renumber-modal .btn-row { align-items: stretch; flex-direction: column; }
+  .renumber-modal .btn-row .btn { width: 100%; }
+  /* On a phone the change belongs under the name rather than fighting it for
+     the width. */
+  .renumber-preview-row { grid-template-columns: minmax(0, 1fr); }
+}
 
 .remote {
   display: flex;

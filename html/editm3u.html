@@ -34,10 +34,23 @@
 
         <div class="card">
             <div class="card-title">Editing {{.filename}}</div>
+            <div class="editm3u-toolbar">
+                <label for="sort-mode">Put the channels in order</label>
+                <select id="sort-mode">
+                    <option value="number-asc">Channel number, low to high</option>
+                    <option value="number-desc">Channel number, high to low</option>
+                    <option value="name-asc">Channel name, A to Z</option>
+                </select>
+                <button class="btn btn-sm" id="sort-entries" type="button">Sort</button>
+                <button class="btn btn-sm" id="renumber-entries" type="button">Renumber channels</button>
+                <button class="btn btn-sm" id="undo-entries" type="button" disabled>Undo</button>
+                <span class="editor-status muted" aria-hidden="true"></span>
+            </div>
             <div class="table-wrap">
                 <table class="table" id="entriesTable">
                     <thead>
                         <tr>
+                            <th class="col-order">Order</th>
                             <th>Id</th>
                             <th>Station Id</th>
                             <th>Channel Number</th>
@@ -52,13 +65,13 @@
                     <tbody>
                         {{range .entries}}
                         <tr>
-                            <td contentEditable="true">{{ .Id }}</td>
-                            <td contentEditable="true">{{ .StationId }}</td>
-                            <td contentEditable="true">{{ .ChannelNumber }}</td>
-                            <td contentEditable="true">{{ .ChannelName }}</td>
-                            <td contentEditable="true" class="mono">{{ .StreamURL }}</td>
-                            <td contentEditable="true">{{ .Group }}</td>
-                            <td contentEditable="true" class="mono">{{ .Logo }}</td>
+                            <td contentEditable="true" data-field="Id">{{ .Id }}</td>
+                            <td contentEditable="true" data-field="StationId">{{ .StationId }}</td>
+                            <td contentEditable="true" data-field="ChannelNumber">{{ .ChannelNumber }}</td>
+                            <td contentEditable="true" data-field="ChannelName">{{ .ChannelName }}</td>
+                            <td contentEditable="true" data-field="StreamURL" class="mono">{{ .StreamURL }}</td>
+                            <td contentEditable="true" data-field="Group">{{ .Group }}</td>
+                            <td contentEditable="true" data-field="Logo" class="mono">{{ .Logo }}</td>
                             <td>
                                 <button class="btn btn-danger btn-sm" onclick="deleteRow(this)">Delete</button>
                             </td>
@@ -70,82 +83,1056 @@
                     </tbody>
                 </table>
             </div>
-            <p class="footnote">Total channels: {{ len .entries }}</p>
+            <p class="footnote">Total channels: <span id="entry-count">{{ len .entries }}</span>. Sorting and moving include disabled channels, and nothing is written to the file until you press Save.</p>
+            <p class="field-validation" id="duplicate-note" aria-live="polite"></p>
+            <p class="field-validation hidden" id="order-note" aria-live="polite">
+                <span id="order-note-text"></span>
+                <button class="btn btn-sm" id="order-note-renumber" type="button">Renumber channels</button>
+            </p>
         </div>
 
         <div class="btn-row">
-            <button class="btn btn-success" onclick="saveData()">Save</button>
+            <button class="btn btn-success" id="save-entries" onclick="saveData()">Save</button>
             <button class="btn btn-danger" onclick="cancel()">Cancel</button>
+            <span class="editor-status muted" role="status"></span>
             <span class="push-right">
                 <button class="btn btn-primary" onclick="addRow()">Add channel</button>
             </span>
         </div>
     </div>
+
+    <div id="renumber-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="renumber-title">
+        <div class="modal renumber-modal">
+            <div id="renumber-title" class="card-title">Renumber channels</div>
+            <div class="restart-tune-warning">Renumbering a list that Channels DVR already uses can change which favorites, passes, and recordings line up with which channel.</div>
+            <div class="renumber-fields">
+                <div class="setting-field" id="renumber-start-field">
+                    <label class="setting-label" for="renumber-start">Start at</label>
+                    <input type="text" id="renumber-start" autocomplete="off" spellcheck="false">
+                    <div class="field-validation" id="renumber-start-error" aria-live="polite"></div>
+                </div>
+                <div class="setting-field" id="renumber-step-field">
+                    <label class="setting-label" for="renumber-step">Count by</label>
+                    <input type="text" id="renumber-step" autocomplete="off" spellcheck="false" value="1">
+                    <div class="field-validation" id="renumber-step-error" aria-live="polite"></div>
+                </div>
+                <p class="setting-description renumber-note">A plain number counts up whole, as in 100, 101, 102. A dotted number counts up in its last piece only, as in 60.1, 60.2, 60.3.</p>
+                <div class="setting-field renumber-begin-field">
+                    <label class="setting-label" for="renumber-begin">Begin with</label>
+                    <select id="renumber-begin"></select>
+                    <p class="setting-description">The first channel renumbered. Everything above it keeps the number it has.</p>
+                </div>
+                <div class="setting-field renumber-begin-field" id="renumber-end-field">
+                    <label class="setting-label" for="renumber-end">End with</label>
+                    <select id="renumber-end"></select>
+                    <div class="field-validation" id="renumber-end-error" aria-live="polite"></div>
+                    <p class="setting-description">The last channel renumbered. Everything under it keeps the number it has, so a block of its own, such as channels in the 4000s, can be left alone.</p>
+                </div>
+            </div>
+            <label class="renumber-include"><input type="checkbox" id="renumber-include-disabled"><span>Include disabled channels</span></label>
+            <div class="field-validation" id="renumber-warning" aria-live="polite"></div>
+            <div class="renumber-preview" id="renumber-preview"></div>
+            <p class="footnote" id="renumber-summary"></p>
+            <div class="btn-row">
+                <button class="btn btn-primary" id="renumber-apply" type="button">Apply</button>
+                <button class="btn" id="renumber-cancel" type="button">Cancel</button>
+            </div>
+        </div>
+    </div>
     <script>
-        document.addEventListener('DOMContentLoaded', (event) => {
-            const buttons = document.querySelectorAll('button[data-id]');
-            buttons.forEach(button => {
-                const id = button.getAttribute('data-id');
-                button.innerText = id.startsWith('#') ? 'Enable' : 'Disable';
+        // The save endpoint writes the rows in the order it is handed them, so
+        // reordering the channels is nothing more than reordering the table.
+        const FIELDS = ['Id', 'StationId', 'ChannelNumber', 'ChannelName', 'StreamURL', 'Group', 'Logo'];
+        const MONO_FIELDS = ['StreamURL', 'Logo'];
+        const ARROW_UP = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg>';
+        const ARROW_DOWN = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+        const ORDER_BUTTONS = '<div class="row-order-buttons">'
+            + '<button type="button" class="btn btn-sm btn-icon" data-move="up" aria-label="Move this channel up" title="Move up">' + ARROW_UP + '</button>'
+            + '<button type="button" class="btn btn-sm btn-icon" data-move="down" aria-label="Move this channel down" title="Move down">' + ARROW_DOWN + '</button>'
+            + '</div>';
+        const DUPLICATE_NOTE = 'Another channel uses this number.';
+        const FIELD_TITLES = {
+            Id: 'id',
+            StationId: 'station id',
+            ChannelNumber: 'channel number',
+            ChannelName: 'channel name',
+            StreamURL: 'stream location',
+            Group: 'group',
+            Logo: 'logo',
+        };
+        const UNDO_LIMIT = 50;
+        const undoStack = [];
+        let renumberStartEdited = false;
+        let editStart = null;
+
+        function tableBody() {
+            return document.querySelector('#entriesTable tbody');
+        }
+
+        function fieldCell(row, field) {
+            return row.querySelector('[data-field="' + field + '"]');
+        }
+
+        // A cell is a contenteditable, so a pressed Enter or a pasted block can
+        // leave a line break inside it. Every channel is one line in the file,
+        // so a break reads back as a single space and the ends are trimmed.
+        function cellText(cell) {
+            if (!cell) return '';
+            return String(cell.innerText).replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim();
+        }
+
+        function fieldText(row, field) {
+            return cellText(fieldCell(row, field));
+        }
+
+        function rowLabel(row) {
+            const name = fieldText(row, 'ChannelName').trim();
+            if (!name) return 'That row';
+            return name.length > 40 ? name.slice(0, 40).trim() + '…' : name;
+        }
+
+        // Every message bumps the count, so a slow answer can tell whether the
+        // line it was going to write is still the line anyone is waiting for.
+        let statusCount = 0;
+
+        function setStatus(message, tone) {
+            statusCount++;
+            const style = tone === 'ready' ? 'connection-state--ready' : tone === 'error' ? 'connection-state--error' : 'muted';
+            document.querySelectorAll('.editor-status').forEach(note => {
+                note.className = 'editor-status ' + style;
+                note.textContent = message;
             });
-        });
-        function deleteRow(btn) {
-            var row = btn.parentNode.parentNode;
-            row.parentNode.removeChild(row);
         }
-        function addRow() {
-            var table = document.getElementById("entriesTable");
-            var row = table.insertRow(-1);
-            for(let i=0; i<9; i++) {
-                var cell = row.insertCell(i);
-                if(i < 7) cell.contentEditable = "true";
-                if(i == 7) cell.innerHTML = '<button class="btn btn-danger btn-sm" onclick="deleteRow(this)">Delete</button>';
-                if(i == 8) cell.innerHTML = '<button class="btn btn-sm" onclick="toggleEnableDisable(this)" data-id="">Disable</button>';
+
+        function markUnsaved(message) {
+            setStatus(message + ' Nothing is written to the file until you press Save.', '');
+        }
+
+        function countOf(total, word) {
+            return total + ' ' + word + (total === 1 ? '' : 's');
+        }
+
+        // A channel is off when its id is commented out, which is the test the
+        // Enable and Disable button makes.
+        function isDisabledId(value) {
+            return String(value || '').startsWith('#');
+        }
+
+        function rowIsDisabled(row) {
+            return isDisabledId(fieldText(row, 'Id'));
+        }
+
+        // Only the first row's up button and the last row's down button are
+        // dead ends, so they are the only ones ever disabled.
+        function refreshOrder() {
+            const rows = [...tableBody().rows];
+            rows.forEach((row, index) => {
+                const up = row.querySelector('[data-move="up"]');
+                const down = row.querySelector('[data-move="down"]');
+                if (up) up.disabled = index === 0;
+                if (down) down.disabled = index === rows.length - 1;
+            });
+            document.getElementById('entry-count').textContent = rows.length;
+            markDuplicateNumbers();
+            markOrderAgainstNumbers();
+            refreshRenumberBegin();
+        }
+
+        // Channels DVR will not take two channels on one number, so say so
+        // while the list is still being edited. A channel that is turned off is
+        // not in the file Channels DVR reads, so it neither clashes nor causes
+        // a clash, and a channel with no number yet is not a clash either.
+        function markDuplicateNumbers() {
+            const rows = [...tableBody().rows];
+            const counts = new Map();
+            rows.forEach(row => {
+                if (rowIsDisabled(row)) return;
+                const identity = channelNumberIdentity(fieldText(row, 'ChannelNumber'));
+                if (identity) counts.set(identity, (counts.get(identity) || 0) + 1);
+            });
+            let marked = 0;
+            rows.forEach(row => {
+                const cell = fieldCell(row, 'ChannelNumber');
+                if (!cell) return;
+                const identity = rowIsDisabled(row) ? '' : channelNumberIdentity(cell.innerText);
+                const clashes = !!identity && counts.get(identity) > 1;
+                cell.classList.toggle('cell-duplicate', clashes);
+                if (clashes) {
+                    marked++;
+                    cell.title = DUPLICATE_NOTE;
+                    cell.setAttribute('aria-description', DUPLICATE_NOTE);
+                } else {
+                    cell.removeAttribute('title');
+                    cell.removeAttribute('aria-description');
+                }
+            });
+            const note = document.getElementById('duplicate-note');
+            note.textContent = marked
+                ? countOf(marked, 'channel') + (marked === 1 ? ' shares' : ' share')
+                    + ' a number with another channel. Channels DVR does not accept two channels on the same number.'
+                : '';
+            return marked;
+        }
+
+        // Channels DVR shows channels in number order, so a table put in an
+        // order its numbers do not follow is an order nobody will ever see.
+        // Only the channels that reach the file are judged: a channel that is
+        // turned off is not in it, and one with no plain number yet says
+        // nothing either way.
+        const ORDER_NOTE = 'Channels DVR shows channels in number order, and these numbers do not'
+            + ' follow the table, so this is not the order it will show.';
+        const ORDER_WARNING = ' The numbers do not follow this order, so Channels DVR will keep showing'
+            + ' its own until the channels are renumbered.';
+
+        function orderFollowsNumbers(rows) {
+            const keys = rows
+                .filter(row => !rowIsDisabled(row))
+                .map(row => channelNumberKey(fieldText(row, 'ChannelNumber')))
+                .filter(key => key);
+            for (let i = 1; i < keys.length; i++) {
+                if (compareNumberKeys(keys[i - 1], keys[i]) > 0) return false;
             }
+            return true;
         }
-        function saveData() {
-            let table = document.getElementById('entriesTable');
-            let entries = [];
-            for (let i = 1, row; row = table.rows[i]; i++) {
-                let entry = {
-                    Id: row.cells[0].innerText,
-                    StationId: row.cells[1].innerText,
-                    ChannelNumber: row.cells[2].innerText,
-                    ChannelName: row.cells[3].innerText,
-                    StreamURL: row.cells[4].innerText,
-                    Group: row.cells[5].innerText,
-                    Logo: row.cells[6].innerText
+
+        // Only an order someone chose, by sorting or by moving a row, is
+        // judged. A list stored in another order, or numbers typed or swapped
+        // by hand, are exactly what Channels DVR will show, so they say nothing.
+        let orderChosen = false;
+
+        function markOrderAgainstNumbers() {
+            const followed = !orderChosen || orderFollowsNumbers([...tableBody().rows]);
+            document.getElementById('order-note-text').textContent = followed ? '' : ORDER_NOTE;
+            document.getElementById('order-note').classList.toggle('hidden', followed);
+            return followed;
+        }
+
+        // Said once where the change was made, so an order that will not show
+        // is not something to notice later or not at all.
+        function orderWarning() {
+            return !orderChosen || orderFollowsNumbers([...tableBody().rows]) ? '' : ORDER_WARNING;
+        }
+
+        // A step is the whole table as it stood before something changed it,
+        // which is small enough to keep fifty of and leaves nothing to unwind
+        // by hand. Every action takes its snapshot before it runs.
+        function snapshotRows() {
+            return [...tableBody().rows].map(row => {
+                const entry = {};
+                FIELDS.forEach(field => entry[field] = fieldText(row, field));
+                return entry;
+            });
+        }
+
+        function pushSnapshot(label, rows) {
+            undoStack.push({label, rows, orderChosen});
+            while (undoStack.length > UNDO_LIMIT) undoStack.shift();
+            refreshUndo();
+        }
+
+        function pushUndo(label) {
+            pushSnapshot(label, snapshotRows());
+        }
+
+        function refreshUndo() {
+            const button = document.getElementById('undo-entries');
+            const top = undoStack[undoStack.length - 1];
+            button.disabled = !top;
+            button.title = top
+                ? 'Undo ' + top.label + '. ' + countOf(undoStack.length, 'step') + ' can be undone.'
+                : 'There is nothing to undo yet.';
+        }
+
+        function undoLast() {
+            const step = undoStack.pop();
+            if (!step) return;
+            const body = tableBody();
+            editStart = null;
+            body.textContent = '';
+            step.rows.forEach(values => body.appendChild(buildRow(values)));
+            orderChosen = step.orderChosen;
+            handEdited = new Map();
+            refreshOrder();
+            refreshUndo();
+            markUnsaved('Undid: ' + step.label + '.');
+        }
+
+        function highlightCells(cells) {
+            cells.forEach(cell => cell.classList.add('cell-renumbered'));
+            setTimeout(() => cells.forEach(cell => cell.classList.remove('cell-renumbered')), 1400);
+        }
+
+        function decorateRow(row) {
+            if (row.querySelector('.row-order-buttons')) return;
+            const cell = row.insertCell(0);
+            cell.className = 'row-order';
+            cell.innerHTML = ORDER_BUTTONS;
+        }
+
+        // Every row the page makes for itself is made here, so a row added by
+        // hand and a row put back by Undo are the same row with the same
+        // buttons on it.
+        function buildRow(values) {
+            const row = document.createElement('tr');
+            const order = row.insertCell(-1);
+            order.className = 'row-order';
+            order.innerHTML = ORDER_BUTTONS;
+            FIELDS.forEach(field => {
+                const cell = row.insertCell(-1);
+                cell.contentEditable = 'true';
+                cell.dataset.field = field;
+                if (MONO_FIELDS.includes(field)) cell.className = 'mono';
+                const value = values ? values[field] : '';
+                if (value) cell.innerText = value;
+            });
+            row.insertCell(-1).innerHTML = '<button class="btn btn-danger btn-sm" onclick="deleteRow(this)">Delete</button>';
+            const toggle = row.insertCell(-1);
+            toggle.innerHTML = '<button class="btn btn-sm" onclick="toggleEnableDisable(this)" data-id=""></button>';
+            toggle.firstChild.textContent = rowIsDisabled(row) ? 'Enable' : 'Disable';
+            return row;
+        }
+
+        function moveRow(row, direction) {
+            const body = tableBody();
+            const sibling = direction === 'up' ? row.previousElementSibling : row.nextElementSibling;
+            if (!sibling) return;
+            pushUndo('moving ' + rowLabel(row) + ' ' + direction);
+            orderChosen = true;
+            if (direction === 'up') body.insertBefore(row, sibling); else body.insertBefore(sibling, row);
+            refreshOrder();
+            markUnsaved(rowLabel(row) + ' moved ' + direction + '.' + orderWarning());
+            // The row it just went to may be the end of the line, in which case
+            // the arrow that was pressed is now disabled and the other one is
+            // the only one left to hold the focus.
+            const moved = row.querySelector('[data-move="' + direction + '"]');
+            const back = row.querySelector('[data-move="' + (direction === 'up' ? 'down' : 'up') + '"]');
+            const target = moved && !moved.disabled ? moved : back;
+            if (target && !target.disabled) target.focus();
+        }
+
+        // Channel numbers are compared piece by piece, so 60.356 sorts before
+        // 356.1 and 356.9 before 356.10. Anything that is not a plain number
+        // keeps its relative order and goes last, whichever way the rest sorts.
+        function channelNumberKey(value) {
+            const text = String(value || '').trim();
+            if (!/^[0-9]+(\.[0-9]+)*$/.test(text)) return null;
+            return text.split('.').map(Number);
+        }
+
+        function compareNumberKeys(left, right) {
+            const length = Math.max(left.length, right.length);
+            for (let i = 0; i < length; i++) {
+                const a = i < left.length ? left[i] : -1;
+                const b = i < right.length ? right[i] : -1;
+                if (a !== b) return a - b;
+            }
+            return 0;
+        }
+
+        // Two channel numbers are the same number when they match piece by
+        // piece, so 7 and 07 are one number while 60.1 and 60.10 are two.
+        // Anything that is not a plain dotted number is only equal to the same
+        // text with the ends trimmed.
+        function channelNumberIdentity(value) {
+            const text = String(value || '').trim();
+            if (!text) return '';
+            const key = channelNumberKey(text);
+            return key ? 'n:' + key.join('.') : 't:' + text;
+        }
+
+        function compareRows(left, right, mode) {
+            if (mode === 'name-asc') {
+                const a = fieldText(left, 'ChannelName').trim();
+                const b = fieldText(right, 'ChannelName').trim();
+                if (!a !== !b) return a ? -1 : 1;
+                return a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'});
+            }
+            const a = channelNumberKey(fieldText(left, 'ChannelNumber'));
+            const b = channelNumberKey(fieldText(right, 'ChannelNumber'));
+            if (!a || !b) {
+                if (a) return -1;
+                if (b) return 1;
+                return 0;
+            }
+            const result = compareNumberKeys(a, b);
+            return mode === 'number-desc' ? -result : result;
+        }
+
+        function sortRows() {
+            const select = document.getElementById('sort-mode');
+            const body = tableBody();
+            const rows = [...body.rows].map((row, index) => ({row, index}));
+            if (rows.length < 2) return;
+            pushUndo('sorting by ' + select.selectedOptions[0].textContent.toLowerCase());
+            orderChosen = true;
+            rows.sort((left, right) => compareRows(left.row, right.row, select.value) || left.index - right.index);
+            rows.forEach(entry => body.appendChild(entry.row));
+            refreshOrder();
+            markUnsaved('Sorted by ' + select.selectedOptions[0].textContent.toLowerCase() + '.' + orderWarning());
+        }
+
+        // 100 counts up whole and 60.1 counts up in its last piece only, so the
+        // text in front of that last piece is repeated exactly. A last piece
+        // written with a leading zero keeps its width, so 007 goes on to 008.
+        function parseChannelStart(value) {
+            const text = String(value || '').trim();
+            if (!/^[0-9]+(\.[0-9]+)*$/.test(text)) return null;
+            const cut = text.lastIndexOf('.');
+            const last = cut === -1 ? text : text.slice(cut + 1);
+            return {
+                prefix: cut === -1 ? '' : text.slice(0, cut + 1),
+                value: Number(last),
+                width: last.length > 1 && last.startsWith('0') ? last.length : 0,
+            };
+        }
+
+        function parseRenumberStep(value) {
+            const text = String(value || '').trim();
+            if (!/^[0-9]+$/.test(text)) return null;
+            const step = Number(text);
+            return step >= 1 ? step : null;
+        }
+
+        function formatChannelNumber(start, counter) {
+            return start.prefix + String(counter).padStart(start.width, '0');
+        }
+
+        // The whole rule, kept away from the table so it can be checked on its
+        // own: it is handed the channels as plain values and hands back what
+        // every number would become. The begin row and everything under it are
+        // renumbered; a channel that is turned off keeps its number and takes
+        // no number out of the count unless it is asked for. A new number that
+        // lands on a number nobody is renumbering is a collision, and the
+        // numbers being handed out cannot collide with each other because the
+        // count only ever goes up.
+        // Only the rows from begin to end are renumbered; everything outside
+        // keeps its number. A new number that lands on a kept channel is named
+        // but not refused: the table marks every shared number in red, so it
+        // can be applied now and put right by hand before Save.
+        function planRenumber(channels, begin, end, startText, stepText, includeDisabled) {
+            const plan = {valid: false, error: '', field: '', rows: [], listed: 0, changed: 0, skipped: 0, collisions: []};
+            const start = parseChannelStart(startText);
+            const step = parseRenumberStep(stepText);
+            if (!start) {
+                plan.field = 'start';
+                plan.error = 'Start at a channel number such as 100 or 60.1.';
+                return plan;
+            }
+            if (step === null) {
+                plan.field = 'step';
+                plan.error = 'Count by a whole number of 1 or more.';
+                return plan;
+            }
+            // Numbers are formatted with String(), which switches to exponent
+            // notation past 1e21 and loses whole digits past 2^53. Keep every
+            // number that could be written a plain, exact integer.
+            const first = Math.min(Math.max(Math.trunc(begin) || 0, 0), channels.length);
+            const last = Number.isFinite(end) ? Math.min(Math.trunc(end), channels.length - 1) : channels.length - 1;
+            if (last < first) {
+                plan.field = 'end';
+                plan.error = 'End with the channel you begin with or one under it.';
+                return plan;
+            }
+            const inRange = index => index >= first && index <= last;
+            const renumberedCount = channels.filter((channel, index) => inRange(index) && (includeDisabled || !channel.disabled)).length;
+            const lastValue = start.value + step * Math.max(renumberedCount - 1, 0);
+            if (!Number.isSafeInteger(start.value) || !Number.isSafeInteger(lastValue)) {
+                plan.field = Number.isSafeInteger(start.value) ? 'step' : 'start';
+                plan.error = 'These numbers would be too large. Use a smaller start or step.';
+                return plan;
+            }
+            plan.valid = true;
+            const renumbered = index => inRange(index) && (includeDisabled || !channels[index].disabled);
+            const kept = new Map();
+            channels.forEach((channel, index) => {
+                if (renumbered(index)) return;
+                const identity = channelNumberIdentity(channel.number);
+                if (identity && !kept.has(identity)) kept.set(identity, String(channel.name || '').trim());
+            });
+            let counter = start.value;
+            channels.forEach((channel, index) => {
+                if (!inRange(index)) return;
+                const entry = {
+                    index,
+                    name: String(channel.name || '').trim(),
+                    disabled: !!channel.disabled,
+                    oldNumber: String(channel.number == null ? '' : channel.number).trim(),
+                    newNumber: '',
+                    renumbered: false,
+                    changed: false,
+                    collidesWith: null,
                 };
-                entries.push(entry);
+                if (!renumbered(index)) {
+                    entry.newNumber = entry.oldNumber;
+                    plan.skipped++;
+                } else {
+                    entry.newNumber = formatChannelNumber(start, counter);
+                    entry.renumbered = true;
+                    entry.changed = entry.newNumber !== entry.oldNumber;
+                    counter += step;
+                    const holder = kept.get(channelNumberIdentity(entry.newNumber));
+                    if (holder !== undefined) {
+                        entry.collidesWith = holder;
+                        plan.collisions.push({number: entry.newNumber, name: holder});
+                    }
+                }
+                if (entry.changed) plan.changed++;
+                plan.rows.push(entry);
+            });
+            plan.listed = plan.rows.length;
+            return plan;
+        }
+
+        function channelsForRenumber() {
+            return [...tableBody().rows].map(row => ({
+                number: fieldText(row, 'ChannelNumber').trim(),
+                name: fieldText(row, 'ChannelName').trim(),
+                disabled: rowIsDisabled(row),
+            }));
+        }
+
+        function currentRenumberPlan() {
+            return planRenumber(
+                channelsForRenumber(),
+                Number(document.getElementById('renumber-begin').value) || 0,
+                Number(document.getElementById('renumber-end').value),
+                document.getElementById('renumber-start').value,
+                document.getElementById('renumber-step').value,
+                document.getElementById('renumber-include-disabled').checked);
+        }
+
+        function renumberPreviewRow(entry) {
+            const line = document.createElement('div');
+            line.className = 'renumber-preview-row';
+            const name = document.createElement('span');
+            name.className = 'renumber-preview-name';
+            name.textContent = entry.name || 'Unnamed channel';
+            name.title = entry.name || 'Unnamed channel';
+            const change = document.createElement('span');
+            change.className = 'renumber-preview-change';
+            if (!entry.renumbered) {
+                line.classList.add('is-muted');
+                change.textContent = (entry.oldNumber || 'no number') + ', kept because it is off';
+            } else if (!entry.changed) {
+                line.classList.add('is-muted');
+                change.textContent = (entry.oldNumber || 'no number') + ', unchanged';
+            } else {
+                change.textContent = (entry.oldNumber || 'no number') + ' to ' + entry.newNumber;
             }
-            fetch('/m3usave/{{ .filename }}', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(entries),
-            })
-            .then(response => response.json())
-            .then(data => alert(data.status))
-            .catch((error) => {
-                console.error('Error:', error);
+            line.appendChild(name);
+            line.appendChild(change);
+            if (entry.collidesWith !== null) {
+                line.classList.add('is-collision');
+                line.classList.remove('is-muted');
+                const note = document.createElement('span');
+                note.className = 'field-validation';
+                note.textContent = entry.newNumber + ' is already on ' + (entry.collidesWith || 'a channel') + ', which is not being renumbered, so the two will share it until one is changed.';
+                line.appendChild(note);
+            }
+            return line;
+        }
+
+        function updateRenumberPreview() {
+            const plan = currentRenumberPlan();
+            const startField = document.getElementById('renumber-start-field');
+            const stepField = document.getElementById('renumber-step-field');
+            startField.classList.toggle('field-invalid', plan.field === 'start');
+            stepField.classList.toggle('field-invalid', plan.field === 'step');
+            document.getElementById('renumber-start-error').textContent = plan.field === 'start' ? plan.error : '';
+            document.getElementById('renumber-step-error').textContent = plan.field === 'step' ? plan.error : '';
+            document.getElementById('renumber-end-field').classList.toggle('field-invalid', plan.field === 'end');
+            document.getElementById('renumber-end-error').textContent = plan.field === 'end' ? plan.error : '';
+
+            const preview = document.getElementById('renumber-preview');
+            preview.textContent = '';
+            plan.rows.forEach(entry => preview.appendChild(renumberPreviewRow(entry)));
+
+            const warning = document.getElementById('renumber-warning');
+            if (plan.collisions.length) {
+                const first = plan.collisions[0];
+                warning.textContent = 'Channel number ' + first.number + ' is already on '
+                    + (first.name || 'a channel') + ', which is not being renumbered.'
+                    + (plan.collisions.length > 1 ? ' ' + countOf(plan.collisions.length - 1, 'other new number') + ' would land on a kept channel too.' : '')
+                    + ' You can still apply: the table marks every shared number in red, and Channels DVR does not'
+                    + ' accept two channels on one number, so change one of each pair before you save.';
+            } else {
+                warning.textContent = '';
+            }
+
+            const summary = document.getElementById('renumber-summary');
+            if (!plan.valid) {
+                summary.textContent = '';
+            } else {
+                summary.textContent = plan.changed + ' of ' + countOf(plan.listed, 'channel') + ' will change.'
+                    + (plan.skipped ? ' ' + countOf(plan.skipped, 'disabled channel') + ' kept ' + (plan.skipped === 1 ? 'its number' : 'their numbers') + '.' : '');
+            }
+
+            document.getElementById('renumber-apply').disabled = !plan.valid || plan.changed === 0;
+            return plan;
+        }
+
+        function fillRenumberBegin() {
+            ['renumber-begin', 'renumber-end'].forEach(id => {
+                const select = document.getElementById(id);
+                select.textContent = '';
+                [...tableBody().rows].forEach((row, index) => {
+                    const option = document.createElement('option');
+                    option.value = String(index);
+                    const number = fieldText(row, 'ChannelNumber').trim();
+                    const name = fieldText(row, 'ChannelName').trim();
+                    option.textContent = (number || 'No number') + ': ' + (name || 'Unnamed channel')
+                        + (rowIsDisabled(row) ? ' (disabled)' : '');
+                    select.appendChild(option);
+                });
             });
         }
-        function cancel() {
-            window.location.href = "/";
+
+        // The Begin with list names rows by where they sit, so a table that
+        // changed while the modal is open leaves it naming the wrong channels.
+        // Every change to the table goes through refreshOrder, so the list is
+        // rebuilt from there, keeping the position that was chosen and the
+        // number that was typed.
+        function refreshRenumberBegin() {
+            if (!document.getElementById('renumber-modal').classList.contains('open')) return;
+            const select = document.getElementById('renumber-begin');
+            const endSelect = document.getElementById('renumber-end');
+            const chosen = Number(select.value) || 0;
+            const chosenEnd = Number(endSelect.value);
+            fillRenumberBegin();
+            const last = Math.max(tableBody().rows.length - 1, 0);
+            select.value = String(Math.min(Math.max(chosen, 0), last));
+            endSelect.value = String(Math.min(Math.max(Number.isFinite(chosenEnd) ? chosenEnd : last, 0), last));
+            updateRenumberPreview();
         }
+
+        function beginRowNumber() {
+            const row = tableBody().rows[Number(document.getElementById('renumber-begin').value) || 0];
+            return row ? fieldText(row, 'ChannelNumber').trim() : '';
+        }
+
+        function openRenumber() {
+            if (!tableBody().rows.length) {
+                setStatus('There are no channels to renumber yet.', 'error');
+                return;
+            }
+            fillRenumberBegin();
+            document.getElementById('renumber-begin').value = '0';
+            document.getElementById('renumber-end').value = String(tableBody().rows.length - 1);
+            renumberStartEdited = false;
+            document.getElementById('renumber-start').value = beginRowNumber();
+            document.getElementById('renumber-step').value = '1';
+            document.getElementById('renumber-include-disabled').checked = false;
+            const overlay = document.getElementById('renumber-modal');
+            overlay.classList.add('open');
+            // Nothing behind the modal should be reachable while it is open,
+            // the way the Activity page holds its release popover open.
+            [...document.body.children].forEach(child => {
+                if (child !== overlay) child.setAttribute('inert', '');
+            });
+            updateRenumberPreview();
+            const start = document.getElementById('renumber-start');
+            start.focus();
+            start.select();
+        }
+
+        function closeRenumber() {
+            document.getElementById('renumber-modal').classList.remove('open');
+            [...document.body.children].forEach(child => child.removeAttribute('inert'));
+            document.getElementById('renumber-entries').focus();
+        }
+
+        function applyRenumber() {
+            const plan = updateRenumberPreview();
+            if (!plan.valid || !plan.changed) return;
+            const rows = [...tableBody().rows];
+            const touched = [];
+            pushUndo('renumbering ' + countOf(plan.changed, 'channel'));
+            plan.rows.forEach(entry => {
+                if (!entry.changed) return;
+                const cell = fieldCell(rows[entry.index], 'ChannelNumber');
+                if (!cell) return;
+                cell.innerText = entry.newNumber;
+                touched.push(cell);
+            });
+            closeRenumber();
+            markDuplicateNumbers();
+            markOrderAgainstNumbers();
+            highlightCells(touched);
+            const shared = plan.collisions.length;
+            markUnsaved('Renumbered ' + countOf(plan.changed, 'channel') + '.'
+                + (shared ? ' ' + countOf(shared, 'new number') + (shared === 1 ? ' is' : ' are')
+                    + ' shared with a channel that kept its number, marked in red in the table. Change one of each pair before you save.' : ''));
+        }
+
+        function deleteRow(btn) {
+            const row = btn.closest('tr');
+            const label = rowLabel(row);
+            pushUndo('removing ' + label);
+            row.remove();
+            refreshOrder();
+            markUnsaved(label + ' was removed.');
+        }
+
+        function addRow() {
+            pushUndo('adding a channel');
+            const row = buildRow({});
+            tableBody().appendChild(row);
+            refreshOrder();
+            markUnsaved('A channel was added.');
+            fieldCell(row, 'Id').focus();
+        }
+
         function toggleEnableDisable(btn) {
-            var row = btn.parentNode.parentNode;
-            var idCell = row.cells[0];
-            var id = idCell.innerText;
-            if (id.startsWith('#')) {
+            const row = btn.closest('tr');
+            const idCell = fieldCell(row, 'Id');
+            const id = idCell.innerText;
+            pushUndo((isDisabledId(id) ? 'turning on ' : 'turning off ') + rowLabel(row));
+            if (isDisabledId(id)) {
                 idCell.innerText = id.substring(1);
                 btn.innerText = 'Disable';
             } else {
                 idCell.innerText = '#' + id;
                 btn.innerText = 'Enable';
             }
+            markDuplicateNumbers();
+            markOrderAgainstNumbers();
+            markUnsaved(rowLabel(row) + ' was changed.');
         }
+
+        // Typing a whole value into a cell is one step, not one step per key:
+        // the cell's text is remembered when it takes focus and the step is
+        // only kept if the text is different when the focus leaves. Nothing
+        // else can change the table while a cell holds the focus, because the
+        // focus leaves before any button of ours is pressed.
+        function noteEditStart(cell) {
+            editStart = cell ? {cell, text: cellText(cell)} : null;
+        }
+
+        // Channels edited by hand since the last save, so a swap of two numbers
+        // names both channels rather than whichever was typed last.
+        let handEdited = new Map();
+
+        function handEditedMessage() {
+            const labels = [...handEdited.values()];
+            if (labels.length === 1) return labels[0] + ' was changed.';
+            if (labels.length <= 3) return listOf(labels) + ' were changed.';
+            return countOf(labels.length, 'channel') + ' were changed.';
+        }
+
+        function noteEditEnd(cell) {
+            if (!editStart || editStart.cell !== cell) return;
+            const before = editStart;
+            editStart = null;
+            if (cellText(cell) === before.text) return;
+            const row = cell.closest('tr');
+            const rows = snapshotRows();
+            const index = [...tableBody().rows].indexOf(row);
+            if (index < 0) return;
+            rows[index][cell.dataset.field] = before.text;
+            pushSnapshot('editing the ' + (FIELD_TITLES[cell.dataset.field] || 'channel') + ' for ' + rowLabel(row), rows);
+            handEdited.set(row, rowLabel(row));
+            markUnsaved(handEditedMessage());
+        }
+
+        // The file writes every channel as one line with double quotes around
+        // each attribute, and AH4C renders every channel list in the m3u folder
+        // as one template set with one value in it, the proxy address. So the
+        // address stands, and three characters are refused rather than written:
+        // any other double brace, which stops every channel-list address from
+        // loading; a double quote, which breaks the attribute it lands in; and
+        // a line break, which splits the channel in two. The whole rule is
+        // here, away from the table, so it can be checked on its own.
+        const OPEN_BRACE = '{' + '{';
+        const CLOSE_BRACE = '}' + '}';
+        // The one action a channel list may carry. Every stock list holds it in
+        // the stream address, so refusing it would refuse every list. The
+        // pattern is written with escapes because this page is a template too.
+        const ADDRESS_ACTION = OPEN_BRACE + ' .IPADDRESS ' + CLOSE_BRACE;
+        const ADDRESS_ACTION_PATTERN = /\{\{\s*\.IPADDRESS\s*\}\}/g;
+        const SAVE_PROBLEM_NOTES = {
+            brace: 'The one double brace a channel list can hold is ' + ADDRESS_ACTION + ', which AH4C'
+                + ' replaces with the address of this proxy. Any other double brace, including one'
+                + ' made by a stray brace leaning on that one, stops every channel-list address from'
+                + ' loading, not only this list, because AH4C reads every channel list in the m3u'
+                + ' folder as one template.',
+            quote: 'A double quote breaks the channel line, because every value except the channel name'
+                + ' is written inside double quotes.',
+            newline: 'A line break splits the channel in two, because every channel is one line'
+                + ' in the file.',
+        };
+
+        function cellSaveProblem(text, field) {
+            const value = String(text == null ? '' : text);
+            // The proxy address is the one action the template engine knows.
+            // Where its own braces stand is worked out first, and every other
+            // double brace in the cell is refused. Taking the address out and
+            // searching what is left would miss a stray brace leaning on it,
+            // which pairs with the address's own first brace: the address then
+            // looks untouched and every channel list stops loading. A single
+            // brace on its own is text the file carries happily, so a channel
+            // name can still hold one.
+            const address = [];
+            ADDRESS_ACTION_PATTERN.lastIndex = 0;
+            for (let found = ADDRESS_ACTION_PATTERN.exec(value); found; found = ADDRESS_ACTION_PATTERN.exec(value)) {
+                address.push([found.index, found.index + found[0].length]);
+            }
+            const insideAddress = at => address.some(span => at >= span[0] && at < span[1]);
+            for (let at = 0; at + 1 < value.length; at++) {
+                const pair = value.slice(at, at + 2);
+                if (pair !== OPEN_BRACE && pair !== CLOSE_BRACE) continue;
+                if (insideAddress(at) && insideAddress(at + 1)) continue;
+                return 'brace';
+            }
+            // The channel name is written after the comma, outside any quoted
+            // attribute, so a double quote there is harmless.
+            if (field !== 'ChannelName' && value.includes('"')) return 'quote';
+            if (/[\r\n\u2028\u2029]/.test(value)) return 'newline';
+            return '';
+        }
+
+        function markSaveProblems() {
+            const found = [];
+            [...tableBody().rows].forEach(row => {
+                FIELDS.forEach(field => {
+                    const cell = fieldCell(row, field);
+                    if (!cell) return;
+                    const problem = cellSaveProblem(cellText(cell), field);
+                    cell.classList.toggle('cell-invalid', !!problem);
+                    if (problem) found.push({row, field, problem});
+                });
+            });
+            return found;
+        }
+
+        function saveProblemMessage(found) {
+            const notes = [...new Set(found.map(entry => entry.problem))]
+                .map(problem => SAVE_PROBLEM_NOTES[problem]);
+            return 'Nothing was saved. ' + countOf(found.length, 'cell') + ' below '
+                + (found.length === 1 ? 'is' : 'are') + ' marked. ' + notes.join(' ')
+                + ' Take the character out of the marked cells and press Save again.';
+        }
+
+        async function saveData() {
+            const button = document.getElementById('save-entries');
+            const problems = markSaveProblems();
+            if (problems.length) {
+                setStatus(saveProblemMessage(problems), 'error');
+                return;
+            }
+            const entries = [...tableBody().rows].map(row => {
+                const entry = {};
+                FIELDS.forEach(field => entry[field] = fieldText(row, field));
+                return entry;
+            });
+            button.disabled = true;
+            setStatus('Saving ' + entries.length + ' channels...', '');
+            const savingAt = statusCount;
+            try {
+                const response = await fetch('/m3usave/{{ .filename }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(entries),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'The channel list could not be saved.');
+                // The steps are kept after a save, so say plainly what
+                // pressing Undo now would mean.
+                handEdited = new Map();
+                const saved = (data.status || 'Saved.').trim();
+                // What the server says about the save comes first, then what
+                // Undo would now mean, then what Channels DVR was asked to do.
+                const stop = /[.!?]$/.test(saved) ? '' : '.';
+                const undoNote = undoStack.length
+                    ? ' Undo still has ' + countOf(undoStack.length, 'step')
+                        + ', so undoing now makes unsaved changes again.'
+                    : '';
+                const orderNote = orderWarning();
+                // The table stays editable while the file is written, so a
+                // change made in that moment is unsaved again the instant the
+                // save lands, and saying only that it saved would be false.
+                const changedNote = statusCount === savingAt
+                    ? ''
+                    : ' The table changed while it was being written, so there are unsaved changes again.';
+                const head = saved + stop + changedNote + orderNote + undoNote;
+                setStatus(head + ' Asking Channels DVR to read it again...', 'ready');
+                const asked = statusCount;
+                const news = await reloadInChannels();
+                if (statusCount === asked) {
+                    setStatus(head + ' ' + news, 'ready');
+                } else {
+                    // Something newer is on the line. It keeps its place, and
+                    // the news is added to it rather than dropped, because a
+                    // source that was not reloaded has to be said once.
+                    const line = document.querySelector('.editor-status');
+                    setStatus(((line && line.textContent) || '').trim() + ' ' + news, '');
+                }
+            } catch (error) {
+                setStatus(error.message || 'The channel list could not be saved.', 'error');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function namesOf(value) {
+            return Array.isArray(value) ? value.filter(name => typeof name === 'string' && name.trim()) : [];
+        }
+
+        // Each part of the answer is a sentence of its own, because a source
+        // that was not reloaded matters as much as one that was.
+        function reloadNews(data) {
+            const reloaded = namesOf(data.sources);
+            const failed = namesOf(data.failed);
+            const unchecked = namesOf(data.unchecked);
+            const said = [];
+            if (reloaded.length) {
+                said.push('Channels DVR is reading ' + listOf(reloaded) + ' again, which takes it a moment.');
+            }
+            if (failed.length) {
+                // A source can be refused, or asked and never answered, or
+                // never reached at all. What matters to whoever is reading is
+                // the same in all three: it is still on the old list.
+                said.push(listOf(failed) + (failed.length === 1
+                    ? ' is still serving the list it read last.'
+                    : ' are still serving the lists they read last.'));
+            }
+            if (unchecked.length) {
+                said.push(countOf(unchecked.length, 'source') + ' in Channels DVR could not be looked at, so if '
+                    + (unchecked.length === 1 ? 'it reads' : 'one of them reads') + ' this list'
+                    + ' it is still serving the list it read last.');
+            }
+            if (typeof data.error === 'string' && data.error.trim()) {
+                const reason = data.error.trim();
+                said.push(reason + (/[.!?]$/.test(reason) ? '' : '.'));
+            }
+            if (!said.length) {
+                said.push('No source in Channels DVR reads this list, so there was nothing to reload there.');
+            }
+            return said.join(' ');
+        }
+
+        function listOf(names) {
+            if (names.length < 2) return names.join('');
+            return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+        }
+
+        // Channels DVR keeps its own copy of every channel list and re-reads it
+        // on a schedule of its own, so a saved edit is not in the guide until
+        // the source that reads this list is reloaded. The file is already
+        // written by the time this runs, so whatever comes back is news about
+        // Channels DVR and never a failed save.
+        async function reloadInChannels() {
+            try {
+                const response = await fetch('/api/m3u/reload-in-channels', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({file: '{{ .filename }}'}),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok && !data.error && !namesOf(data.sources).length && !namesOf(data.failed).length) {
+                    return 'Channels DVR could not be asked to read the list again.'
+                        + ' It is still serving the list it read last.';
+                }
+                const news = reloadNews(data);
+                // A reply that failed after some sources were already reading
+                // the list again is not a list that went nowhere, so only an
+                // answer with nothing in it gets the plain reassurance.
+                if (!response.ok && !namesOf(data.sources).length) {
+                    return news + ' It is still serving the list it read last.';
+                }
+                return news;
+            } catch (error) {
+                return 'Channels DVR could not be reached, so it is still serving the list it read last.';
+            }
+        }
+
+        function cancel() {
+            window.location.href = "/";
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('button[data-id]').forEach(button => {
+                const id = button.getAttribute('data-id');
+                button.innerText = isDisabledId(id) ? 'Enable' : 'Disable';
+            });
+            [...tableBody().rows].forEach(decorateRow);
+            refreshOrder();
+            document.getElementById('sort-entries').addEventListener('click', sortRows);
+            document.getElementById('entriesTable').addEventListener('click', event => {
+                const button = event.target.closest('[data-move]');
+                if (button) moveRow(button.closest('tr'), button.dataset.move);
+            });
+            // Only the id and the channel number can change who is sharing a
+            // number, so only those two cells pay for the check as they are typed.
+            document.getElementById('entriesTable').addEventListener('input', event => {
+                const cell = event.target.closest('[data-field]');
+                if (!cell) return;
+                if (cell.classList.contains('cell-invalid') && !cellSaveProblem(cellText(cell), cell.dataset.field)) {
+                    cell.classList.remove('cell-invalid');
+                }
+                if (cell.dataset.field === 'ChannelNumber' || cell.dataset.field === 'Id') {
+                    markDuplicateNumbers();
+                    markOrderAgainstNumbers();
+                }
+            });
+            // A cell cannot hold a line break, so Enter moves on to the next
+            // one instead of putting one in.
+            document.getElementById('entriesTable').addEventListener('keydown', event => {
+                if (event.key !== 'Enter') return;
+                const cell = event.target.closest('[data-field]');
+                if (!cell) return;
+                event.preventDefault();
+                const cells = [...document.querySelectorAll('#entriesTable [data-field]')];
+                const next = cells[cells.indexOf(cell) + 1];
+                if (next) next.focus(); else cell.blur();
+            });
+            refreshUndo();
+            document.getElementById('undo-entries').addEventListener('click', undoLast);
+            document.getElementById('entriesTable').addEventListener('focusin', event => {
+                noteEditStart(event.target.closest('[data-field]'));
+            });
+            document.getElementById('entriesTable').addEventListener('focusout', event => {
+                const cell = event.target.closest('[data-field]');
+                if (cell) noteEditEnd(cell);
+            });
+            document.getElementById('renumber-entries').addEventListener('click', openRenumber);
+            document.getElementById('order-note-renumber').addEventListener('click', openRenumber);
+            document.getElementById('renumber-cancel').addEventListener('click', closeRenumber);
+            document.getElementById('renumber-apply').addEventListener('click', applyRenumber);
+            document.getElementById('renumber-start').addEventListener('input', () => {
+                renumberStartEdited = true;
+                updateRenumberPreview();
+            });
+            document.getElementById('renumber-step').addEventListener('input', updateRenumberPreview);
+            document.getElementById('renumber-include-disabled').addEventListener('change', updateRenumberPreview);
+            document.getElementById('renumber-begin').addEventListener('change', () => {
+                if (!renumberStartEdited) document.getElementById('renumber-start').value = beginRowNumber();
+                const begin = Number(document.getElementById('renumber-begin').value) || 0;
+                const endSelect = document.getElementById('renumber-end');
+                if (Number(endSelect.value) < begin) endSelect.value = String(begin);
+                updateRenumberPreview();
+            });
+            document.getElementById('renumber-end').addEventListener('change', updateRenumberPreview);
+            document.getElementById('renumber-modal').addEventListener('click', event => {
+                if (event.target === document.getElementById('renumber-modal')) closeRenumber();
+            });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && document.getElementById('renumber-modal').classList.contains('open')) closeRenumber();
+            });
+            // Inside a cell the browser's own undo is the right one, so the
+            // table only takes the shortcut when the focus is somewhere else.
+            document.addEventListener('keydown', event => {
+                if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+                if (event.key.toLowerCase() !== 'z') return;
+                const active = document.activeElement;
+                if (active && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return;
+                event.preventDefault();
+                undoLast();
+            });
+        });
     </script>
 </body>
 </html>
