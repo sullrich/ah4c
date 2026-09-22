@@ -131,43 +131,11 @@
             </section>
 
             <section class="card settings-section" data-section="capture">
-                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs on each platform" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>Install the drivers for your platform first.</strong> A USB capture card needs <code>uvcvideo</code> for the picture and <code>snd-usb-audio</code> for the sound, on the machine Channels DVR runs on. A container cannot bring them, because every container runs on that machine's own kernel. These notes cover common platforms, not every one; the listing command below says what is missing on yours.<span class="capture-driver-list"><span><b>Unraid:</b> neither is in the stock system. For the picture, install <b>DVB-Drivers</b> (by limetech) from Apps, choose <b>LibreELEC</b> in its settings, and reboot. Community Applications has no plugin for the sound driver, so without one the card records no sound.</span><span><b>Proxmox VE:</b> both included; nothing to install.</span><span><b>Debian, Raspberry Pi OS:</b> both included with the standard kernel.</span><span><b>Ubuntu:</b> if missing, <code>sudo apt install linux-modules-extra-$(uname -r)</code>, then <code>sudo modprobe uvcvideo snd-usb-audio</code>.</span><span><b>TrueNAS SCALE and other appliances:</b> may leave them out; the listing command shows whether they are there.</span><span><b>Windows, macOS:</b> built in; the card shows up as a camera and a microphone. Channels DVR captures through them there, but this helper only writes Linux capture lines, so add the card in Channels DVR by hand.</span></span></span></span></span></span></div>
-                <p class="section-help">Channels DVR can capture from a USB card itself and give each card a stream address, which becomes a tuner's encoder URL, as <a href="https://community.getchannels.com/t/proxmox-for-channels-step-by-step-for-passing-through-one-or-more-usb-capture-cards-to-a-channels-dvr-lxc/47092" target="_blank" rel="noopener">this Channels community guide</a> describes. ah4c writes that capture source in Channels DVR and fills in the tuners for you. A card set up this way can be previewed; a card driven by a CMD cannot.</p>
-                <p class="setting-description"><strong>1.</strong> On the server the cards are plugged into, not inside a container, paste this into a terminal (bash, sh or zsh) and paste everything it prints into the first box. It needs nothing installed, so it works on Unraid, Proxmox, TrueNAS, and any Linux. Besides listing the cards and their sound, it says when the server has no driver for a card, which is the first thing to fix: a container can only use a card the server itself has a driver for.</p>
-                <pre class="capture-command" id="capture-list-command">sh &lt;&lt;'AH4C'
-for d in /sys/class/video4linux/video*; do
-  [ "$(cat "$d/index" 2&gt;/dev/null)" = 0 ] || continue
-  p=$(readlink -f "$d/device"); pci=$(echo "$p" | sed -n 's#.*/\([^/]*\)/usb[0-9]*/.*#\1#p')
-  port=$(echo "$p" | tr / '\n' | grep -E '^[0-9]+-[0-9.]+$' | tail -n 1); bus=
-  [ -n "$port" ] &amp;&amp; bus="usb-$pci-${port#*-}"
-  echo "$(cat "$d/name") ($bus):"; echo "        /dev/${d##*/}"; echo
-done
-for u in /sys/bus/usb/devices/*-*; do
-  case "${u##*/}" in *:*) continue ;; esac
-  grep -qx 0e "$u"/*:*/bInterfaceClass 2&gt;/dev/null || continue
-  p=$(readlink -f "$u"); pci=$(echo "$p" | sed -n 's#.*/\([^/]*\)/usb[0-9]*/.*#\1#p'); port=${u##*/}
-  for i in "$u"/*:*; do
-    [ -e "$i/driver" ] &amp;&amp; continue
-    case "$(cat "$i/bInterfaceClass" 2&gt;/dev/null)" in
-      0e) echo "# ah4c no-driver video usb-$pci-${port#*-} $(cat "$u/product" 2&gt;/dev/null)" ;;
-      01) echo "# ah4c no-driver sound usb-$pci-${port#*-} $(cat "$u/product" 2&gt;/dev/null)" ;;
-    esac
-  done
-done | sort -u
-for m in uvcvideo snd-usb-audio; do
-  [ -d "/sys/module/$(echo "$m" | tr - _)" ] &amp;&amp; echo "# ah4c module-loaded $m"
-  find "/lib/modules/$(uname -r)" -name "$m.ko*" 2&gt;/dev/null | grep -q . &amp;&amp; echo "# ah4c module-installed $m"
-done
-echo "# ah4c sound"
-cat /proc/asound/cards 2&gt;/dev/null || echo "# ah4c no-sound-cards"
-AH4C</pre>
-                <div class="capture-paste">
-                    <div class="field"><label for="capture-devices">What the command printed <span class="muted">(or <code>v4l2-ctl --list-devices</code>)</span></label><textarea id="capture-devices" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
-                    <div class="field"><label for="capture-sound">Sound cards <span class="muted">(only with <code>v4l2-ctl</code>: <code>cat /proc/asound/cards</code> or <code>arecord -l</code>)</span></label><textarea id="capture-sound" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
-                </div>
-                <p class="setting-description">Each card is paired with its sound by USB port. With <code>arecord -l</code>, which has no ports, you pick each card's sound yourself.</p>
+                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs on each platform" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>The computer needs drivers for the card.</strong> A capture card needs a picture driver (<code>uvcvideo</code>) and a sound driver (<code>snd-usb-audio</code>) on the computer itself; a container cannot supply them. These notes cover common systems, not every one; <b>Find cards</b> says what is missing on yours.<span class="capture-driver-list"><span><b>Unraid:</b> not officially supported. For the picture, install <b>DVB-Drivers</b> (by limetech) from Apps, choose <b>LibreELEC</b> in its settings, and reboot. For the sound there is currently no official driver, so the card records no sound. <b>Debug mode</b> below can set a card up with the picture only, for testing.</span><span><b>Proxmox VE:</b> nothing to install.</span><span><b>Debian, Raspberry Pi OS:</b> nothing to install.</span><span><b>Ubuntu:</b> if a driver is missing, install <code>linux-modules-extra</code> for your kernel and restart.</span><span><b>TrueNAS SCALE and other appliances:</b> may not include them; <b>Find cards</b> says so.</span><span><b>Windows, macOS:</b> built in, but this helper only sets up Linux, so add the card in Channels DVR by hand.</span></span></span></span></span></div>
+                <p class="section-help">A streaming stick plugged into a USB capture card can be recorded by Channels DVR directly, as <a href="https://community.getchannels.com/t/proxmox-for-channels-step-by-step-for-passing-through-one-or-more-usb-capture-cards-to-a-channels-dvr-lxc/47092" target="_blank" rel="noopener">this Channels community guide</a> describes. ah4c sets this up in Channels DVR for you and connects each card to a tuner.</p>
+                <p class="setting-description">Plug the capture card into the computer that runs ah4c and Channels DVR, then press <strong>Find cards</strong>. If Channels DVR runs on a different computer, use <strong>Add a card by hand</strong> instead, since ah4c can only see cards on its own computer.</p>
                 <div class="btn-row">
-                    <button id="capture-read" class="btn" type="button">Read cards</button>
+                    <button id="capture-read" class="btn btn-primary" type="button">Find cards</button>
                     <button id="capture-add" class="btn" type="button">Add a card by hand</button>
                     <button id="capture-load" class="btn" type="button">Load from Channels DVR</button>
                 </div>
@@ -175,6 +143,9 @@ AH4C</pre>
                 <div id="capture-cards" class="capture-cards"></div>
                 <datalist id="capture-audio-choices"></datalist>
                 <div id="capture-other" class="restart-tune-warning hidden" role="alert"></div>
+                <label class="capture-debug"><input type="checkbox" id="capture-debug"><span>Debug mode</span></label>
+                <p class="setting-description">For testing. A card's sound device may be left empty, which writes a picture-only capture line for a server with no sound driver; that form has not been tried with Channels DVR on Linux. After each step it also shows the exact list sent to Channels DVR and the one Channels DVR holds, and the ah4c log records what was sent.</p>
+                <div id="capture-debug-output" class="capture-debug-output hidden"></div>
                 <div class="btn-row">
                     <button id="capture-apply" class="btn btn-primary" type="button" disabled>Set up in Channels DVR</button>
                     <span id="capture-status" class="muted" aria-live="polite"></span>
@@ -1912,7 +1883,7 @@ function captureSoundCardNumber(audio) {
 // the answer describes is still the list on the page when it arrives.
 function setCaptureBusy(busy) {
     captureBusy = busy;
-    ['capture-read', 'capture-add', 'capture-load', 'capture-devices', 'capture-sound'].forEach(id => { byId(id).disabled = busy; });
+    ['capture-read', 'capture-add', 'capture-load', 'capture-debug'].forEach(id => { byId(id).disabled = busy; });
     byId('capture-apply').disabled = busy || captureCards.length === 0;
     byId('capture-cards').querySelectorAll('input, select, button').forEach(control => { control.disabled = busy; });
 }
@@ -2018,7 +1989,7 @@ function renderCapturePassthrough() {
             devices.push(code(`/dev/snd/pcmC${card.audioCard}D${sound[1]}c`) + ' (group audio)');
             devices.push(code(`/dev/snd/controlC${card.audioCard}`) + ' (group audio)');
         }
-        if (sound && card.audioCard < 0) devices.push('its sound devices, which are listed once the cards are read from the pasted listing');
+        if (sound && card.audioCard < 0) devices.push('its sound devices, which are listed once Find cards has found it');
         if (devices.length) lines.push(`<li><strong>Card ${index + 1}:</strong> ${devices.join(', ')}</li>`);
     });
     body.innerHTML = `<p class="setting-description">In Proxmox, add each of these to the Channels DVR container under Resources as a device passthrough, with the container's own group IDs for video and audio (44 and 29 in a Debian container; ${code('cat /etc/group')} inside it shows them).</p><ul class="capture-device-list">${lines.join('')}</ul>${check}`;
@@ -2031,32 +2002,29 @@ function renderCaptureDrivers(drivers) {
     const box = byId('capture-drivers');
     const video = (drivers && drivers.missingVideo) || [];
     const sound = (drivers && drivers.missingSound) || [];
-    const installed = (drivers && drivers.installed) || [];
     const loaded = (drivers && drivers.loaded) || [];
     if (!video.length && !sound.length) {
         box.classList.add('hidden');
         box.innerHTML = '';
         return;
     }
-    const code = value => `<code>${escapeHTML(value)}</code>`;
-    const names = [...new Set(video.concat(sound).map(item => `${item.product || 'A USB device'} (${item.bus})`))];
+    const names = [...new Set(video.concat(sound).map(item => item.product || 'A USB capture card'))];
+    const one = names.length === 1;
+    const heading = video.length
+        ? `ah4c found ${one ? 'a capture card' : 'capture cards'}, but this computer has no driver for ${one ? 'its' : 'their'} picture yet.`
+        : `ah4c found ${one ? 'a capture card' : 'capture cards'}, but this computer has no driver for ${one ? 'its' : 'their'} sound, so ${one ? 'it' : 'they'} would record without sound.`;
     const modules = [video.length ? 'uvcvideo' : '', sound.length ? 'snd-usb-audio' : ''].filter(Boolean);
-    const effect = video.length
-        ? `so there is no ${code('/dev/video')} device for Channels DVR, or anything else, to capture from`
-        : `so ${names.length === 1 ? 'its picture can be captured but its sound cannot' : 'their pictures can be captured but their sound cannot'}`;
-    const fixes = [];
-    const stuck = modules.filter(module => loaded.includes(module));
-    const unloaded = modules.filter(module => !loaded.includes(module) && installed.includes(module));
-    const absent = modules.filter(module => !loaded.includes(module) && !installed.includes(module));
-    if (stuck.length) fixes.push(`${stuck.map(code).join(' and ')} ${stuck.length === 1 ? 'is' : 'are'} loaded but did not take the card; unplug it and plug it back in, or restart the server.`);
-    if (unloaded.length) fixes.push(`${unloaded.map(code).join(' and ')} ${unloaded.length === 1 ? 'is' : 'are'} installed but not loaded. On the server, run ${code('modprobe ' + unloaded.join(' '))}, and add that line to whatever runs at the server's startup so it survives a reboot.`);
-    if (absent.length) {
-        const unraid = [];
-        if (absent.includes('uvcvideo')) unraid.push(`for the picture, install <strong>DVB-Drivers</strong> (by limetech) from Apps, choose <strong>LibreELEC</strong> in its settings, and reboot`);
-        if (absent.includes('snd-usb-audio')) unraid.push('Community Applications has no plugin for the sound driver, so without one the card records no sound');
-        fixes.push(`${absent.map(code).join(' and ')} ${absent.length === 1 ? 'is' : 'are'} not installed on the server. On Unraid, ${unraid.join('; ')}. On other Linux systems they come with the kernel, or its extra modules such as ${code('linux-modules-extra-$(uname -r)')} on Ubuntu.`);
+    const steps = [];
+    if (modules.some(module => loaded.includes(module))) {
+        steps.push('The driver is there but did not pick the card up. Unplug the card, plug it back in, and press <strong>Find cards</strong> again.');
     }
-    box.innerHTML = `<strong>The server has no ${modules.join(' or ')} driver for ${names.length === 1 ? 'this card' : 'these cards'} yet.</strong><p>${names.map(escapeHTML).join(', ')} ${names.length === 1 ? 'is' : 'are'} plugged in, but the server's kernel has not bound ${modules.map(code).join(' and ')} to ${names.length === 1 ? 'it' : 'them'}, ${effect}. Passing the card through to a container cannot fix this, because every container runs on the server's own kernel.</p><p>${fixes.join(' ')} Then run the listing command again.</p>`;
+    if (modules.some(module => !loaded.includes(module))) {
+        const unraid = [];
+        if (video.length && !loaded.includes('uvcvideo')) unraid.push('for the picture, install <strong>DVB-Drivers</strong> (by limetech) from the Apps tab, choose <strong>LibreELEC</strong> in its settings, and reboot');
+        if (sound.length && !loaded.includes('snd-usb-audio')) unraid.push('for the sound there is currently no official driver, so the card records no sound; <strong>Debug mode</strong> below can set it up with the picture only, for testing');
+        steps.push(`The driver has to be installed on the computer itself; installing it in a container does not help. On <strong>Unraid</strong>, ${unraid.join('; ')}. On <strong>Ubuntu</strong>, install the package <code>linux-modules-extra</code> for your kernel and restart. Other systems are covered by the <strong>i</strong> next to the section title.`);
+    }
+    box.innerHTML = `<strong>${heading}</strong><p>${names.map(escapeHTML).join(', ')}</p><p>${steps.join(' ')} Then press <strong>Find cards</strong> again.</p>`;
     box.classList.remove('hidden');
 }
 
@@ -2084,13 +2052,10 @@ async function captureRequest(url, options) {
 
 async function readCaptureCards() {
     const generation = ++captureGeneration;
-    captureStatus('Reading the cards...', '');
+    captureStatus('Looking for cards...', '');
     setCaptureBusy(true);
     try {
-        const payload = await captureRequest('/api/capture/read', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({devices: byId('capture-devices').value, sound: byId('capture-sound').value}),
-        });
+        const payload = await captureRequest('/api/capture/detect', {method: 'POST'});
         if (generation !== captureGeneration) return;
         captureCards = payload.cards.map(card => ({...card, tuner: ''}));
         captureAudioChoices = payload.audio || [];
@@ -2099,11 +2064,14 @@ async function readCaptureCards() {
         renderCaptureDrivers(payload.drivers);
         renderCaptureCards();
         if (!captureCards.length) {
-            captureStatus('No card has a video device yet; see above.', 'error');
+            captureStatus(byId('capture-drivers').classList.contains('hidden')
+                ? 'No capture card was found. Check that it is plugged in to this computer, or use Add a card by hand.'
+                : 'No card can be used yet; see above.', 'error');
             return;
         }
         const unpaired = captureCards.filter(card => !card.audio).length;
-        captureStatus(`Found ${countOfCaptures(captureCards.length)}.` + (unpaired ? ` Pick the sound device for ${countOfCaptures(unpaired)}; its USB port did not match a sound card.` : ' Choose the tuner each one feeds.'), unpaired ? 'error' : '');
+        const silent = captureDebug() ? ' In debug mode it can be left empty to set up the picture only.' : '';
+        captureStatus(`Found ${countOfCaptures(captureCards.length)}.` + (unpaired ? ` Pick the sound device for ${countOfCaptures(unpaired)}; its USB port did not match a sound card.${silent}` : ' Choose the tuner each one feeds.'), unpaired ? 'error' : '');
     } catch (error) {
         if (generation === captureGeneration) {
             renderCaptureDrivers(null);
@@ -2163,6 +2131,7 @@ async function loadCaptureCards() {
         const payload = await captureRequest('/api/capture/channels');
         if (generation !== captureGeneration) return;
         renderCaptureOthers(payload.otherSources || []);
+        renderCaptureDebug(payload);
         if (!payload.present) {
             captureStatus('Channels DVR has no AH4C Capture source yet.', '');
             return;
@@ -2180,6 +2149,25 @@ async function loadCaptureCards() {
     } finally {
         if (generation === captureGeneration) setCaptureBusy(false);
     }
+}
+
+// Debug mode: whether it is on, and the lists behind the last step, so a test
+// can compare what ah4c sent with what Channels DVR kept.
+const captureDebugKey = 'ah4c.captureDebug';
+function captureDebug() {
+    return byId('capture-debug').checked;
+}
+
+function renderCaptureDebug(payload) {
+    const box = byId('capture-debug-output');
+    const parts = [];
+    if (captureDebug() && payload) {
+        if (typeof payload.sentText === 'string') parts.push(`<p class="setting-description">Sent to Channels DVR:</p><pre class="capture-command">${escapeHTML(payload.sentText)}</pre>`);
+        if (typeof payload.channelsText === 'string') parts.push(`<p class="setting-description">Channels DVR holds:</p><pre class="capture-command">${escapeHTML(payload.channelsText || '(nothing)')}</pre>`);
+        if (Array.isArray(payload.streams)) parts.push(`<p class="setting-description">Stream addresses:</p><pre class="capture-command">${escapeHTML(payload.streams.map(item => `${item.video}: ${item.url}`).join('\n') || '(none listed yet)')}</pre>`);
+    }
+    box.innerHTML = parts.join('');
+    box.classList.toggle('hidden', !parts.length);
 }
 
 function renderCaptureOthers(names) {
@@ -2238,9 +2226,10 @@ async function applyCaptureCards() {
     try {
         const payload = await captureRequest('/api/capture/channels', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({cards: captureCards.map(({video, audio, width, height, framerate, name, bus, audioCard}) => ({video, audio, width, height, framerate, name, bus, audioCard}))}),
+            body: JSON.stringify({debug: captureDebug(), cards: captureCards.map(({video, audio, width, height, framerate, name, bus, audioCard}) => ({video, audio, width, height, framerate, name, bus, audioCard}))}),
         });
         if (generation !== captureGeneration) return;
+        renderCaptureDebug(payload);
         captureStreams = payload.streams || [];
         renderCaptureOthers(payload.otherSources || []);
         renderCaptureCards();
@@ -2296,6 +2285,13 @@ byId('capture-add').addEventListener('click', () => {
     renderCaptureCards();
 });
 byId('capture-load').addEventListener('click', loadCaptureCards);
+try {
+    byId('capture-debug').checked = localStorage.getItem(captureDebugKey) === '1';
+} catch (error) {}
+byId('capture-debug').addEventListener('change', () => {
+    try { localStorage.setItem(captureDebugKey, captureDebug() ? '1' : '0'); } catch (error) {}
+    if (!captureDebug()) renderCaptureDebug(null);
+});
 byId('capture-apply').addEventListener('click', applyCaptureCards);
 
 loadSettings().catch(error => showNotice(error.message, 'danger'));

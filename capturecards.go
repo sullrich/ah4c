@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -27,17 +29,18 @@ const (
 	captureSourceKey  = "AH4CCapture"
 	captureSourceName = "AH4C Capture"
 	captureDeviceID   = channelsM3UDevicePrefix + captureSourceKey
-	// A pasted device listing is a few kilobytes; this bounds a paste gone wrong.
+	// A list of cards is a few kilobytes; this bounds a request gone wrong.
 	maxCaptureRequestBytes int64 = 256 << 10
 )
 
 var (
 	captureVideoPattern = regexp.MustCompile(`^video[0-9]+$`)
 	captureAudioPattern = regexp.MustCompile(`^(plug)?hw:[A-Za-z0-9_]+,[0-9]+$`)
-	asoundCardPattern   = regexp.MustCompile(`^\s*([0-9]+)\s+\[([^\]]+?)\s*\]:\s*\S+\s+-\s+(.*)$`)
-	asoundBusPattern    = regexp.MustCompile(`\bat\s+(usb-[^,\s]+)`)
-	arecordCardPattern  = regexp.MustCompile(`^card\s+([0-9]+):\s+(\S+)\s+\[([^\]]*)\],\s+device\s+([0-9]+):`)
-	captureLinePattern  = regexp.MustCompile(`^capture://v4l2/([^/]+)/([^/]+)/\?(.*)$`)
+	usbPortPattern      = regexp.MustCompile(`^[0-9]+-[0-9.]+$`)
+	usbBusPattern       = regexp.MustCompile(`^usb[0-9]+$`)
+	soundCardPattern    = regexp.MustCompile(`^card([0-9]+)$`)
+	soundCapturePattern = regexp.MustCompile(`^pcmC[0-9]+D([0-9]+)c$`)
+	captureLinePattern  = regexp.MustCompile(`^capture://v4l2/([^/]+)/(?:([^/]+)/)?\?(.*)$`)
 )
 
 // captureCard is one USB capture card: its video node and ALSA capture device
@@ -83,141 +86,184 @@ type alsaCard struct {
 	device int
 }
 
-// captureMissingDriver is a USB capture device the kernel has no driver bound
-// for, as the listing command reports it.
+// captureMissingDriver is a USB capture card the kernel has no driver bound
+// for, so it has no /dev/video or no sound device at all.
 type captureMissingDriver struct {
 	Bus     string `json:"bus"`
 	Product string `json:"product"`
 }
 
-// captureDrivers is what the listing command found about drivers: devices the
-// kernel sees on USB but cannot use, and which drivers are installed at all.
+// captureDrivers is what detection found about drivers: capture cards the
+// kernel sees on USB but cannot use, and which of the two drivers are loaded.
 type captureDrivers struct {
 	MissingVideo []captureMissingDriver `json:"missingVideo"`
 	MissingSound []captureMissingDriver `json:"missingSound"`
-	Installed    []string               `json:"installed"`
 	Loaded       []string               `json:"loaded"`
 }
 
-// parseCaptureMarkers reads the "# ah4c" lines the listing command adds. A
-// card with no driver has no /dev/video, so without them it would simply not
-// be listed, and "no cards found" would hide the real reason.
-func parseCaptureMarkers(text string) captureDrivers {
-	report := captureDrivers{MissingVideo: []captureMissingDriver{}, MissingSound: []captureMissingDriver{}, Installed: []string{}, Loaded: []string{}}
-	for _, line := range strings.Split(text, "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 3 || fields[0] != "#" || fields[1] != "ah4c" {
-			continue
-		}
-		switch {
-		case fields[2] == "no-driver" && len(fields) >= 5:
-			missing := captureMissingDriver{Bus: fields[4], Product: strings.Join(fields[5:], " ")}
-			if fields[3] == "video" {
-				report.MissingVideo = append(report.MissingVideo, missing)
-			} else if fields[3] == "sound" {
-				report.MissingSound = append(report.MissingSound, missing)
-			}
-		case fields[2] == "module-installed" && len(fields) >= 4:
-			report.Installed = append(report.Installed, fields[3])
-		case fields[2] == "module-loaded" && len(fields) >= 4:
-			report.Loaded = append(report.Loaded, fields[3])
-		}
-	}
-	return report
-}
-
 func registerCaptureCardRoutes(r *gin.Engine) {
-	r.POST("/api/capture/read", readCaptureCardsHandler)
+	r.POST("/api/capture/detect", detectCaptureCardsHandler)
 	r.GET("/api/tuner/:index/preview-check", previewCheckHandler)
 	r.GET("/api/capture/channels", findCaptureStreamsHandler)
 	r.PUT("/api/capture/channels", putCaptureSourceHandler)
 }
 
-// parseV4L2Devices reads `v4l2-ctl --list-devices`. Each device is a heading
-// that ends with its bus in parentheses, followed by its nodes; the first
-// /dev/video node under a heading is the one that captures.
-func parseV4L2Devices(text string) []v4l2Device {
-	var devices []v4l2Device
-	var current *v4l2Device
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if line == strings.TrimLeft(line, " \t") && strings.HasSuffix(trimmed, ":") {
-			heading := strings.TrimSuffix(trimmed, ":")
-			device := v4l2Device{name: heading}
-			if open := strings.LastIndex(heading, "("); open >= 0 && strings.HasSuffix(heading, ")") {
-				device.bus = heading[open+1 : len(heading)-1]
-				device.name = strings.TrimSpace(heading[:open])
-			}
-			// "USB3.0 Video: USB3.0 Video" names the card twice; once is enough.
-			if first, rest, found := strings.Cut(device.name, ": "); found && first == rest {
-				device.name = first
-			}
-			devices = append(devices, device)
-			current = &devices[len(devices)-1]
-			continue
-		}
-		if current != nil && current.video == "" && strings.HasPrefix(trimmed, "/dev/video") {
-			current.video = strings.TrimPrefix(trimmed, "/dev/")
-		}
-	}
-	kept := devices[:0]
-	for _, device := range devices {
-		if device.video != "" {
-			kept = append(kept, device)
-		}
-	}
-	return kept
+// captureSysRoot is where the kernel's device tree is read. A container sees
+// the host's /sys, read-only, so ah4c can find the cards itself without anyone
+// typing a command on the server.
+var captureSysRoot = "/sys"
+
+func readSysValue(path string) string {
+	value, _ := os.ReadFile(path)
+	return strings.TrimSpace(string(value))
 }
 
-// parseAlsaCards reads `cat /proc/asound/cards`, whose second line for each
-// card says which USB port it hangs off, or `arecord -l`, which names the
-// capture device but not the port.
-func parseAlsaCards(text string) []alsaCard {
-	var cards []alsaCard
-	seen := map[int]bool{}
-	// The line naming a card's USB port belongs to the heading directly above
-	// it and to no other, or a heading that failed to read would hand its port
-	// to the card before it, and that card would be paired with the wrong sound.
-	headingAbove := -1
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
+// usbDeviceOf follows a sysfs device link to the USB device it hangs off, and
+// names that device's port the way the kernel does, usb-<controller>-<port>, so
+// a card's picture and sound can be matched by where they are plugged in.
+func usbDeviceOf(link string) (string, string) {
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.Split(filepath.ToSlash(resolved), "/")
+	for i := len(parts) - 1; i > 0; i-- {
+		if !usbPortPattern.MatchString(parts[i]) {
 			continue
 		}
-		above := headingAbove
-		headingAbove = -1
-		if match := asoundCardPattern.FindStringSubmatch(line); match != nil {
-			index, _ := strconv.Atoi(match[1])
-			if !seen[index] {
-				seen[index] = true
-				cards = append(cards, alsaCard{index: index, id: match[2], name: strings.TrimSpace(match[3])})
-				headingAbove = len(cards) - 1
+		controller := ""
+		for j := i - 1; j > 0; j-- {
+			if usbBusPattern.MatchString(parts[j]) {
+				controller = parts[j-1]
+				break
 			}
+		}
+		_, port, _ := strings.Cut(parts[i], "-")
+		return strings.Join(parts[:i+1], "/"), "usb-" + controller + "-" + port
+	}
+	return "", ""
+}
+
+// detectVideoDevices lists each capture node: a card makes two video nodes, and
+// the one with index 0 is the picture, the other its metadata.
+func detectVideoDevices(root string) []v4l2Device {
+	nodes, _ := filepath.Glob(filepath.Join(root, "class", "video4linux", "video*"))
+	sort.Slice(nodes, func(a, b int) bool { return videoNumber(nodes[a]) < videoNumber(nodes[b]) })
+	devices := []v4l2Device{}
+	for _, node := range nodes {
+		video := filepath.Base(node)
+		if !captureVideoPattern.MatchString(video) {
 			continue
 		}
-		if match := asoundBusPattern.FindStringSubmatch(line); match != nil {
-			if above >= 0 {
-				cards[above].bus = match[1]
-			}
+		if index := readSysValue(filepath.Join(node, "index")); index != "" && index != "0" {
 			continue
 		}
-		if match := arecordCardPattern.FindStringSubmatch(strings.TrimSpace(line)); match != nil {
-			index, _ := strconv.Atoi(match[1])
-			device, _ := strconv.Atoi(match[4])
-			if seen[index] {
+		name := readSysValue(filepath.Join(node, "name"))
+		// "USB3.0 Video: USB3.0 Video" names the card twice; once is enough.
+		if first, rest, found := strings.Cut(name, ": "); found && first == rest {
+			name = first
+		}
+		_, bus := usbDeviceOf(filepath.Join(node, "device"))
+		devices = append(devices, v4l2Device{name: name, bus: bus, video: video})
+	}
+	return devices
+}
+
+func videoNumber(node string) int {
+	number, _ := strconv.Atoi(strings.TrimPrefix(filepath.Base(node), "video"))
+	return number
+}
+
+// detectSoundCards lists each sound card that can record, with its first
+// recording device, named the way Channels DVR is given it: hw:<id>,<device>.
+func detectSoundCards(root string) []alsaCard {
+	entries, _ := os.ReadDir(filepath.Join(root, "class", "sound"))
+	cards := []alsaCard{}
+	for _, entry := range entries {
+		match := soundCardPattern.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		index, _ := strconv.Atoi(match[1])
+		dir := filepath.Join(root, "class", "sound", entry.Name())
+		device := -1
+		for _, other := range entries {
+			if !strings.HasPrefix(other.Name(), fmt.Sprintf("pcmC%dD", index)) {
 				continue
 			}
-			seen[index] = true
-			cards = append(cards, alsaCard{index: index, id: match[2], name: strings.TrimSpace(match[3]), device: device})
+			if found := soundCapturePattern.FindStringSubmatch(other.Name()); found != nil {
+				if number, _ := strconv.Atoi(found[1]); device < 0 || number < device {
+					device = number
+				}
+			}
+		}
+		id := readSysValue(filepath.Join(dir, "id"))
+		if device < 0 || id == "" {
+			continue
+		}
+		usbDir, bus := usbDeviceOf(filepath.Join(dir, "device"))
+		name := id
+		if usbDir != "" {
+			if product := readSysValue(filepath.Join(usbDir, "product")); product != "" {
+				name = product
+			}
+		}
+		cards = append(cards, alsaCard{index: index, id: id, name: name, bus: bus, device: device})
+	}
+	sort.Slice(cards, func(a, b int) bool { return cards[a].index < cards[b].index })
+	return cards
+}
+
+// detectCaptureDrivers finds capture cards the kernel sees on USB but has not
+// bound a driver to. Such a card has no /dev/video, so without this it would
+// simply not be listed, and "no cards found" would hide the real reason. Only
+// devices with a video interface count, so an unrelated USB headset is not
+// taken for a capture card.
+func detectCaptureDrivers(root string) captureDrivers {
+	report := captureDrivers{MissingVideo: []captureMissingDriver{}, MissingSound: []captureMissingDriver{}, Loaded: []string{}}
+	devices, _ := filepath.Glob(filepath.Join(root, "bus", "usb", "devices", "*"))
+	sort.Strings(devices)
+	for _, device := range devices {
+		base := filepath.Base(device)
+		if !usbPortPattern.MatchString(base) {
+			continue
+		}
+		interfaces, _ := filepath.Glob(filepath.Join(device, base+":*"))
+		// A driver takes a card's control interface and claims the rest, so the
+		// card has a driver for its picture or sound when any interface of that
+		// kind is bound, and lacks one only when none is.
+		hasVideo, hasSound, videoBound, soundBound := false, false, false, false
+		for _, iface := range interfaces {
+			_, err := os.Stat(filepath.Join(iface, "driver"))
+			bound := err == nil
+			switch readSysValue(filepath.Join(iface, "bInterfaceClass")) {
+			case "0e":
+				hasVideo = true
+				videoBound = videoBound || bound
+			case "01":
+				hasSound = true
+				soundBound = soundBound || bound
+			}
+		}
+		if !hasVideo {
+			continue
+		}
+		videoUnbound, soundUnbound := !videoBound, hasSound && !soundBound
+		_, bus := usbDeviceOf(device)
+		missing := captureMissingDriver{Bus: bus, Product: readSysValue(filepath.Join(device, "product"))}
+		if videoUnbound {
+			report.MissingVideo = append(report.MissingVideo, missing)
+		}
+		if soundUnbound {
+			report.MissingSound = append(report.MissingSound, missing)
 		}
 	}
-	return cards
+	for _, module := range []string{"uvcvideo", "snd-usb-audio"} {
+		if _, err := os.Stat(filepath.Join(root, "module", strings.ReplaceAll(module, "-", "_"))); err == nil {
+			report.Loaded = append(report.Loaded, module)
+		}
+	}
+	return report
 }
 
 // pairCaptureCards joins each video device to the sound card on the same USB
@@ -249,12 +295,16 @@ func pairCaptureCards(videos []v4l2Device, sounds []alsaCard) ([]captureCard, []
 }
 
 // validCaptureCard checks one card before it is written into a capture:// line,
-// where a slash, a space, or a stray character would break the address.
-func validCaptureCard(card captureCard) error {
+// where a slash, a space, or a stray character would break the address. A card
+// with no sound device is refused unless the page is in debug mode, where it is
+// written as a picture-only line for testing on a server with no sound driver.
+func validCaptureCard(card captureCard, allowSilent bool) error {
 	if !captureVideoPattern.MatchString(card.Video) {
 		return fmt.Errorf("the video device must look like video0, as v4l2-ctl lists it")
 	}
-	if !captureAudioPattern.MatchString(card.Audio) {
+	if card.Audio == "" && allowSilent {
+		// Written without a sound device; see captureSourceText.
+	} else if !captureAudioPattern.MatchString(card.Audio) {
 		return fmt.Errorf("the audio device must look like hw:Video,0, as arecord -l lists it")
 	}
 	if card.Width < 320 || card.Width > 7680 || card.Height < 240 || card.Height > 4320 {
@@ -277,13 +327,19 @@ func captureChannelName(card captureCard) string {
 
 // captureSourceText is the custom-channels list Channels DVR captures from: one
 // channel per card, each a capture:// address naming the card's video node and
-// sound device.
+// sound device. A card with no sound device, allowed only in debug mode, gets a
+// picture-only line, like the capture://v4l2/<videoX> form the Channels community
+// shows; it has not been tried here.
 func captureSourceText(cards []captureCard) string {
 	var text strings.Builder
 	text.WriteString("#EXTM3U\n")
 	for _, card := range cards {
 		fmt.Fprintf(&text, "\n#EXTINF:-1 channel-id=\"ah4c-capture-%s\",%s\n", card.Video, captureChannelName(card))
-		fmt.Fprintf(&text, "capture://v4l2/%s/%s/?framerate=%d&width=%d&height=%d\n", card.Video, card.Audio, card.Framerate, card.Width, card.Height)
+		device := card.Video + "/"
+		if card.Audio != "" {
+			device += card.Audio + "/"
+		}
+		fmt.Fprintf(&text, "capture://v4l2/%s?framerate=%d&width=%d&height=%d\n", device, card.Framerate, card.Width, card.Height)
 	}
 	return text.String()
 }
@@ -352,38 +408,22 @@ func captureStreamsFromDevice(device channelsDVRDevice, dvrBase string, cards []
 	return streams
 }
 
-func readCaptureCardsHandler(c *gin.Context) {
-	var request struct {
-		Devices string `json:"devices"`
-		Sound   string `json:"sound"`
-	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCaptureRequestBytes)
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Paste the two listings as text."})
-		return
-	}
-	// The listing command prints the video devices, then "# ah4c sound", then
-	// the sound cards, so one paste carries both.
-	devices, sound := request.Devices, request.Sound
-	if before, after, found := strings.Cut(devices, "# ah4c sound"); found {
-		devices = before
-		if strings.TrimSpace(sound) == "" {
-			sound = after
-		}
-	}
-	drivers := parseCaptureMarkers(request.Devices)
-	videos := parseV4L2Devices(devices)
-	if len(videos) == 0 && len(drivers.MissingVideo) == 0 && len(drivers.MissingSound) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No video devices were found in the first listing. Paste everything the listing command, or v4l2-ctl --list-devices, prints."})
-		return
-	}
-	sounds := parseAlsaCards(sound)
+// detectCaptureCardsHandler finds the cards plugged into the machine ah4c runs
+// on, pairs each with its sound by USB port, and says which drivers are
+// missing. It only reads /sys, so it costs nothing a tune would notice.
+func detectCaptureCardsHandler(c *gin.Context) {
+	videos := detectVideoDevices(captureSysRoot)
+	sounds := detectSoundCards(captureSysRoot)
+	drivers := detectCaptureDrivers(captureSysRoot)
 	cards, left := pairCaptureCards(videos, sounds)
 	// Every sound card is offered with its card number, so a card paired or
 	// changed by hand still lists the right Proxmox devices to pass through.
 	known := make([]captureAudioChoice, 0, len(sounds))
 	for _, sound := range sounds {
 		known = append(known, captureAudioChoice{Card: sound.index, Audio: fmt.Sprintf("hw:%s,%d", sound.id, sound.device), Name: sound.name, Bus: sound.bus})
+	}
+	if left == nil {
+		left = []captureAudioChoice{}
 	}
 	c.JSON(http.StatusOK, gin.H{"cards": cards, "audio": left, "sound": known, "drivers": drivers})
 }
@@ -475,7 +515,8 @@ func captureState(ctx context.Context, dvrBase string) (gin.H, error) {
 		}
 		streams = captureStreamsFromDevice(device, dvrBase, cards)
 	}
-	return gin.H{"present": present, "source": captureSourceName, "cards": cards, "streams": streams, "unreadLines": unread}, nil
+	// channelsText is the list as Channels DVR holds it, which debug mode shows.
+	return gin.H{"present": present, "source": captureSourceName, "cards": cards, "streams": streams, "unreadLines": unread, "channelsText": settings.Text}, nil
 }
 
 // captureSetup is what the page is told: the capture state, and any other
@@ -571,6 +612,7 @@ func putCaptureSource(ctx context.Context, dvrBase string, cards []captureCard) 
 func putCaptureSourceHandler(c *gin.Context) {
 	var request struct {
 		Cards []captureCard `json:"cards"`
+		Debug bool          `json:"debug"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCaptureRequestBytes)
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -583,7 +625,7 @@ func putCaptureSourceHandler(c *gin.Context) {
 	}
 	seen := map[string]int{}
 	for position, card := range request.Cards {
-		if err := validCaptureCard(card); err != nil {
+		if err := validCaptureCard(card, request.Debug); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Card %d: %v.", position+1, err), "card": position})
 			return
 		}
@@ -610,6 +652,9 @@ func putCaptureSourceHandler(c *gin.Context) {
 		return
 	}
 	logger("[CAPTURE] wrote %s with %d cards to Channels DVR at %s", captureSourceName, len(request.Cards), dvrBase)
+	if request.Debug {
+		logger("[CAPTURE] debug: the source text sent was:\n%s", captureSourceText(request.Cards))
+	}
 	// Channels DVR loads a new source in the background, so its channels can
 	// take a moment to reach the export. Look a few times rather than once.
 	var setup gin.H
@@ -634,8 +679,12 @@ func putCaptureSourceHandler(c *gin.Context) {
 		if lookup != nil {
 			message = "The capture source was written, but its channels could not be read back: " + lookup.Error() + ". Press Load from Channels DVR in a moment."
 		}
-		c.JSON(http.StatusOK, gin.H{"written": true, "present": true, "source": captureSourceName, "cards": request.Cards, "streams": []captureStream{},
-			"otherSources": []string{}, "uncheckedSources": 0, "unreadLines": 0, "message": message})
+		reply := gin.H{"written": true, "present": true, "source": captureSourceName, "cards": request.Cards, "streams": []captureStream{},
+			"otherSources": []string{}, "uncheckedSources": 0, "unreadLines": 0, "message": message}
+		if request.Debug {
+			reply["sentText"] = captureSourceText(request.Cards)
+		}
+		c.JSON(http.StatusOK, reply)
 		return
 	}
 	// The rest of Channels DVR is scanned once, after the wait, not on every look.
@@ -645,6 +694,10 @@ func putCaptureSourceHandler(c *gin.Context) {
 		setup["message"] = "Other sources in Channels DVR could not be checked for the same cards: " + err.Error() + "."
 	}
 	setup["written"] = true
+	// Debug mode shows the exact list sent, beside what Channels DVR now holds.
+	if request.Debug {
+		setup["sentText"] = captureSourceText(request.Cards)
+	}
 	c.JSON(http.StatusOK, setup)
 }
 
