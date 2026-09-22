@@ -445,6 +445,26 @@ func materializePlan(environ []string, s Settings) (map[string]string, map[strin
 	return sets, locked
 }
 
+// legacyTunersApply decides whether the tuner topology in the legacy ./env
+// file is still the one to use. It is when there is no settings.json, and it
+// still is when settings.json exists but defines no tuners: a file written by
+// something other than the tuner editor, such as remembering which channel
+// list was pushed to Channels DVR, must not turn a working ./env install into
+// one with zero tuners on its next start. Once Settings saves a tuner, the
+// ./env topology is ignored.
+func legacyTunersApply(environ []string, s Settings, settingsPresent bool, legacy map[string]string) bool {
+	values := environMap(environ)
+	if current, present := values["NUMBER_TUNERS"]; envValueUsable(current, present) {
+		// The container environment owns the topology outright.
+		return false
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(legacy["NUMBER_TUNERS"]))
+	if err != nil || count < 0 {
+		return false
+	}
+	return !settingsPresent || len(s.Tuners) == 0
+}
+
 func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool, legacy map[string]string) (map[string]string, map[string]bool, map[string]string) {
 	sets, locked := materializePlan(environ, s)
 	sources := map[string]string{}
@@ -454,7 +474,8 @@ func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool
 	if !settingsPresent && sets["NUMBER_TUNERS"] == "0" {
 		sources["NUMBER_TUNERS"] = "built-in default"
 	}
-	if !settingsPresent && envValueUsable(legacy["NUMBER_TUNERS"], legacy["NUMBER_TUNERS"] != "") {
+	legacyTuners := legacyTunersApply(environ, s, settingsPresent, legacy)
+	if legacyTuners {
 		for key := range sets {
 			if tunerKeyPattern.MatchString(key) {
 				delete(sets, key)
@@ -485,7 +506,10 @@ func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool
 	}
 	catalog := catalogKeySet()
 	for key, value := range legacy {
-		if settingsPresent && (catalog[key] || tunerKeyPattern.MatchString(key)) {
+		if settingsPresent && catalog[key] {
+			continue
+		}
+		if settingsPresent && !legacyTuners && tunerKeyPattern.MatchString(key) {
 			continue
 		}
 		consider(key, value, "./env")
@@ -500,6 +524,15 @@ func materializeBootstrapPlan(environ []string, s Settings, settingsPresent bool
 		}
 	}
 	return sets, locked, sources
+}
+
+// legacyEnvNotice is the one startup line that says how ./env is being treated
+// next to a settings.json.
+func legacyEnvNotice(environ []string, s Settings, settingsPresent bool, legacy map[string]string) string {
+	if legacyTunersApply(environ, s, settingsPresent, legacy) {
+		return "settings.json exists but defines no tuners; the tuner topology in ./env is still in use and managed values in ./env are ignored"
+	}
+	return "settings.json exists; managed values in ./env are ignored"
 }
 
 func readLegacyEnv() map[string]string {
@@ -637,7 +670,7 @@ func envengineStartup() {
 			fmt.Fprintf(os.Stderr, "[CONFIG] %s\n", warning)
 		}
 		if settingsPresent && len(legacy) > 0 {
-			fmt.Fprintln(os.Stderr, "[CONFIG] settings.json exists; managed values in ./env are ignored")
+			fmt.Fprintln(os.Stderr, "[CONFIG] "+legacyEnvNotice(os.Environ(), s, settingsPresent, legacy))
 		}
 		sets, locked, sources := materializeBootstrapPlan(os.Environ(), s, settingsPresent, legacy)
 		lockedKeys := make([]string, 0, len(locked))
@@ -667,7 +700,7 @@ func envengineStartup() {
 		logger("[CONFIG] %s", warning)
 	}
 	if settingsPresent && len(legacy) > 0 {
-		logger("[CONFIG] settings.json exists; managed values in ./env are ignored")
+		logger("[CONFIG] %s", legacyEnvNotice(os.Environ(), s, settingsPresent, legacy))
 	}
 	lockValue, supervised := os.LookupEnv("AH4C_ENV_LOCKED")
 	locked := parseLockSet(lockValue)
