@@ -154,6 +154,7 @@
         var modalIndex = null;
         var player = null;
         var tunerIps = [];
+        var tunerUrls = [];
         var tunerActive = [];
         var tunerLabels = [];
         var tunerElapsed = [];
@@ -183,6 +184,12 @@
 
         function setModalHint() {
             if (modalIndex === null) return;
+            // With no encoder URL there is nothing for the preview to open, and
+            // every other hint would talk about video that is not coming.
+            if (!tunerUrls[modalIndex]) {
+                $('#modalHint').text('This tuner has no encoder URL, so there is nothing for the preview to open. If its video comes from a USB capture card, set the card up under USB capture cards in Settings and it can be previewed here. The remote below still works.');
+                return;
+            }
             $('#modalHint').text(tunerActive[modalIndex]
                 ? 'Streaming ' + (tunerLabels[modalIndex] || 'a channel') + '.'
                 : 'Tuner is idle. This is the device\'s current HDMI output, not an active tune.');
@@ -197,8 +204,19 @@
             startPreviewClicked();
         }
 
+        // The preview opens a tuner's encoder URL. A tuner whose video comes
+        // from a CMD has none, so rather than wait for video that cannot come,
+        // the modal says where a preview for it does come from.
         function startPreviewClicked() {
             if (modalIndex === null) return;
+            if (!tunerUrls[modalIndex]) {
+                stopPreview();
+                previewDeadline = 0;
+                $('#modalVideo').addClass('hidden');
+                $('#previewStart').addClass('hidden');
+                setModalHint();
+                return;
+            }
             previewDeadline = Date.now() + PREVIEW_GRACE;
             $('#previewStart').addClass('hidden');
             $('#modalVideo').removeClass('hidden');
@@ -937,6 +955,7 @@
 
 		            // Populate Tuner cards
 		            tunerIps = $.map(data.Tuners, function(t) { return t.Tunerip; });
+		            tunerUrls = $.map(data.Tuners, function(t) { return t.Url || ''; });
 		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
 		            tunerLabels = [];
                     tunerElapsed = [];

@@ -39,11 +39,14 @@ type channelsM3USource struct {
 }
 
 // channelsM3USourceSettings is one custom-channels source as Channels DVR
-// returns it from /providers/m3u/sources/<key>. Only the two fields that say
-// which list the source reads and what to call it are taken.
+// returns it from /providers/m3u/sources/<key>. Only the fields that say which
+// list the source reads and what to call it are taken.
 type channelsM3USourceSettings struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// Text is the list itself for a source typed into Channels DVR rather
+	// than read from an address, which is how a capture card is set up.
+	Text string `json:"text"`
 }
 
 // channelsM3USourceMatch is a source of this DVR that reads one of our lists.

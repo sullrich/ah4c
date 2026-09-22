@@ -1424,3 +1424,21 @@ body.release-popover-open { overflow: hidden; }
 	.build-footer { display: block; }
 	.build-footer .build-version { margin-left: 0; padding-left: 0; }
 }
+
+/* USB capture cards: two pasted listings side by side, then one card per
+   capture device, laid out like the tuner cards above them. */
+.capture-paste { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: .8rem 1rem; }
+.capture-paste textarea { width: 100%; font-family: var(--mono); font-size: .76rem; }
+.capture-cards { display: grid; gap: .8rem; margin: .9rem 0; }
+.capture-cards:empty { display: none; }
+.capture-card { padding: .8rem .9rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.capture-card-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.capture-card-head .muted { font-size: .78rem; overflow-wrap: anywhere; }
+.capture-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: .6rem .8rem; }
+.capture-fields .field { margin-bottom: 0; min-width: 0; }
+.capture-fields input, .capture-fields select { width: 100%; }
+.capture-stream { margin-top: .6rem; font-size: .78rem; overflow-wrap: anywhere; }
+.capture-passthrough { margin-top: .9rem; }
+.capture-passthrough summary { cursor: pointer; }
+.capture-device-list { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .8rem; }
+.capture-device-list li { margin-bottom: .3rem; overflow-wrap: anywhere; }
