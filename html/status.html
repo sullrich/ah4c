@@ -207,8 +207,47 @@
         // The preview opens a tuner's encoder URL. A tuner whose video comes
         // from a CMD has none, so rather than wait for video that cannot come,
         // the modal says where a preview for it does come from.
+        // The player only learns that the stream failed, not why. After the
+        // first failure the player is closed and ah4c asks the encoder once.
+        // Only a definite refusal stops the retries; anything else is shown as
+        // a hint while the preview keeps trying, since a device waking up looks
+        // the same at first. Each opening is its own session, so an answer
+        // about an earlier one is ignored.
+        var previewSession = 0;
+        var previewChecked = -1;
+        var previewNote = '';
+        function previewFailed(index) {
+            var session = previewSession;
+            if (previewChecked === session) {
+                restartSoon();
+                return;
+            }
+            previewChecked = session;
+            stopPreview();
+            fetch('/api/tuner/' + index + '/preview-check').then(function(response) {
+                return response.ok ? response.json() : null;
+            }).then(function(answer) {
+                if (session !== previewSession || modalIndex !== index) return;
+                var reason = answer && typeof answer.reason === 'string' ? answer.reason : '';
+                if (answer && answer.definite && reason) {
+                    previewDeadline = 0;
+                    $('#modalVideo').addClass('hidden');
+                    $('#previewStart').removeClass('hidden');
+                    $('#modalHint').text(reason);
+                    return;
+                }
+                previewNote = reason;
+                if (reason) $('#modalHint').text(reason);
+                restartSoon();
+            }).catch(function() {
+                if (session === previewSession && modalIndex === index) restartSoon();
+            });
+        }
+
         function startPreviewClicked() {
             if (modalIndex === null) return;
+            previewSession++;
+            previewNote = '';
             if (!tunerUrls[modalIndex]) {
                 stopPreview();
                 previewDeadline = 0;
@@ -224,6 +263,7 @@
         }
 
         function closeTunerModal() {
+            previewSession++;
             $('#tunerModal').removeClass('open');
             stopPreview();
             modalIndex = null;
@@ -252,7 +292,7 @@
                 videoElement.currentTime = videoElement.duration;
             }, { once: true });
             videoElement.addEventListener('ended', restartSoon, { once: true });
-            player.on(mpegts.Events.ERROR, restartSoon);
+            player.on(mpegts.Events.ERROR, function() { previewFailed(index); });
             player.load();
             player.play().catch(function() {});
             startWatchdog();
@@ -321,7 +361,7 @@
                 $('#modalHint').text('No video from the encoder — if the device was asleep, give it a moment and retry.');
                 return;
             }
-            $('#modalHint').text('Waiting for video from the encoder…');
+            $('#modalHint').text('Waiting for video from the encoder…' + (previewNote ? ' ' + previewNote : ''));
             startPreview(modalIndex);
         }
 

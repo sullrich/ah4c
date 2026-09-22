@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -82,8 +83,52 @@ type alsaCard struct {
 	device int
 }
 
+// captureMissingDriver is a USB capture device the kernel has no driver bound
+// for, as the listing command reports it.
+type captureMissingDriver struct {
+	Bus     string `json:"bus"`
+	Product string `json:"product"`
+}
+
+// captureDrivers is what the listing command found about drivers: devices the
+// kernel sees on USB but cannot use, and which drivers are installed at all.
+type captureDrivers struct {
+	MissingVideo []captureMissingDriver `json:"missingVideo"`
+	MissingSound []captureMissingDriver `json:"missingSound"`
+	Installed    []string               `json:"installed"`
+	Loaded       []string               `json:"loaded"`
+}
+
+// parseCaptureMarkers reads the "# ah4c" lines the listing command adds. A
+// card with no driver has no /dev/video, so without them it would simply not
+// be listed, and "no cards found" would hide the real reason.
+func parseCaptureMarkers(text string) captureDrivers {
+	report := captureDrivers{MissingVideo: []captureMissingDriver{}, MissingSound: []captureMissingDriver{}, Installed: []string{}, Loaded: []string{}}
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != "#" || fields[1] != "ah4c" {
+			continue
+		}
+		switch {
+		case fields[2] == "no-driver" && len(fields) >= 5:
+			missing := captureMissingDriver{Bus: fields[4], Product: strings.Join(fields[5:], " ")}
+			if fields[3] == "video" {
+				report.MissingVideo = append(report.MissingVideo, missing)
+			} else if fields[3] == "sound" {
+				report.MissingSound = append(report.MissingSound, missing)
+			}
+		case fields[2] == "module-installed" && len(fields) >= 4:
+			report.Installed = append(report.Installed, fields[3])
+		case fields[2] == "module-loaded" && len(fields) >= 4:
+			report.Loaded = append(report.Loaded, fields[3])
+		}
+	}
+	return report
+}
+
 func registerCaptureCardRoutes(r *gin.Engine) {
 	r.POST("/api/capture/read", readCaptureCardsHandler)
+	r.GET("/api/tuner/:index/preview-check", previewCheckHandler)
 	r.GET("/api/capture/channels", findCaptureStreamsHandler)
 	r.PUT("/api/capture/channels", putCaptureSourceHandler)
 }
@@ -317,12 +362,22 @@ func readCaptureCardsHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Paste the two listings as text."})
 		return
 	}
-	videos := parseV4L2Devices(request.Devices)
-	if len(videos) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No video devices were found in the first listing. Paste everything v4l2-ctl --list-devices prints."})
+	// The listing command prints the video devices, then "# ah4c sound", then
+	// the sound cards, so one paste carries both.
+	devices, sound := request.Devices, request.Sound
+	if before, after, found := strings.Cut(devices, "# ah4c sound"); found {
+		devices = before
+		if strings.TrimSpace(sound) == "" {
+			sound = after
+		}
+	}
+	drivers := parseCaptureMarkers(request.Devices)
+	videos := parseV4L2Devices(devices)
+	if len(videos) == 0 && len(drivers.MissingVideo) == 0 && len(drivers.MissingSound) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No video devices were found in the first listing. Paste everything the listing command, or v4l2-ctl --list-devices, prints."})
 		return
 	}
-	sounds := parseAlsaCards(request.Sound)
+	sounds := parseAlsaCards(sound)
 	cards, left := pairCaptureCards(videos, sounds)
 	// Every sound card is offered with its card number, so a card paired or
 	// changed by hand still lists the right Proxmox devices to pass through.
@@ -330,7 +385,7 @@ func readCaptureCardsHandler(c *gin.Context) {
 	for _, sound := range sounds {
 		known = append(known, captureAudioChoice{Card: sound.index, Audio: fmt.Sprintf("hw:%s,%d", sound.id, sound.device), Name: sound.name, Bus: sound.bus})
 	}
-	c.JSON(http.StatusOK, gin.H{"cards": cards, "audio": left, "sound": known})
+	c.JSON(http.StatusOK, gin.H{"cards": cards, "audio": left, "sound": known, "drivers": drivers})
 }
 
 // fetchChannelsDVROptional reads something from Channels DVR that may not exist
@@ -591,4 +646,104 @@ func putCaptureSourceHandler(c *gin.Context) {
 	}
 	setup["written"] = true
 	c.JSON(http.StatusOK, setup)
+}
+
+// previewCheckHandler says why a tuner's preview is not playing, since the
+// browser's player only learns that the stream failed. It asks the encoder once
+// and looks only at its answer, never waiting for video, and only while the
+// tuner is idle. It gives way to a tune at once: tune() holds tunerLock from the
+// moment it starts until it has its stream, so the check lets go of the encoder
+// as soon as it sees that lock taken, before the tune reaches the encoder.
+func previewCheckHandler(c *gin.Context) {
+	index, err := strconv.Atoi(c.Param("index"))
+	if err != nil || index < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+		return
+	}
+	tunerLock.Lock()
+	if index >= len(tuners) {
+		tunerLock.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+		return
+	}
+	address := tuners[index].url
+	active := tuners[index].active
+	tunerLock.Unlock()
+	if strings.TrimSpace(address) == "" {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": "This tuner has no encoder URL, so there is nothing for the preview to open."})
+		return
+	}
+	busy := gin.H{"ok": false, "busy": true, "reason": "A tune is running or starting, so ah4c does not open the encoder to test it."}
+	if active || tunesPending() {
+		c.JSON(http.StatusOK, busy)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	var yielded atomic.Bool
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// A lock held by anything, a status read included, counts: the
+				// check is worth far less than any tune, so it yields to doubt.
+				if tunesPending() || !tunerLock.TryLock() {
+					yielded.Store(true)
+					cancel()
+					return
+				}
+				// A held tune lets the lock go before it opens its encoder, so
+				// the tuner being claimed is watched for as well as the lock.
+				claimed := index < len(tuners) && tuners[index].active
+				tunerLock.Unlock()
+				if claimed {
+					yielded.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": "The encoder URL is not a valid address: " + err.Error()})
+		return
+	}
+	response, err := http.DefaultClient.Do(request)
+	if yielded.Load() {
+		if response != nil {
+			response.Body.Close()
+		}
+		c.JSON(http.StatusOK, busy)
+		return
+	}
+	if err != nil {
+		// A device that is asleep or still starting looks like this too, so the
+		// page keeps trying and shows this only as a hint.
+		c.JSON(http.StatusOK, gin.H{"ok": false, "reason": "The encoder has not answered yet: " + err.Error()})
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusOK {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "reason": "The encoder answered, so a retry should play."})
+		return
+	}
+	detail, _ := io.ReadAll(io.LimitReader(response.Body, 300))
+	reason := fmt.Sprintf("The encoder answered %s", response.Status)
+	if text := strings.TrimSpace(strings.SplitN(string(detail), "\n", 2)[0]); text != "" {
+		reason += ": " + text
+	}
+	reason += "."
+	if strings.Contains(address, "/devices/"+captureDeviceID+"/channels/") {
+		reason += " Channels DVR could not capture from the card. Check that it sees the card, with ls -la /dev/video* /dev/snd inside its container, and that the server has the card's drivers."
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": reason})
 }

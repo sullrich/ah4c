@@ -1442,3 +1442,6 @@ body.release-popover-open { overflow: hidden; }
 .capture-passthrough summary { cursor: pointer; }
 .capture-device-list { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .8rem; }
 .capture-device-list li { margin-bottom: .3rem; overflow-wrap: anywhere; }
+.capture-driver-list { display: grid; gap: .3rem; margin-top: .5rem; }
+.capture-driver-list > span { display: block; }
+.info-tooltip code { font-size: .7rem; overflow-wrap: anywhere; }

@@ -131,18 +131,47 @@
             </section>
 
             <section class="card settings-section" data-section="capture">
-                <div class="card-title settings-section-title"><span>USB capture cards</span></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs on each platform" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>Install the drivers for your platform first.</strong> A USB capture card needs <code>uvcvideo</code> for the picture and <code>snd-usb-audio</code> for the sound, installed on the server itself. No container can bring them, because every container runs on the server's own kernel. The listing command below says which are missing.<span class="capture-driver-list"><span><b>Proxmox VE:</b> included; nothing to install.</span><span><b>Debian, Raspberry Pi OS:</b> included with the standard kernel.</span><span><b>Ubuntu:</b> if missing, <code>sudo apt install linux-modules-extra-$(uname -r)</code>, then <code>sudo modprobe uvcvideo snd-usb-audio</code>.</span><span><b>Unraid:</b> not in the stock system. Add them to the server with a driver plugin from Apps whose description lists them.</span><span><b>TrueNAS SCALE and other appliances:</b> may leave them out; run the listing command to check.</span><span><b>Windows, macOS:</b> Channels DVR captures with the system's own drivers there; this helper sets up Linux only.</span></span></span></span></span></div>
                 <p class="section-help">Channels DVR can capture from a USB card itself and give each card a stream address, which becomes a tuner's encoder URL, as <a href="https://community.getchannels.com/t/proxmox-for-channels-step-by-step-for-passing-through-one-or-more-usb-capture-cards-to-a-channels-dvr-lxc/47092" target="_blank" rel="noopener">this Channels community guide</a> describes. ah4c writes that capture source in Channels DVR and fills in the tuners for you. A card set up this way can be previewed; a card driven by a CMD cannot.</p>
+                <p class="setting-description"><strong>1.</strong> On the server the cards are plugged into, not inside a container, paste this into a terminal (bash, sh or zsh) and paste everything it prints into the first box. It needs nothing installed, so it works on Unraid, Proxmox, TrueNAS, and any Linux. Besides listing the cards and their sound, it says when the server has no driver for a card, which is the first thing to fix: a container can only use a card the server itself has a driver for.</p>
+                <pre class="capture-command" id="capture-list-command">sh &lt;&lt;'AH4C'
+for d in /sys/class/video4linux/video*; do
+  [ "$(cat "$d/index" 2&gt;/dev/null)" = 0 ] || continue
+  p=$(readlink -f "$d/device"); pci=$(echo "$p" | sed -n 's#.*/\([^/]*\)/usb[0-9]*/.*#\1#p')
+  port=$(echo "$p" | tr / '\n' | grep -E '^[0-9]+-[0-9.]+$' | tail -n 1); bus=
+  [ -n "$port" ] &amp;&amp; bus="usb-$pci-${port#*-}"
+  echo "$(cat "$d/name") ($bus):"; echo "        /dev/${d##*/}"; echo
+done
+for u in /sys/bus/usb/devices/*-*; do
+  case "${u##*/}" in *:*) continue ;; esac
+  grep -qx 0e "$u"/*:*/bInterfaceClass 2&gt;/dev/null || continue
+  p=$(readlink -f "$u"); pci=$(echo "$p" | sed -n 's#.*/\([^/]*\)/usb[0-9]*/.*#\1#p'); port=${u##*/}
+  for i in "$u"/*:*; do
+    [ -e "$i/driver" ] &amp;&amp; continue
+    case "$(cat "$i/bInterfaceClass" 2&gt;/dev/null)" in
+      0e) echo "# ah4c no-driver video usb-$pci-${port#*-} $(cat "$u/product" 2&gt;/dev/null)" ;;
+      01) echo "# ah4c no-driver sound usb-$pci-${port#*-} $(cat "$u/product" 2&gt;/dev/null)" ;;
+    esac
+  done
+done | sort -u
+for m in uvcvideo snd-usb-audio; do
+  [ -d "/sys/module/$(echo "$m" | tr - _)" ] &amp;&amp; echo "# ah4c module-loaded $m"
+  find "/lib/modules/$(uname -r)" -name "$m.ko*" 2&gt;/dev/null | grep -q . &amp;&amp; echo "# ah4c module-installed $m"
+done
+echo "# ah4c sound"
+cat /proc/asound/cards 2&gt;/dev/null || echo "# ah4c no-sound-cards"
+AH4C</pre>
                 <div class="capture-paste">
-                    <div class="field"><label for="capture-devices">Output of <code>v4l2-ctl --list-devices</code></label><textarea id="capture-devices" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
-                    <div class="field"><label for="capture-sound">Output of <code>cat /proc/asound/cards</code></label><textarea id="capture-sound" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
+                    <div class="field"><label for="capture-devices">What the command printed <span class="muted">(or <code>v4l2-ctl --list-devices</code>)</span></label><textarea id="capture-devices" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
+                    <div class="field"><label for="capture-sound">Sound cards <span class="muted">(only with <code>v4l2-ctl</code>: <code>cat /proc/asound/cards</code> or <code>arecord -l</code>)</span></label><textarea id="capture-sound" rows="6" spellcheck="false" autocomplete="off"></textarea></div>
                 </div>
-                <p class="setting-description">Run both where the cards are plugged in. Passed through to Channels DVR under the same names, as the guide does, the cards keep these names there. Pairing each card with its sound by USB port saves matching them up by hand; the output of <code>arecord -l</code> works too, but then you pick each card's sound yourself.</p>
+                <p class="setting-description">Each card is paired with its sound by USB port. With <code>arecord -l</code>, which has no ports, you pick each card's sound yourself.</p>
                 <div class="btn-row">
                     <button id="capture-read" class="btn" type="button">Read cards</button>
                     <button id="capture-add" class="btn" type="button">Add a card by hand</button>
                     <button id="capture-load" class="btn" type="button">Load from Channels DVR</button>
                 </div>
+                <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
                 <div id="capture-cards" class="capture-cards"></div>
                 <datalist id="capture-audio-choices"></datalist>
                 <div id="capture-other" class="restart-tune-warning hidden" role="alert"></div>
@@ -150,8 +179,14 @@
                     <button id="capture-apply" class="btn btn-primary" type="button" disabled>Set up in Channels DVR</button>
                     <span id="capture-status" class="muted" aria-live="polite"></span>
                 </div>
-                <details id="capture-passthrough" class="capture-passthrough hidden">
-                    <summary>Passing these cards through to a Channels DVR container</summary>
+                <details id="capture-passthrough" class="capture-passthrough hidden" open>
+                    <summary>Giving these cards to Channels DVR</summary>
+                    <div class="field capture-host-field"><label for="capture-host">Channels DVR runs</label><select id="capture-host">
+                        <option value="unraid">in Docker on Unraid</option>
+                        <option value="compose">in Docker, set up with Compose</option>
+                        <option value="proxmox">in a Proxmox container (LXC)</option>
+                        <option value="native">directly on the Linux machine the cards are in</option>
+                    </select></div>
                     <div id="capture-passthrough-body"></div>
                 </details>
             </section>
@@ -364,6 +399,48 @@ let restartWaitLimit = 30000;
 
 const byId = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+// The preview player only learns that a stream failed, not why. After the
+// first failure the player is closed and ah4c asks the encoder once. Only a
+// definite refusal stops the retries; anything else is shown as a hint while
+// the preview keeps trying, since a device waking up looks the same at first.
+async function checkPreview(number) {
+    try {
+        const response = await fetch(`/api/tuner/${number}/preview-check`);
+        const answer = await response.json();
+        if (!response.ok || !answer || typeof answer.reason !== 'string') return null;
+        return answer;
+    } catch (error) {
+        return null;
+    }
+}
+
+let tunerPreviewSession = 0;
+let tunerPreviewChecked = -1;
+let tunerPreviewNote = '';
+
+function handleTunerPreviewError() {
+    const session = tunerPreviewSession;
+    const number = tunerPreviewNumber;
+    if (tunerPreviewChecked === session) {
+        restartTunerPreviewSoon();
+        return;
+    }
+    tunerPreviewChecked = session;
+    stopTunerPreview();
+    checkPreview(number).then(answer => {
+        if (session !== tunerPreviewSession || number !== tunerPreviewNumber) return;
+        if (answer && answer.definite) {
+            tunerPreviewDeadline = 0;
+            byId('tuner-preview-video').classList.add('hidden');
+            byId('tuner-preview-start').classList.remove('hidden');
+            byId('tuner-preview-hint').textContent = answer.reason;
+            return;
+        }
+        tunerPreviewNote = answer ? answer.reason : '';
+        restartTunerPreviewSoon();
+    });
+}
 
 async function loadSettings() {
     const response = await fetch('/api/config');
@@ -946,6 +1023,8 @@ function openTunerPreview(card) {
 
 function startTunerPreviewClicked() {
     if (tunerPreviewNumber === null) return;
+    tunerPreviewSession++;
+    tunerPreviewNote = '';
     tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
     byId('tuner-preview-start').classList.add('hidden');
     byId('tuner-preview-video').classList.remove('hidden');
@@ -957,7 +1036,7 @@ function startTunerPreview() {
     const video = byId('tuner-preview-video');
     const retry = byId('tuner-preview-start');
     const hint = byId('tuner-preview-hint');
-    hint.textContent = 'Loading the encoder output from the currently running configuration…';
+    hint.textContent = tunerPreviewNote ? `Waiting for the encoder. ${tunerPreviewNote}` : 'Loading the encoder output from the currently running configuration…';
     if (!window.mpegts || !mpegts.isSupported()) {
         video.classList.add('hidden');
         retry.classList.remove('hidden');
@@ -971,7 +1050,7 @@ function startTunerPreview() {
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
     }, {once:true});
     video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
-    tunerPreviewPlayer.on(mpegts.Events.ERROR, restartTunerPreviewSoon);
+    tunerPreviewPlayer.on(mpegts.Events.ERROR, handleTunerPreviewError);
     tunerPreviewPlayer.load();
     tunerPreviewPlayer.play().catch(() => {});
     startTunerPreviewWatchdog();
@@ -1895,25 +1974,85 @@ function renderCaptureCards() {
     renderCapturePassthrough();
 }
 
-// The part ah4c cannot do: the card has to reach the Channels DVR container.
-// The device nodes come from the card list, so they are this machine's own.
+// The part ah4c cannot do: the cards have to reach Channels DVR, which does the
+// capturing. ah4c's own container needs none of them. How they get there
+// depends on where Channels DVR runs, and the device names come from the card
+// list, so they are this machine's own.
+const captureHostKey = 'ah4c.captureHost';
+
+function captureHost() {
+    return byId('capture-host')?.value || 'unraid';
+}
+
 function renderCapturePassthrough() {
     const details = byId('capture-passthrough');
     const body = byId('capture-passthrough-body');
+    const videos = captureCards.map(card => card.video).filter(video => /^video\d+$/.test(video || ''));
+    details.classList.toggle('hidden', videos.length === 0);
+    if (!videos.length) {
+        body.innerHTML = '';
+        return;
+    }
+    const code = value => `<code>${escapeHTML(value)}</code>`;
+    const check = `<p class="setting-description">Then check from a shell inside the Channels DVR container: ${code('ls -la /dev/video* /dev/snd')} should list them. ah4c's own container needs none of these; it only talks to Channels DVR.</p>`;
+    const host = captureHost();
+    if (host === 'native') {
+        body.innerHTML = '<p class="setting-description">Channels DVR runs on the machine the cards are plugged into, so it already sees them. There is nothing to pass through, and ah4c\'s own container needs none of them either.</p>';
+        return;
+    }
+    if (host === 'unraid') {
+        body.innerHTML = `<p class="setting-description">On the Docker tab, edit the Channels DVR container and use <strong>Add another Path, Port, Variable, Label or Device</strong> once for each line below, with Config Type set to <strong>Device</strong> and the value shown. Then Apply, which restarts Channels DVR.</p><ul class="capture-device-list">${videos.map(video => `<li>${code('/dev/' + video)}</li>`).join('')}<li>${code('/dev/snd')} <span class="muted">(every card's sound)</span></li></ul>${check}`;
+        return;
+    }
+    if (host === 'compose') {
+        const block = ['devices:'].concat(videos.map(video => `  - /dev/${video}:/dev/${video}`), ['  - /dev/snd:/dev/snd']).join('\n');
+        body.innerHTML = `<p class="setting-description">Add these to the Channels DVR service in its compose file, then recreate the container.</p><pre class="capture-command">${escapeHTML(block)}</pre>${check}`;
+        return;
+    }
     const lines = [];
     captureCards.forEach((card, index) => {
         const devices = [];
-        if (/^video\d+$/.test(card.video || '')) devices.push(`/dev/${card.video} (group video)`);
+        if (/^video\d+$/.test(card.video || '')) devices.push(code(`/dev/${card.video}`) + ' (group video)');
         const sound = /^(?:plug)?hw:[^,]+,(\d+)$/.exec(card.audio || '');
         if (sound && card.audioCard >= 0) {
-            devices.push(`/dev/snd/pcmC${card.audioCard}D${sound[1]}c (group audio)`);
-            devices.push(`/dev/snd/controlC${card.audioCard} (group audio)`);
+            devices.push(code(`/dev/snd/pcmC${card.audioCard}D${sound[1]}c`) + ' (group audio)');
+            devices.push(code(`/dev/snd/controlC${card.audioCard}`) + ' (group audio)');
         }
-        if (sound && card.audioCard < 0) devices.push('its sound devices, which are listed once the cards are read from the pasted listings');
-        if (devices.length) lines.push(`<li><strong>Card ${index + 1}:</strong> ${devices.map(device => device.startsWith('/dev/') ? `<code>${escapeHTML(device)}</code>` : escapeHTML(device)).join(', ')}</li>`);
+        if (sound && card.audioCard < 0) devices.push('its sound devices, which are listed once the cards are read from the pasted listing');
+        if (devices.length) lines.push(`<li><strong>Card ${index + 1}:</strong> ${devices.join(', ')}</li>`);
     });
-    details.classList.toggle('hidden', lines.length === 0);
-    body.innerHTML = lines.length ? `<p class="setting-description">In Proxmox, add each of these to the Channels DVR container under Resources as a device passthrough, with the container's own group IDs for video and audio (44 and 29 in a Debian container; <code>cat /etc/group</code> inside it shows them). Then check with <code>ls -la /dev/video* /dev/snd</code> inside the container.</p><ul class="capture-device-list">${lines.join('')}</ul>` : '';
+    body.innerHTML = `<p class="setting-description">In Proxmox, add each of these to the Channels DVR container under Resources as a device passthrough, with the container's own group IDs for video and audio (44 and 29 in a Debian container; ${code('cat /etc/group')} inside it shows them).</p><ul class="capture-device-list">${lines.join('')}</ul>${check}`;
+}
+
+// A card the server has no driver for has no /dev/video, so no container can
+// be given it. That is said first and plainly, because passing a card through
+// cannot fix it: every container runs on the server's own kernel.
+function renderCaptureDrivers(drivers) {
+    const box = byId('capture-drivers');
+    const video = (drivers && drivers.missingVideo) || [];
+    const sound = (drivers && drivers.missingSound) || [];
+    const installed = (drivers && drivers.installed) || [];
+    const loaded = (drivers && drivers.loaded) || [];
+    if (!video.length && !sound.length) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+    }
+    const code = value => `<code>${escapeHTML(value)}</code>`;
+    const names = [...new Set(video.concat(sound).map(item => `${item.product || 'A USB device'} (${item.bus})`))];
+    const modules = [video.length ? 'uvcvideo' : '', sound.length ? 'snd-usb-audio' : ''].filter(Boolean);
+    const effect = video.length
+        ? `so there is no ${code('/dev/video')} device for Channels DVR, or anything else, to capture from`
+        : `so ${names.length === 1 ? 'its picture can be captured but its sound cannot' : 'their pictures can be captured but their sound cannot'}`;
+    const fixes = [];
+    const stuck = modules.filter(module => loaded.includes(module));
+    const unloaded = modules.filter(module => !loaded.includes(module) && installed.includes(module));
+    const absent = modules.filter(module => !loaded.includes(module) && !installed.includes(module));
+    if (stuck.length) fixes.push(`${stuck.map(code).join(' and ')} ${stuck.length === 1 ? 'is' : 'are'} loaded but did not take the card; unplug it and plug it back in, or restart the server.`);
+    if (unloaded.length) fixes.push(`${unloaded.map(code).join(' and ')} ${unloaded.length === 1 ? 'is' : 'are'} installed but not loaded. On the server, run ${code('modprobe ' + unloaded.join(' '))}, and add that line to whatever runs at the server's startup so it survives a reboot.`);
+    if (absent.length) fixes.push(`${absent.map(code).join(' and ')} ${absent.length === 1 ? 'is' : 'are'} not installed on the server. On Unraid they are not part of the stock system and have to be added to the server itself, usually with a driver plugin from Apps whose description lists them. On other Linux systems they come with the kernel's extra modules, such as ${code('linux-modules-extra-$(uname -r)')} on Ubuntu.`);
+    box.innerHTML = `<strong>The server has no ${modules.join(' or ')} driver for ${names.length === 1 ? 'this card' : 'these cards'} yet.</strong><p>${names.map(escapeHTML).join(', ')} ${names.length === 1 ? 'is' : 'are'} plugged in, but the server's kernel has not bound ${modules.map(code).join(' and ')} to ${names.length === 1 ? 'it' : 'them'}, ${effect}. Passing the card through to a container cannot fix this, because every container runs on the server's own kernel.</p><p>${fixes.join(' ')} Then run the listing command again.</p>`;
+    box.classList.remove('hidden');
 }
 
 function captureStatus(message, tone) {
@@ -1952,11 +2091,19 @@ async function readCaptureCards() {
         captureAudioChoices = payload.audio || [];
         captureKnownSound = payload.sound || [];
         captureStreams = [];
+        renderCaptureDrivers(payload.drivers);
         renderCaptureCards();
+        if (!captureCards.length) {
+            captureStatus('No card has a video device yet; see above.', 'error');
+            return;
+        }
         const unpaired = captureCards.filter(card => !card.audio).length;
         captureStatus(`Found ${countOfCaptures(captureCards.length)}.` + (unpaired ? ` Pick the sound device for ${countOfCaptures(unpaired)}; its USB port did not match a sound card.` : ' Choose the tuner each one feeds.'), unpaired ? 'error' : '');
     } catch (error) {
-        if (generation === captureGeneration) captureStatus(error.message, 'error');
+        if (generation === captureGeneration) {
+            renderCaptureDrivers(null);
+            captureStatus(error.message, 'error');
+        }
     } finally {
         if (generation === captureGeneration) setCaptureBusy(false);
     }
@@ -2004,6 +2151,7 @@ function tunerUsingStream(url) {
 
 async function loadCaptureCards() {
     const generation = ++captureGeneration;
+    renderCaptureDrivers(null);
     captureStatus('Asking Channels DVR...', '');
     setCaptureBusy(true);
     try {
@@ -2128,8 +2276,17 @@ async function applyCaptureCards() {
 }
 
 byId('capture-read').addEventListener('click', readCaptureCards);
+try {
+    const saved = localStorage.getItem(captureHostKey);
+    if (saved && byId('capture-host').querySelector(`option[value="${saved}"]`)) byId('capture-host').value = saved;
+} catch (error) {}
+byId('capture-host').addEventListener('change', () => {
+    try { localStorage.setItem(captureHostKey, captureHost()); } catch (error) {}
+    renderCapturePassthrough();
+});
 byId('capture-add').addEventListener('click', () => {
     if (captureBusy) return;
+    renderCaptureDrivers(null);
     captureCards.push({name: '', bus: '', video: '', audio: '', audioCard: -1, width: 1920, height: 1080, framerate: 60, tuner: ''});
     renderCaptureCards();
 });
