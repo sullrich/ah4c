@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +38,22 @@ type channelsM3USource struct {
 	XMLTVRefresh string `json:"xmltv_refresh"`
 }
 
+// channelsM3USourceSettings is one custom-channels source as Channels DVR
+// returns it from /providers/m3u/sources/<key>. Only the two fields that say
+// which list the source reads and what to call it are taken.
+type channelsM3USourceSettings struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// channelsM3USourceMatch is a source of this DVR that reads one of our lists.
+// The key is the path segment Channels DVR answers to, which is not always the
+// name it shows: a source can be called anything.
+type channelsM3USourceMatch struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
 const maxM3UUploadBytes int64 = 16 << 20
 
 // maxM3UParseBytes bounds the health check. Anything larger than an upload is
@@ -53,6 +71,7 @@ type m3uParseResult struct {
 
 func registerM3UIntegrationRoutes(r *gin.Engine) {
 	r.POST("/api/m3u/add-to-channels", addM3UToChannelsHandler)
+	r.POST("/api/m3u/reload-in-channels", reloadM3UInChannelsHandler)
 	r.GET("/api/m3u/health", m3uHealthHandler)
 	r.POST("/api/m3u/files", uploadM3UFileHandler)
 	r.DELETE("/api/m3u/files/:file", deleteM3UFileHandler)
@@ -321,27 +340,8 @@ func addM3UToChannelsHandler(c *gin.Context) {
 	m3uURL := proxyBase + "/m3u/" + url.PathEscape(file)
 	sourceName := "AH4C - " + strings.TrimSuffix(file, filepath.Ext(file))
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
-	defer cancel()
-	stopWatcher := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if !configOperationsAllowed() {
-					cancel()
-					return
-				}
-			case <-stopWatcher:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	defer close(stopWatcher)
+	ctx, release := channelsCallContext(c.Request.Context(), 12*time.Second)
+	defer release()
 	if err := putChannelsM3USource(ctx, http.DefaultClient, dvrBase, sourceName, m3uURL); err != nil {
 		if !configOperationsAllowed() {
 			c.JSON(http.StatusConflict, gin.H{"error": "A tune started, so adding the channel list was stopped. Try again after the tune finishes.", "url": m3uURL})
@@ -387,6 +387,338 @@ func putChannelsM3USource(ctx context.Context, client *http.Client, dvrBase, sou
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "ah4c")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("Could not connect to Channels DVR at %s: %w", dvrBase, err)
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail := strings.TrimSpace(string(responseBody))
+		if detail == "" {
+			detail = resp.Status
+		}
+		return fmt.Errorf("Channels DVR returned %s: %s", resp.Status, detail)
+	}
+	return nil
+}
+
+// Channels DVR lists a custom-channels source among its devices under this
+// prefix, so "M3U-DirecTV" is the device of the source keyed "DirecTV".
+const channelsM3UDevicePrefix = "M3U-"
+
+// Bounded, because a reply that never ends must not become memory that never
+// stops, but large enough for every source's lineup on a full DVR.
+const channelsDeviceListLimit int64 = 32 << 20
+
+// channelsCallContext bounds a management call to Channels DVR and cancels it
+// once a tune is visible. The tune owns the machine while it is in flight; a
+// call made on someone's behalf gives way rather than competing with it. The
+// watcher reads the tuner state, which a starting tune holds locked until its
+// command returns, so the cancel lands within a tick of the tune becoming
+// visible and not within a tick of it being asked for.
+func channelsCallContext(parent context.Context, timeout time.Duration) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	stop := make(chan struct{})
+	var once sync.Once
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !configOperationsAllowed() {
+					cancel()
+					return
+				}
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	// Released once however many times it is called, because a close that runs
+	// twice takes the whole process down and every tune with it.
+	return ctx, func() {
+		once.Do(func() {
+			close(stop)
+			cancel()
+		})
+	}
+}
+
+// reloadM3UInChannelsHandler asks Channels DVR to read one channel list again.
+// Channels DVR keeps its own copy of every list and re-reads it on a schedule
+// of its own, so an edit saved here is not in the guide until the source is
+// reloaded. This is the call the Reload M3U button in its admin makes.
+//
+// Every source found is accounted for in the reply: the ones now reading the
+// list again, the ones that would not, and the ones that could not even be
+// looked at. A source left out of the answer is a source quietly serving
+// yesterday's list, which is the failure this endpoint exists to end.
+func reloadM3UInChannelsHandler(c *gin.Context) {
+	var request addM3UToChannelsRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	file, err := validM3UFile(request.File)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !configOperationsAllowed() {
+		c.JSON(http.StatusConflict, gin.H{"error": "A tune is running, so Channels DVR was not asked to read the list again."})
+		return
+	}
+	dvrBase, err := channelsDVRBaseURL()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Set the Channels DVR address in Settings to have it read a saved list again."})
+		return
+	}
+	// Every list in the folder is one template set, so one list that will not
+	// parse stops this one loading too. Channels DVR would be handed an error,
+	// and the page would say it is reading the list again when it cannot.
+	if message := m3uFolderBlocksReload(m3uReloadFolder); message != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": message})
+		return
+	}
+	ctx, release := channelsCallContext(c.Request.Context(), 12*time.Second)
+	defer release()
+	sources, unchecked, err := channelsM3USourcesServingList(ctx, dvrBase, file)
+	if err != nil {
+		if !configOperationsAllowed() {
+			c.JSON(http.StatusConflict, gin.H{"error": "A tune started, so Channels DVR was not asked to read the list again."})
+			return
+		}
+		logger("[M3U] %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	reloaded := []string{}
+	failed := []string{}
+	reason := ""
+	stopped := false
+	for index, source := range sources {
+		// A context that is already finished cannot carry a request, so the
+		// round ends here rather than posting into it and calling the answer a
+		// refusal from Channels DVR.
+		if ctx.Err() != nil {
+			stopped = true
+			for _, left := range sources[index:] {
+				failed = append(failed, left.Name)
+			}
+			break
+		}
+		if err := refreshChannelsM3USource(ctx, http.DefaultClient, dvrBase, source.Key); err != nil {
+			if ctx.Err() != nil {
+				// The machine was taken back mid-way. The sources not reached
+				// are named rather than forgotten, so nobody is left believing
+				// a list was reloaded that never was.
+				stopped = true
+				for _, left := range sources[index:] {
+					failed = append(failed, left.Name)
+				}
+				break
+			}
+			logger("[M3U] Channels DVR would not reload %s for %s: %v", source.Name, file, err)
+			failed = append(failed, source.Name)
+			if reason == "" {
+				reason = err.Error()
+			}
+			continue
+		}
+		reloaded = append(reloaded, source.Name)
+	}
+	if stopped {
+		// Why the rest were left alone outranks whatever one source said
+		// before it, because it is the part nobody can act on otherwise.
+		if configOperationsAllowed() {
+			reason = "Channels DVR took too long, so the rest of the sources were left as they were."
+		} else {
+			reason = "A tune started, so the rest of the sources were left as they were."
+		}
+	}
+	status := "ok"
+	switch {
+	case len(reloaded) == 0 && len(failed) == 0 && len(unchecked) == 0:
+		status = "none"
+	case len(failed) > 0 || len(unchecked) > 0:
+		status = "partial"
+	}
+	code := http.StatusOK
+	if len(reloaded) == 0 && len(failed) > 0 {
+		code = http.StatusBadGateway
+		if stopped {
+			code = http.StatusConflict
+		}
+	}
+	if len(reloaded) > 0 {
+		logger("[M3U] asked Channels DVR at %s to read %s again for %s", dvrBase, strings.Join(reloaded, ", "), file)
+	}
+	if len(unchecked) > 0 {
+		logger("[M3U] %s in Channels DVR could not be looked at for %s: %s", countOfSources(len(unchecked)), file, strings.Join(unchecked, ", "))
+	}
+	body := gin.H{"status": status, "file": file, "sources": reloaded, "failed": failed, "unchecked": unchecked}
+	if reason != "" {
+		body["error"] = reason
+	}
+	c.JSON(code, body)
+}
+
+// m3uReloadFolder is where the lists Channels DVR fetches live, the folder the
+// /m3u/:channel route loads as one template set.
+var m3uReloadFolder = "m3u"
+
+// m3uFolderBlocksReload names the lists that would stop Channels DVR from
+// reading any list at all, or returns "" when every one parses. It is the same
+// check the Channel M3Us page shows, run before anyone is asked to fetch.
+func m3uFolderBlocksReload(dir string) string {
+	results, err := checkM3UFolder(dir)
+	if err != nil {
+		return fmt.Sprintf("Channels DVR was not asked to read the list again, because the m3u folder could not be checked: %v.", err)
+	}
+	broken := []string{}
+	for _, result := range results {
+		if result.Checked && !result.OK {
+			broken = append(broken, result.File)
+		}
+	}
+	if len(broken) == 0 {
+		return ""
+	}
+	still := "they are"
+	if len(broken) == 1 {
+		still = "it is"
+	}
+	return fmt.Sprintf("Channels DVR was not asked to read the list again, because %s will not load as a channel list, and while %s in the m3u folder no channel-list address loads at all. The Channel M3Us page says what is wrong.",
+		strings.Join(broken, ", "), still)
+}
+
+func countOfSources(total int) string {
+	if total == 1 {
+		return "1 source"
+	}
+	return fmt.Sprintf("%d sources", total)
+}
+
+// channelsM3USourcesServingList finds the custom-channels sources of this DVR
+// that read one of our channel lists. A source can be named anything, and the
+// path segment it answers to is not always what it is called, so each candidate
+// device is resolved to its own settings and judged by the address it reads.
+//
+// A source whose settings will not answer is returned as unchecked, never
+// dropped: it may be the very source that reads this list, and "nothing needed
+// reloading" would then be a lie told in the color of success.
+func channelsM3USourcesServingList(ctx context.Context, dvrBase, file string) ([]channelsM3USourceMatch, []string, error) {
+	base := strings.TrimRight(dvrBase, "/")
+	devices, err := fetchChannelsDVRDevices(ctx, base+"/devices")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Could not read the sources of Channels DVR at %s: %w", dvrBase, err)
+	}
+	sources := []channelsM3USourceMatch{}
+	unchecked := []string{}
+	for _, device := range devices {
+		if !strings.HasPrefix(device.DeviceID, channelsM3UDevicePrefix) {
+			continue
+		}
+		key := strings.TrimPrefix(device.DeviceID, channelsM3UDevicePrefix)
+		if !usableChannelsSourceKey(key) {
+			unchecked = append(unchecked, strings.TrimSpace(device.DeviceID))
+			continue
+		}
+		var settings channelsM3USourceSettings
+		if err := fetchChannelsDVRJSON(ctx, base+"/providers/m3u/sources/"+url.PathEscape(key), &settings); err != nil {
+			// A tune that arrives mid-search ends the search rather than
+			// quietly shortening it.
+			if ctx.Err() != nil {
+				return nil, nil, fmt.Errorf("Could not read the sources of Channels DVR at %s: %w", dvrBase, err)
+			}
+			logger("[M3U] could not read the Channels DVR source %s: %v", key, err)
+			unchecked = append(unchecked, key)
+			continue
+		}
+		if !channelsSourceServesList(settings.URL, file) {
+			continue
+		}
+		name := strings.TrimSpace(settings.Name)
+		if name == "" {
+			name = key
+		}
+		sources = append(sources, channelsM3USourceMatch{Key: key, Name: name})
+	}
+	return sources, unchecked, nil
+}
+
+// usableChannelsSourceKey keeps a key that cannot be put in a URL at all out of
+// one. A slash is fine: url.PathEscape carries it as %2F and Channels DVR
+// answers to it, so a source named for two things is still reachable. Channels
+// DVR supplies these keys itself, so this guards against the unexpected rather
+// than against an attacker, and a key it refuses is reported as unchecked
+// rather than passed over in silence.
+func usableChannelsSourceKey(key string) bool {
+	if strings.TrimSpace(key) == "" {
+		return false
+	}
+	for _, char := range key {
+		if char < 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// fetchChannelsDVRDevices reads the device list, which carries every source's
+// whole channel lineup and so runs to megabytes on a DVR with a large list. It
+// has a cap of its own because the shared one is a megabyte, which a single
+// full lineup can already pass.
+func fetchChannelsDVRDevices(ctx context.Context, requestURL string) ([]channelsDVRDevice, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "ah4c")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("Channels DVR returned %s", response.Status)
+	}
+	var devices []channelsDVRDevice
+	if err := json.NewDecoder(io.LimitReader(response.Body, channelsDeviceListLimit)).Decode(&devices); err != nil {
+		return nil, fmt.Errorf("could not read Channels DVR response: %w", err)
+	}
+	return devices, nil
+}
+
+// channelsSourceServesList reports whether a Channels DVR source reads one of
+// our channel lists. Only the path is compared: the address typed into Channels
+// DVR is often another name for this host than IPADDRESS, and a proxy in front
+// of AH4C can add a prefix of its own.
+func channelsSourceServesList(sourceURL, file string) bool {
+	if strings.TrimSpace(file) == "" {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(sourceURL))
+	if err != nil || parsed.Path == "" {
+		return false
+	}
+	return strings.HasSuffix(path.Clean(parsed.Path), "/m3u/"+file)
+}
+
+// refreshChannelsM3USource asks Channels DVR to read one custom-channels source
+// again. A reply here means the request was accepted; the re-read itself runs
+// in the background over there.
+func refreshChannelsM3USource(ctx context.Context, client *http.Client, dvrBase, key string) error {
+	requestURL := strings.TrimRight(dvrBase, "/") + "/providers/m3u/sources/" + url.PathEscape(key) + "/refresh"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", "ah4c")
 	resp, err := client.Do(req)
 	if err != nil {
