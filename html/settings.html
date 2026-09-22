@@ -131,7 +131,7 @@
             </section>
 
             <section class="card settings-section" data-section="capture">
-                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>The computer needs drivers for the card.</strong> A capture card needs a picture driver and a sound driver on the computer itself; a container cannot supply them. Most Linux systems include both. <b>Find cards</b> says if one is missing.</span></span></span></div>
+                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>The computer needs drivers for the card.</strong> A capture card needs a picture driver and a sound driver on the computer itself; a container cannot supply them. Most Linux systems include both. <b>Find cards</b> says if one is missing.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help">A streaming stick plugged into a USB capture card can be recorded by Channels DVR directly. ah4c sets this up in Channels DVR for you and connects each card to a tuner.</p>
                 <p class="setting-description">Plug the capture card into the computer that runs ah4c and Channels DVR, then press <strong>Find cards</strong>. If Channels DVR runs on a different computer, use <strong>Add a card by hand</strong> instead, since ah4c can only see cards on its own computer.</p>
                 <div class="btn-row">
@@ -1929,7 +1929,7 @@ function renderCaptureCards() {
                 <div class="field"><label>Picture</label><select data-capture="size">${sizes.map(([w, h]) => `<option value="${w}x${h}" ${`${w}x${h}` === size ? 'selected' : ''}>${w} × ${h}</option>`).join('')}</select></div>
                 <div class="field"><label>Frames per second</label><select data-capture="framerate">${rates.map(rate => `<option value="${rate}" ${rate === card.framerate ? 'selected' : ''}>${rate}</option>`).join('')}</select></div>
                 <div class="field"><label>Feeds</label><select data-capture="tuner">${captureTunerOptions(card.tuner)}</select></div>
-                <div class="field ${card.tuner === 'new' ? '' : 'hidden'}" data-capture-new-tuner><label>Tuner IP <span class="muted">(the streaming device on this card)</span></label><input type="text" data-capture="tunerIP" value="${escapeHTML(card.tunerIP || '')}" placeholder="hostname:5555" spellcheck="false"></div>
+                <div class="field ${card.tuner === 'new' ? '' : 'hidden'}" data-capture-new-tuner><label>Tuner IP</label><input type="text" data-capture="tunerIP" value="${escapeHTML(card.tunerIP || '')}" placeholder="hostname:5555" spellcheck="false"></div>
             </div>
             <div class="capture-stream"><span class="muted">Stream address</span> <span class="mono">${stream ? escapeHTML(stream.url) : 'Not set up in Channels DVR yet'}</span></div>
             <div class="field-validation" data-capture-error></div>`;
@@ -1960,10 +1960,6 @@ function renderCaptureCards() {
     renderCapturePassthrough();
 }
 
-// The part ah4c cannot do: the cards have to reach Channels DVR, which does the
-// capturing. ah4c's own container needs none of them. How they get there
-// depends on where Channels DVR runs, and the device names come from the card
-// list, so they are this machine's own.
 // The same list ah4c writes to Channels DVR, for pasting into it by hand.
 function captureSourceTextFor(cards) {
     return '#EXTM3U\n' + cards.map(card => `\n#EXTINF:-1 channel-id="ah4c-capture-${card.video}",AH4C Capture ${card.video}\ncapture://v4l2/${card.video}/${card.audio ? card.audio + '/' : ''}?framerate=${card.framerate}&width=${card.width}&height=${card.height}\n`).join('');
@@ -1985,7 +1981,8 @@ function renderCapturePassthrough() {
     const code = value => `<code>${escapeHTML(value)}</code>`;
     const devices = cards.map(card => `<li>${code('/dev/' + card.video)}</li>`).join('') + `<li>${code('/dev/snd')} <span class="muted">(the cards' sound)</span></li>`;
     body.innerHTML = `<p class="setting-description">Channels DVR needs these devices from the computer the cards are plugged into. If it runs in a container or a virtual machine, pass them through to it and restart it.</p><ul class="capture-device-list">${devices}</ul>`;
-    byId('capture-manual-text').value = captureSourceTextFor(cards);
+    // Only cards ah4c itself would write: a sound device, or none in Debug mode.
+    byId('capture-manual-text').value = captureSourceTextFor(cards.filter(card => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(card.audio || '') || (!card.audio && captureDebug())));
 }
 
 function renderCaptureDrivers(drivers) {
@@ -2061,8 +2058,10 @@ async function readCaptureCards() {
         const unpaired = captureCards.filter(card => !card.audio).length;
         const noSoundDriver = ((payload.drivers && payload.drivers.missingSound) || []).length > 0;
         const silent = captureDebug() ? ' In Debug mode it can be left empty to set up the picture only.' : '';
-        const why = noSoundDriver ? 'this computer has no sound driver for it; see above' : 'its sound could not be matched automatically';
-        captureStatus(`Found ${countOfCaptures(captureCards.length)}.` + (unpaired ? ` Pick the sound device for ${countOfCaptures(unpaired)}; ${why}.${silent}` : ' Choose the tuner each one feeds.'), unpaired ? 'error' : '');
+        const why = noSoundDriver
+            ? ` ${unpaired === 1 ? 'It' : `${countOfCaptures(unpaired)}`} cannot record sound until this computer has a sound driver; see above.`
+            : ` Pick the sound device for ${countOfCaptures(unpaired)}; it could not be matched automatically.`;
+        captureStatus(`Found ${countOfCaptures(captureCards.length)}.` + (unpaired ? why + silent : ' Choose the tuner each one feeds.'), unpaired ? 'error' : '');
     } catch (error) {
         if (generation === captureGeneration) {
             renderCaptureDrivers(null);
@@ -2140,6 +2139,7 @@ async function loadCaptureCards() {
         });
         renderCaptureCards();
         const warnings = captureWarnings(payload);
+        if (captureCards.some(card => card.tuner === 'new')) warnings.push('Press Set up in Channels DVR to add the new tuner.');
         captureStatus([`Channels DVR is capturing from ${countOfCaptures(captureCards.length)}.`].concat(warnings).join(' '), warnings.length ? 'error' : 'ready');
     } catch (error) {
         if (generation === captureGeneration) captureStatus(error.message, 'error');
@@ -2181,11 +2181,18 @@ function applyCaptureStreamsToTuners() {
     const done = [];
     const refused = [];
     const missing = [];
+    // A tuner already recording a card is used rather than a new one, and only
+    // then are the picks checked, so no two cards can end up on one tuner.
+    captureCards.forEach(card => {
+        const stream = captureStreamFor(card);
+        if (card.tuner === 'new' && stream && tunerUsingStream(stream.url)) card.tuner = tunerUsingStream(stream.url);
+    });
+    const picks = captureCards.map(card => card.tuner).filter(tuner => tuner !== '' && tuner !== 'new');
+    const clash = picks.find((tuner, index) => picks.indexOf(tuner) !== index);
+    if (clash !== undefined) return {done, refused, missing, clash};
     captureCards.forEach(card => {
         const stream = captureStreamFor(card);
         if (!stream || card.tuner === '') return;
-        // A tuner already recording this card is used rather than a second one.
-        if (card.tuner === 'new' && tunerUsingStream(stream.url)) card.tuner = tunerUsingStream(stream.url);
         if (card.tuner === 'new') {
             const added = appendTunerCard({tunerIP: card.tunerIP || '', encoderURL: stream.url, cmd: '', teecmd: '', locked: {}});
             card.tuner = String(tunerNumber(added));
@@ -2212,7 +2219,7 @@ function applyCaptureStreamsToTuners() {
         }
         done.push(card.tuner);
     });
-    return {done, refused, missing};
+    return {done, refused, missing, clash};
 }
 
 async function applyCaptureCards() {
@@ -2249,14 +2256,27 @@ async function applyCaptureCards() {
             said.push('Settings were being saved meanwhile, so no tuner was changed. Press Set up in Channels DVR again once the save finishes.');
             problem = true;
         } else {
-            const {done, refused, missing} = applyCaptureStreamsToTuners();
+            const {done, refused, missing, clash} = applyCaptureStreamsToTuners();
             // A new tuner now has its number, which the card shows.
             renderCaptureCards();
+            if (clash !== undefined) {
+                said.push(`Two cards feed Tuner ${clash}, so no tuner was changed. Each tuner takes one card.`);
+                problem = true;
+            }
             if (missing.length) {
                 said.push(`There is no ${tunerList(missing)} now, so ${missing.length === 1 ? 'that card was' : 'those cards were'} not given a tuner.`);
                 problem = true;
             }
-            if (done.length) said.push(`${tunerList(done)} now ${done.length === 1 ? 'uses its card' : 'use their cards'}; press Save all changes to keep ${done.length === 1 ? 'it' : 'them'}.`);
+            // The tuner is saved in ah4c at once, like any tuner, so the card is
+            // never set up in Channels DVR with nothing kept here.
+            if (done.length) {
+                if (await saveSettings()) {
+                    said.push(`${tunerList(done)} now ${done.length === 1 ? 'records its card' : 'record their cards'}, and ${done.length === 1 ? 'it is' : 'they are'} saved. Restart when asked. ${done.length === 1 ? 'It then appears' : 'They then appear'} on Activity and under Tuners with a Preview, like any tuner; press Check connections under Tuners to connect to ${done.length === 1 ? 'its device' : 'their devices'}, and allow the connection on the TV with the device's remote.`);
+                } else {
+                    said.push(`${tunerList(done)} ${done.length === 1 ? 'was' : 'were'} filled in but could not be saved; see the message beside Save all changes.`);
+                    problem = true;
+                }
+            }
             if (refused.length) {
                 said.push(`${tunerList(refused)} ${refused.length === 1 ? 'is' : 'are'} set by the environment, so ${refused.length === 1 ? 'its' : 'their'} encoder URL was left alone.`);
                 problem = true;
@@ -2280,13 +2300,15 @@ async function applyCaptureCards() {
 byId('capture-read').addEventListener('click', readCaptureCards);
 byId('capture-manual-copy').addEventListener('click', async () => {
     const text = byId('capture-manual-text');
+    let copied = false;
     try {
         await navigator.clipboard.writeText(text.value);
+        copied = true;
     } catch (error) {
         text.select();
-        document.execCommand('copy');
+        try { copied = document.execCommand('copy'); } catch (ignored) {}
     }
-    byId('capture-manual-status').textContent = 'Copied.';
+    byId('capture-manual-status').textContent = copied ? 'Copied.' : 'Select the text and copy it yourself.';
 });
 byId('capture-add').addEventListener('click', () => {
     if (captureBusy) return;
@@ -2298,9 +2320,12 @@ byId('capture-load').addEventListener('click', loadCaptureCards);
 try {
     byId('capture-debug').checked = localStorage.getItem(captureDebugKey) === '1';
 } catch (error) {}
+// Debug mode is never on out of sight: its section opens whenever it is on.
+if (captureDebug()) document.querySelector('.capture-advanced').open = true;
 byId('capture-debug').addEventListener('change', () => {
     try { localStorage.setItem(captureDebugKey, captureDebug() ? '1' : '0'); } catch (error) {}
     if (!captureDebug()) renderCaptureDebug(null);
+    renderCapturePassthrough();
 });
 byId('capture-apply').addEventListener('click', applyCaptureCards);
 

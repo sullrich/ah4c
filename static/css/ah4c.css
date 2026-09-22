@@ -1431,6 +1431,7 @@ body.release-popover-open { overflow: hidden; }
 .capture-cards:empty { display: none; }
 .capture-card { padding: .8rem .9rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
 .capture-card-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.capture-card-head .spacer { margin-left: auto; }
 .capture-card-head .muted { font-size: .78rem; overflow-wrap: anywhere; }
 .capture-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: .6rem .8rem; }
 .capture-fields .field { margin-bottom: 0; min-width: 0; }
@@ -1440,8 +1441,6 @@ body.release-popover-open { overflow: hidden; }
 .capture-passthrough summary { cursor: pointer; }
 .capture-device-list { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .8rem; }
 .capture-device-list li { margin-bottom: .3rem; overflow-wrap: anywhere; }
-.capture-driver-list { display: grid; gap: .3rem; margin-top: .5rem; }
-.capture-driver-list > span { display: block; }
 .capture-manual-text { width: 100%; font-family: var(--mono); font-size: .76rem; }
 .capture-advanced { margin-top: .9rem; }
 .capture-advanced summary { cursor: pointer; }

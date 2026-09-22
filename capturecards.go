@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -313,7 +314,7 @@ func validCaptureCard(card captureCard, allowSilent bool) error {
 	if card.Audio == "" && allowSilent {
 		// Written without a sound device; see captureSourceText.
 	} else if !captureAudioPattern.MatchString(card.Audio) {
-		return fmt.Errorf("pick its sound device, which looks like hw:Video,0; a card with no sound can only be set up in Debug mode")
+		return captureSoundError(allowSilent)
 	}
 	if card.Width < 320 || card.Width > 7680 || card.Height < 240 || card.Height > 4320 {
 		return fmt.Errorf("the picture size must be between 320x240 and 7680x4320")
@@ -322,6 +323,13 @@ func validCaptureCard(card captureCard, allowSilent bool) error {
 		return fmt.Errorf("the frame rate must be between 1 and 120")
 	}
 	return nil
+}
+
+func captureSoundError(allowSilent bool) error {
+	if allowSilent {
+		return fmt.Errorf("its sound device must look like hw:Video,0, or be left empty")
+	}
+	return fmt.Errorf("pick its sound device, which looks like hw:Video,0; a card with no sound can only be set up in Debug mode")
 }
 
 // captureChannelName names a card's channel after its video device, so the
@@ -793,6 +801,25 @@ func previewCheckHandler(c *gin.Context) {
 		return
 	}
 	defer response.Body.Close()
+	capture := strings.Contains(address, "/devices/"+captureDeviceID+"/channels/")
+	if response.StatusCode == http.StatusOK && capture {
+		// Channels DVR answers 200 before it opens the card, then ends the
+		// stream at once when it cannot, so for a card the first byte is the
+		// answer. The watcher above still ends this the moment a tune starts.
+		first := make([]byte, 1)
+		n, readErr := io.ReadFull(response.Body, first)
+		switch {
+		case yielded.Load():
+			c.JSON(http.StatusOK, busy)
+		case n > 0:
+			c.JSON(http.StatusOK, gin.H{"ok": true, "reason": "Channels DVR is sending the card's picture, so a retry should play."})
+		case errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF):
+			c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": "Channels DVR could not open the capture card. Give Channels DVR the card's devices, listed under USB capture cards in Settings, then restart it."})
+		default:
+			c.JSON(http.StatusOK, gin.H{"ok": false, "reason": "Channels DVR has not sent the card's picture yet."})
+		}
+		return
+	}
 	if response.StatusCode == http.StatusOK {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "reason": "The encoder answered, so a retry should play."})
 		return
@@ -803,8 +830,8 @@ func previewCheckHandler(c *gin.Context) {
 		reason += ": " + text
 	}
 	reason += "."
-	if strings.Contains(address, "/devices/"+captureDeviceID+"/channels/") {
-		reason += " Channels DVR could not capture from the card. Check that it sees the card, with ls -la /dev/video* /dev/snd inside its container, and that the server has the card's drivers."
+	if capture {
+		reason += " Channels DVR could not capture from the card. Check that it has the card's devices, listed under USB capture cards in Settings, and that the computer has the card's drivers."
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": reason})
 }
