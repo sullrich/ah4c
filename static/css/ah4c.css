@@ -1442,7 +1442,10 @@ body.release-popover-open { overflow: hidden; }
 .capture-device-list li { margin-bottom: .3rem; overflow-wrap: anywhere; }
 .capture-driver-list { display: grid; gap: .3rem; margin-top: .5rem; }
 .capture-driver-list > span { display: block; }
-.capture-debug { display: flex; align-items: center; gap: .45rem; margin-top: .9rem; color: var(--text); }
+.capture-manual-text { width: 100%; font-family: var(--mono); font-size: .76rem; }
+.capture-advanced { margin-top: .9rem; }
+.capture-advanced summary { cursor: pointer; }
+.capture-debug { display: flex; align-items: center; gap: .45rem; margin-top: .6rem; color: var(--text); }
 .capture-debug input { flex: 0 0 auto; }
 .capture-debug-output { margin: .6rem 0; min-width: 0; }
 .capture-debug-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }

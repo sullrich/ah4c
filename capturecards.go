@@ -138,14 +138,18 @@ func usbDeviceOf(link string) (string, string) {
 				break
 			}
 		}
+		// A name like 1-0050 outside any USB controller is not USB at all.
+		if controller == "" {
+			return "", ""
+		}
 		_, port, _ := strings.Cut(parts[i], "-")
 		return strings.Join(parts[:i+1], "/"), "usb-" + controller + "-" + port
 	}
 	return "", ""
 }
 
-// detectVideoDevices lists each capture node: a card makes two video nodes, and
-// the one with index 0 is the picture, the other its metadata.
+// detectVideoDevices lists each USB capture node: a card makes two video nodes,
+// and the one with index 0 is the picture, the other its metadata.
 func detectVideoDevices(root string) []v4l2Device {
 	nodes, _ := filepath.Glob(filepath.Join(root, "class", "video4linux", "video*"))
 	sort.Slice(nodes, func(a, b int) bool { return videoNumber(nodes[a]) < videoNumber(nodes[b]) })
@@ -163,7 +167,11 @@ func detectVideoDevices(root string) []v4l2Device {
 		if first, rest, found := strings.Cut(name, ": "); found && first == rest {
 			name = first
 		}
+		// Only USB cards: a camera or codec built into the board is not one.
 		_, bus := usbDeviceOf(filepath.Join(node, "device"))
+		if bus == "" {
+			continue
+		}
 		devices = append(devices, v4l2Device{name: name, bus: bus, video: video})
 	}
 	return devices
@@ -300,12 +308,12 @@ func pairCaptureCards(videos []v4l2Device, sounds []alsaCard) ([]captureCard, []
 // written as a picture-only line for testing on a server with no sound driver.
 func validCaptureCard(card captureCard, allowSilent bool) error {
 	if !captureVideoPattern.MatchString(card.Video) {
-		return fmt.Errorf("the video device must look like video0, as v4l2-ctl lists it")
+		return fmt.Errorf("the video device must look like video0")
 	}
 	if card.Audio == "" && allowSilent {
 		// Written without a sound device; see captureSourceText.
 	} else if !captureAudioPattern.MatchString(card.Audio) {
-		return fmt.Errorf("the audio device must look like hw:Video,0, as arecord -l lists it")
+		return fmt.Errorf("pick its sound device, which looks like hw:Video,0; a card with no sound can only be set up in Debug mode")
 	}
 	if card.Width < 320 || card.Width > 7680 || card.Height < 240 || card.Height > 4320 {
 		return fmt.Errorf("the picture size must be between 320x240 and 7680x4320")
@@ -417,7 +425,7 @@ func detectCaptureCardsHandler(c *gin.Context) {
 	drivers := detectCaptureDrivers(captureSysRoot)
 	cards, left := pairCaptureCards(videos, sounds)
 	// Every sound card is offered with its card number, so a card paired or
-	// changed by hand still lists the right Proxmox devices to pass through.
+	// changed by hand keeps its card number.
 	known := make([]captureAudioChoice, 0, len(sounds))
 	for _, sound := range sounds {
 		known = append(known, captureAudioChoice{Card: sound.index, Audio: fmt.Sprintf("hw:%s,%d", sound.id, sound.device), Name: sound.name, Bus: sound.bus})
