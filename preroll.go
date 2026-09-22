@@ -212,24 +212,81 @@ func prerollStartup() {
 	preparePreroll(src)
 }
 
-// prerollInDir uses the Settings selection when present, then falls back to a
-// legacy preroll.* file, the only file, or the first by name. Hidden files
+// prerollChoice is the file ah4c will play out of a pre-roll folder, and how
+// it got there. A file the owner put in the folder is external; the file a
+// Settings upload recorded in the marker is Settings-owned.
+type prerollChoice struct {
+	// Path is the file to prepare, or "" when the folder holds nothing.
+	Path string
+	// Name is that file's name inside the folder.
+	Name string
+	// Count is how many files competed for the choice.
+	Count int
+	// External reports that the chosen file was placed in the folder rather
+	// than uploaded through Settings.
+	External bool
+	// Shadowed names a Settings upload that is still there but lost to an
+	// external file.
+	Shadowed string
+}
+
+// choosePrerollFile decides which file wins. A file placed in the folder on the
+// server always beats one uploaded through Settings, so an owner who drops a
+// file in gets the file they dropped in. Among external files the legacy rule
+// applies: preroll.* wins, otherwise the first by name. The Settings upload
+// plays only when the folder holds nothing else, and a marker naming a file
+// that is not there grants nothing and blocks nothing.
+func choosePrerollFile(files []string, managed string) prerollChoice {
+	sorted := append([]string(nil), files...)
+	sort.Strings(sorted)
+	var external []string
+	owned := ""
+	for _, file := range sorted {
+		if managed != "" && file == managed {
+			owned = file
+			continue
+		}
+		external = append(external, file)
+	}
+	if len(external) > 0 {
+		pick := external[0]
+		for _, file := range external {
+			if strings.HasPrefix(strings.ToLower(file), "preroll.") {
+				pick = file
+				break
+			}
+		}
+		return prerollChoice{Name: pick, Count: len(external), External: true, Shadowed: owned}
+	}
+	if owned != "" {
+		return prerollChoice{Name: owned, Count: 1}
+	}
+	return prerollChoice{}
+}
+
+// prerollInDir reports the file ah4c will play from a pre-roll folder, and says
+// out loud when a file on the server is shadowing a Settings upload.
 func prerollInDir(dir string) string {
-	pick, count, err := pickPrerollFile(dir)
+	choice, err := pickPrerollFile(dir)
 	if err != nil {
 		logger("[PREROLL] %s cannot be listed (%v); holds will use NULL packets", dir, err)
 		return ""
 	}
-	if count > 1 && pick != "" {
-		logger("[PREROLL] %s holds %d files; using %s (name one preroll.* to choose)", dir, count, filepath.Base(pick))
+	if choice.Count > 1 && choice.Name != "" {
+		logger("[PREROLL] %s holds %d candidate files; using %s (name one preroll.* to choose)", dir, choice.Count, choice.Name)
 	}
-	return pick
+	if choice.Shadowed != "" {
+		logger("[PREROLL] %s is in %s and takes precedence, so the uploaded %s is not used", choice.Name, dir, choice.Shadowed)
+	}
+	return choice.Path
 }
 
-func pickPrerollFile(dir string) (string, int, error) {
+// pickPrerollFile lists the folder and applies choosePrerollFile to it. Hidden
+// files, including the selection marker, never count as pre-rolls.
+func pickPrerollFile(dir string) (prerollChoice, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", 0, err
+		return prerollChoice{}, err
 	}
 	var files []string
 	for _, e := range entries {
@@ -237,34 +294,53 @@ func pickPrerollFile(dir string) (string, int, error) {
 			files = append(files, e.Name())
 		}
 	}
-	if len(files) == 0 {
-		return "", 0, nil
+	managed, err := prerollSelectedName(dir)
+	if err != nil {
+		return prerollChoice{}, err
 	}
-	sort.Strings(files)
-	selected, err := os.ReadFile(filepath.Join(dir, prerollSelectionName))
-	if err == nil {
-		name := strings.TrimSpace(string(selected))
-		if name == "" {
-			return "", len(files), nil
-		}
-		for _, file := range files {
-			if file == name {
-				return filepath.Join(dir, file), len(files), nil
-			}
-		}
-		return "", len(files), nil
+	choice := choosePrerollFile(files, managed)
+	if choice.Name != "" {
+		choice.Path = filepath.Join(dir, choice.Name)
 	}
-	if !os.IsNotExist(err) {
-		return "", 0, err
+	return choice, nil
+}
+
+// prerollSelectedName reads the name a Settings upload recorded. A marker that
+// is missing, empty or unsafe names nothing, which is not an error: it only
+// means no upload is claiming a file in this folder.
+func prerollSelectedName(dir string) (string, error) {
+	markerPath := filepath.Join(dir, prerollSelectionName)
+	info, err := os.Lstat(markerPath)
+	if os.IsNotExist(err) {
+		return "", nil
 	}
-	pick := files[0]
-	for _, f := range files {
-		if strings.HasPrefix(strings.ToLower(f), "preroll.") {
-			pick = f
-			break
-		}
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(dir, pick), len(files), nil
+	if !info.Mode().IsRegular() {
+		// A directory or link where the marker should be is not a selection.
+		return "", nil
+	}
+	stored, err := os.ReadFile(markerPath)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(stored))
+	if name == "" {
+		return "", nil
+	}
+	if safe, err := safePrerollFilename(name); err != nil || safe != name {
+		return "", nil
+	}
+	return name, nil
+}
+
+// prerollRegularFile reports whether path is an ordinary file, following no
+// links. Selection only ever considers ordinary files, and Settings only ever
+// removes one; a link or directory an owner put in the folder is theirs.
+func prerollRegularFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // preparePreroll turns the file at src into a transport stream at

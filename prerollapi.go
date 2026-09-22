@@ -19,6 +19,10 @@ const maxPrerollUploadBytes int64 = 2 << 30
 
 var errPrerollTuneActive = errors.New("a tuner is active; upload canceled so it cannot interfere with the stream")
 
+// prerollExternalMessage is what the page and a refused upload both say when a
+// file placed in the pre-roll folder on the server owns the pre-roll.
+const prerollExternalMessage = "A pre-roll file placed in the pre-roll folder on the server is in use and always takes precedence. Remove it from the server to manage the pre-roll here."
+
 var (
 	prerollAPIMu   sync.Mutex
 	prerollAPIRoot = prerollMount
@@ -31,6 +35,8 @@ type prerollFileStatus struct {
 	Directory     bool   `json:"directory"`
 	Managed       bool   `json:"managed"`
 	Deletable     bool   `json:"deletable"`
+	External      bool   `json:"external"`
+	Shadowed      string `json:"shadowed,omitempty"`
 	RestartNeeded bool   `json:"restartNeeded"`
 	Message       string `json:"message,omitempty"`
 }
@@ -64,6 +70,15 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": errPrerollTuneActive.Error()})
 		return
 	}
+	choice, err := selectedPrerollFile(prerollAPIRoot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if choice.External {
+		c.JSON(http.StatusConflict, gin.H{"error": prerollExternalMessage})
+		return
+	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPrerollUploadBytes+(1<<20))
 	reader, err := c.Request.MultipartReader()
 	if err != nil {
@@ -88,7 +103,9 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 		return
 	}
 	target := filepath.Join(prerollAPIRoot, filename)
-	if target != previous {
+	// The marker-named entry may be replaced only when it is the ordinary file
+	// Settings put there. Anything else at that name belongs to the owner.
+	if target != previous || !prerollRegularFile(target) {
 		if _, err := os.Lstat(target); err == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("%s already exists outside Settings; rename the upload to preserve that file", filename)})
 			return
@@ -140,10 +157,17 @@ func uploadPrerollConfigHandler(c *gin.Context) {
 	}
 	keepTemporary = true
 	if err := writePrerollSelection(prerollAPIRoot, filename); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but could not be selected: %v", err)})
+		// Without the marker this file would count as one placed on the server
+		// and lock the page, so an upload that cannot be recorded is taken back.
+		if target != previous {
+			_ = os.Remove(target)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The upload could not be recorded, so it was not kept: %v", err)})
 		return
 	}
-	if previous != "" && previous != target {
+	// The upload being replaced is removed only while it is still the ordinary
+	// file Settings put there. A link or folder at that name is the owner's.
+	if previous != "" && previous != target && prerollRegularFile(previous) {
 		if err := os.Remove(previous); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The file was uploaded, but the previous pre-roll could not be removed: %v", err)})
 			return
@@ -162,25 +186,34 @@ func deletePrerollConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	selected, _, err := selectedPrerollFile(prerollAPIRoot)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if selected == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No pre-roll file is stored"})
-		return
-	}
+	// Only the file this page uploaded is ever removed. A file placed in the
+	// folder on the server belongs to whoever put it there.
 	managed, err := managedPrerollSelection(prerollAPIRoot)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if managed != selected {
-		c.JSON(http.StatusConflict, gin.H{"error": "This pre-roll file is managed outside Settings and cannot be deleted here"})
+	if managed == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No pre-roll file was uploaded here. A file placed in the pre-roll folder on the server has to be removed there."})
 		return
 	}
-	if err := os.Remove(selected); err != nil {
+	if _, err := os.Lstat(managed); errors.Is(err, os.ErrNotExist) {
+		// The upload is already gone. Forget it, and say so without pretending
+		// anything was removed or that a restart is needed.
+		if err := clearPrerollSelection(prerollAPIRoot); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("The selection could not be cleared: %v", err)})
+			return
+		}
+		logger("[PREROLL] forgot the missing upload %s", managed)
+		status, _ := inspectPrerollFile(prerollAPIRoot)
+		c.JSON(http.StatusOK, status)
+		return
+	}
+	if !prerollRegularFile(managed) {
+		c.JSON(http.StatusConflict, gin.H{"error": "The selected name is not an ordinary file and belongs to the server. Remove it there."})
+		return
+	}
+	if err := os.Remove(managed); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not delete the pre-roll file: %v", err)})
 		return
 	}
@@ -189,7 +222,7 @@ func deletePrerollConfigHandler(c *gin.Context) {
 		return
 	}
 	markPrerollRestartNeeded()
-	logger("[PREROLL] deleted %s; restart required to stop using it", selected)
+	logger("[PREROLL] deleted %s; restart required to stop using it", managed)
 	status, _ := inspectPrerollFile(prerollAPIRoot)
 	c.JSON(http.StatusOK, status)
 }
@@ -218,29 +251,38 @@ func inspectPrerollFile(root string) (prerollFileStatus, error) {
 	}
 	status.Directory = true
 	status.Managed = true
-	selected, _, err := selectedPrerollFile(root)
+	choice, err := selectedPrerollFile(root)
 	if err != nil {
 		return status, err
 	}
-	if selected == "" {
+	status.External = choice.External
+	status.Shadowed = choice.Shadowed
+	if choice.Path == "" {
 		return status, nil
 	}
-	file, err := os.Stat(selected)
+	file, err := os.Stat(choice.Path)
 	if err != nil {
 		return status, fmt.Errorf("could not read the selected pre-roll: %w", err)
 	}
 	status.Present = true
-	status.Name = filepath.Base(selected)
+	status.Name = choice.Name
 	status.Size = file.Size()
-	managed, err := managedPrerollSelection(root)
-	if err != nil {
-		return status, fmt.Errorf("could not read the managed pre-roll selection: %w", err)
-	}
-	status.Deletable = managed == selected
-	if !status.Deletable {
-		status.Message = "This file is managed outside Settings. You can upload a replacement, but it cannot be deleted here."
+	// The upload this page made can always be taken back, even when a file on
+	// the server is shadowing it. Nothing else here can.
+	status.Deletable = !choice.External || choice.Shadowed != ""
+	if choice.External {
+		status.Message = prerollExternalNotice(choice.Shadowed)
 	}
 	return status, nil
+}
+
+// prerollExternalNotice explains a folder a file on the server owns, and says
+// which file Delete would take back when an upload is sitting behind it.
+func prerollExternalNotice(shadowed string) string {
+	if shadowed == "" {
+		return prerollExternalMessage
+	}
+	return fmt.Sprintf("%s The file you uploaded here, %s, is not being used; Delete removes that one.", prerollExternalMessage, shadowed)
 }
 
 func requirePrerollDirectory(root string) error {
@@ -260,12 +302,12 @@ func requirePrerollDirectory(root string) error {
 	return nil
 }
 
-func selectedPrerollFile(dir string) (string, int, error) {
-	selected, count, err := pickPrerollFile(dir)
+func selectedPrerollFile(dir string) (prerollChoice, error) {
+	choice, err := pickPrerollFile(dir)
 	if err != nil {
-		return "", 0, fmt.Errorf("could not list the pre-roll folder: %w", err)
+		return prerollChoice{}, fmt.Errorf("could not list the pre-roll folder: %w", err)
 	}
-	return selected, count, nil
+	return choice, nil
 }
 
 func prerollUploadPart(reader *multipart.Reader) (*multipart.Part, error) {
@@ -297,22 +339,11 @@ func safePrerollFilename(name string) (string, error) {
 }
 
 func managedPrerollSelection(dir string) (string, error) {
-	selection, err := os.ReadFile(filepath.Join(dir, prerollSelectionName))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
+	name, err := prerollSelectedName(dir)
+	if err != nil || name == "" {
 		return "", err
 	}
-	name := strings.TrimSpace(string(selection))
-	if name == "" {
-		return "", nil
-	}
-	safe, err := safePrerollFilename(name)
-	if err != nil || safe != name {
-		return "", fmt.Errorf("stored pre-roll selection is invalid")
-	}
-	return filepath.Join(dir, safe), nil
+	return filepath.Join(dir, name), nil
 }
 
 func writePrerollSelection(dir, name string) error {

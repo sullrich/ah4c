@@ -477,6 +477,7 @@ button.local-script-entry:hover { border-color: var(--border); background: var(-
 .preroll-current { min-height: 35px; padding: .45rem .65rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--mono); font-size: .8rem; }
 .preroll-picker input[type="file"] { width: 100%; padding: .42rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: .76rem; }
 .preroll-picker input[type="file"]::file-selector-button { margin-right: .6rem; padding: .3rem .55rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+.preroll-picker input[type="file"]:disabled { opacity: .55; }
 .preroll-actions { grid-column: 1 / -1; margin-top: 0; }
 .config-notice { display: flex; align-items: center; gap: 0.8rem; justify-content: space-between; padding: 0.7rem 0.9rem; border: 1px solid var(--info); border-radius: var(--radius); margin-bottom: 0.9rem; background: var(--surface); }
 .config-notice--warning { border-color: var(--warning); }

@@ -209,6 +209,17 @@
         </div>
     </div>
 
+    <div id="preroll-delete-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="preroll-delete-title">
+        <div class="modal m3u-delete-modal">
+            <div id="preroll-delete-title" class="card-title">Delete pre-roll file?</div>
+            <p id="preroll-delete-message"></p>
+            <div class="btn-row">
+                <button id="preroll-delete-confirm" class="btn btn-danger" type="button">Delete file</button>
+                <button id="preroll-delete-cancel" class="btn" type="button">Keep it</button>
+            </div>
+        </div>
+    </div>
+
     <div id="apple-tv-pair-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="apple-tv-pair-title">
         <div class="modal apple-tv-pair-modal">
             <div class="modal-head">
@@ -371,13 +382,18 @@ function renderPreroll() {
         picker.disabled = true;
         upload.disabled = true;
         remove.disabled = true;
+        remove.textContent = 'Delete file';
         return;
     }
     current.textContent = prerollState.present ? `${prerollState.name} · ${formatFileSize(prerollState.size)}` : 'No pre-roll file';
     message.textContent = prerollState.message || (prerollState.restartNeeded ? 'Restart ah4c to apply this change.' : 'Images and videos are prepared when ah4c starts.');
-    picker.disabled = !prerollState.managed;
-    upload.disabled = !prerollState.managed || !picker.files.length;
+    // A file placed in the pre-roll folder on the server always wins, so there
+    // is nothing useful to upload while one is there.
+    const owned = prerollState.managed && !prerollState.external;
+    picker.disabled = !owned;
+    upload.disabled = !owned || !picker.files.length;
     remove.disabled = !prerollState.deletable;
+    remove.textContent = prerollState.shadowed ? 'Delete upload' : 'Delete file';
 }
 
 function applyPrerollRestartState() {
@@ -396,9 +412,11 @@ async function uploadPreroll() {
     status.textContent = 'Uploading…';
     const form = new FormData();
     form.append('file', file);
+    let conflict = false;
     try {
         const response = await fetch('/api/config/preroll', {method:'POST', body:form});
         const payload = await response.json();
+        conflict = response.status === 409;
         if (!response.ok) throw new Error(payload.error || 'Upload failed');
         prerollState = payload;
         byId('preroll-file').value = '';
@@ -408,11 +426,45 @@ async function uploadPreroll() {
     } catch (error) {
         status.textContent = error.message;
         renderPreroll();
+        // A refused upload means the folder is no longer what this page last
+        // read, most often because a file placed on the server now owns the
+        // pre-roll. Read the state again so the controls match the folder
+        // instead of offering the same upload a second time. Re-reading costs
+        // nothing, so every conflict does it.
+        if (conflict) await loadPreroll();
     }
 }
 
+function prerollDeleteTarget() {
+    return prerollState?.shadowed || prerollState?.name || '';
+}
+
+function requestDeletePreroll() {
+    const target = prerollDeleteTarget();
+    if (!prerollState?.deletable || !target) return;
+    // Only the upload is on offer while a file on the server is the pre-roll in
+    // use, so the title and the button say so rather than promising to remove
+    // the pre-roll itself.
+    byId('preroll-delete-title').textContent = prerollState.shadowed
+        ? 'Delete the uploaded file?'
+        : 'Delete pre-roll file?';
+    byId('preroll-delete-confirm').textContent = prerollState.shadowed ? 'Delete upload' : 'Delete file';
+    byId('preroll-delete-message').textContent = prerollState.shadowed
+        ? `Delete ${target}? It was uploaded here, it is not the pre-roll in use, and the file on the server is left alone.`
+        : `Delete ${target}? ah4c plays no pre-roll after the next restart.`;
+    byId('preroll-delete-modal').classList.add('open');
+    // The safe button takes the focus, the way the tuner-in-use restart warning
+    // in this page already does, so a held Enter cannot delete unread.
+    byId('preroll-delete-cancel').focus();
+}
+
+function closeDeletePreroll() {
+    byId('preroll-delete-modal').classList.remove('open');
+}
+
 async function deletePreroll() {
-    if (!prerollState?.deletable || !confirm(`Delete ${prerollState.name}?`)) return;
+    closeDeletePreroll();
+    if (!prerollState?.deletable) return;
     const status = byId('preroll-status');
     const button = byId('delete-preroll');
     button.disabled = true;
@@ -1662,6 +1714,7 @@ byId('apple-tv-pair-modal').addEventListener('click', event => {
 document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     if (byId('restart-prompt-modal').classList.contains('open')) closeRestartPrompt();
+    if (byId('preroll-delete-modal').classList.contains('open')) closeDeletePreroll();
     if (byId('apple-tv-pair-modal').classList.contains('open')) closeAppleTVPairing();
     if (byId('tuner-order-modal').classList.contains('open')) closeTunerOrderEditor();
     if (byId('tuner-preview-modal').classList.contains('open')) closeTunerPreview();
@@ -1669,7 +1722,12 @@ document.addEventListener('keydown', event => {
 window.addEventListener('pagehide', stopTunerPreview);
 byId('preroll-file').addEventListener('change', renderPreroll);
 byId('upload-preroll').addEventListener('click', uploadPreroll);
-byId('delete-preroll').addEventListener('click', deletePreroll);
+byId('delete-preroll').addEventListener('click', requestDeletePreroll);
+byId('preroll-delete-confirm').addEventListener('click', deletePreroll);
+byId('preroll-delete-cancel').addEventListener('click', closeDeletePreroll);
+byId('preroll-delete-modal').addEventListener('click', event => {
+    if (event.target === byId('preroll-delete-modal')) closeDeletePreroll();
+});
 byId('add-extra').addEventListener('click', () => addExtraRow());
 async function handleSaveClick() {
     const saveButtons = [...document.querySelectorAll('[data-save-settings]')];
