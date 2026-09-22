@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,10 +38,92 @@ type channelsM3USource struct {
 
 const maxM3UUploadBytes int64 = 16 << 20
 
+// maxM3UParseBytes bounds the health check. Anything larger than an upload is
+// allowed to be is not a channel list, and is reported unchecked rather than
+// read.
+const maxM3UParseBytes int64 = maxM3UUploadBytes
+
+// m3uParseResult is what the health check made of one channel list.
+type m3uParseResult struct {
+	File    string `json:"file"`
+	OK      bool   `json:"ok"`
+	Checked bool   `json:"checked"`
+	Error   string `json:"error,omitempty"`
+}
+
 func registerM3UIntegrationRoutes(r *gin.Engine) {
 	r.POST("/api/m3u/add-to-channels", addM3UToChannelsHandler)
+	r.GET("/api/m3u/health", m3uHealthHandler)
 	r.POST("/api/m3u/files", uploadM3UFileHandler)
 	r.DELETE("/api/m3u/files/:file", deleteM3UFileHandler)
+}
+
+// m3uTemplateError parses one channel list the way the /m3u/:channel route
+// does, and returns the parser's own message when it will not parse. gin's
+// LoadHTMLGlob builds the set with
+// template.New("").Delims("{{", "}}").Funcs(engine.FuncMap).ParseGlob(pattern)
+// and parses each file under its base name; main.go never calls SetFuncMap, so
+// that FuncMap is empty. Because the whole folder is one template set, a single
+// file that will not parse takes every channel list down with it.
+func m3uTemplateError(name string, content []byte) string {
+	parsed, err := template.New(name).Delims("{{", "}}").Parse(string(content))
+	if err != nil {
+		return err.Error()
+	}
+	// Every list shares one template set under gin, so a list that defines a
+	// template under another list's name would quietly replace that list.
+	for _, defined := range parsed.Templates() {
+		if defined.Name() != name {
+			return fmt.Sprintf("defines a template named %q, which would replace another channel list", defined.Name())
+		}
+	}
+	return ""
+}
+
+// checkM3UFolder looks at every entry gin's LoadHTMLGlob("m3u/*.m3u") would,
+// the same way: the glob matches directories and links too, and gin reads each
+// match through the link and fails on a directory. A folder with no matches at
+// all is also a failure for gin, so the caller is told when the list is empty.
+func checkM3UFolder(dir string) ([]m3uParseResult, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.m3u"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	results := []m3uParseResult{}
+	for _, path := range matches {
+		name := filepath.Base(path)
+		info, err := os.Stat(path)
+		if err != nil {
+			results = append(results, m3uParseResult{File: name, Error: fmt.Sprintf("This entry could not be read: %v", err)})
+			continue
+		}
+		if info.IsDir() {
+			results = append(results, m3uParseResult{File: name, Checked: true, Error: "This is a folder, not a file. Every channel list address fails while it is here."})
+			continue
+		}
+		if info.Size() > maxM3UParseBytes {
+			results = append(results, m3uParseResult{File: name, Error: fmt.Sprintf("This file is larger than %s, so it was not checked.", byteCount(maxM3UParseBytes))})
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			results = append(results, m3uParseResult{File: name, Error: fmt.Sprintf("This file could not be read: %v", err)})
+			continue
+		}
+		message := m3uTemplateError(name, content)
+		results = append(results, m3uParseResult{File: name, OK: message == "", Checked: true, Error: message})
+	}
+	return results, nil
+}
+
+func m3uHealthHandler(c *gin.Context) {
+	results, err := checkM3UFolder("m3u")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not read the M3U folder: %v", err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"files": results, "empty": len(results) == 0})
 }
 
 func uploadM3UFileHandler(c *gin.Context) {
@@ -109,6 +193,21 @@ func uploadM3UFileHandler(c *gin.Context) {
 	}
 	if err := os.Chmod(temporaryName, 0o644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not set M3U file permissions: %v", err)})
+		return
+	}
+	// A list that will not parse stops every channel-list address from loading,
+	// so it never reaches the folder. The staged file is removed on the way out.
+	staged, err := os.ReadFile(temporaryName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not read the staged upload: %v", err)})
+		return
+	}
+	if message := m3uTemplateError(name, staged); message != "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      fmt.Sprintf("%s was not saved because AH4C cannot read it as a channel list: %s. AH4C fills in its own address where a list asks for it, so while a file with broken template text is in the m3u folder, no channel-list address loads at all. Correct that text and upload the file again.", name, message),
+			"file":       name,
+			"parseError": message,
+		})
 		return
 	}
 	if err := os.Rename(temporaryName, target); err != nil {

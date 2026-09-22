@@ -31,6 +31,8 @@
 	</div>
 
     <div class="page">
+        <div id="m3u-health" class="hidden" role="alert"></div>
+
         <div class="card" id="m3u-file-manager">
             <div class="card-title">Manage channel-list files</div>
             <p class="section-help" style="margin-top:0;">Upload an <code>.m3u</code> file into AH4C's persistent M3U folder. Existing files with the same name can be replaced after confirmation.</p>
@@ -124,6 +126,89 @@
         const setup = document.getElementById('m3u-setup');
         const choice = document.getElementById('m3u-choice');
         let pendingM3UDelete = '';
+
+        const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+        // AH4C renders every channel list in the m3u folder as one template, so
+        // one list that will not parse stops all of them from loading. Say which
+        // file it is rather than leaving the addresses mysteriously dead.
+        async function loadM3UHealth() {
+            const panel = document.getElementById('m3u-health');
+            try {
+                const response = await fetch('/api/m3u/health');
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'The channel lists could not be checked.');
+                renderM3UHealth(Array.isArray(payload.files) ? payload.files : [], payload.empty === true);
+            } catch (_) {
+                panel.classList.add('hidden');
+                panel.textContent = '';
+                // The panel is the only thing that explains a marked row, so a
+                // check that failed clears the markers with it.
+                markBrokenM3UFiles([]);
+            }
+        }
+
+        // A directory named something.m3u fails the same check a broken file
+        // fails, but none of the advice for a file applies to it: there is no
+        // line to correct and this page cannot delete a folder. The backend
+        // says which case it is in the first words of the reason.
+        function isFolderEntry(entry) {
+            return String(entry.error || '').startsWith('This is a folder');
+        }
+
+        function renderM3UHealth(files, empty) {
+            const panel = document.getElementById('m3u-health');
+            const broken = files.filter(entry => entry.checked && !entry.ok);
+            const unchecked = files.filter(entry => !entry.checked);
+            markBrokenM3UFiles(broken.map(entry => entry.file));
+            if (!broken.length && !unchecked.length && !empty) {
+                panel.classList.add('hidden');
+                panel.textContent = '';
+                return;
+            }
+            const none = empty ? `
+                <div class="restart-tune-warning">
+                    <strong>The m3u folder holds no channel lists.</strong>
+                    <p>AH4C needs at least one .m3u file in the folder before any channel-list address will load. Upload one below.</p>
+                </div>` : '';
+            const warnings = none + broken.map(entry => isFolderEntry(entry)
+                ? `
+                <div class="restart-tune-warning">
+                    <strong>${escapeHTML(entry.file)} is a folder, not a channel list.</strong>
+                    <div class="mono">${escapeHTML(entry.error)}</div>
+                    <p>While it is in the m3u folder, no channel-list address loads at all, not even the lists that are fine. This page can delete files but not folders, so it has to be removed on the server.</p>
+                </div>`
+                : `
+                <div class="restart-tune-warning">
+                    <strong>${escapeHTML(entry.file)} is not a channel list AH4C can read.</strong>
+                    <div class="mono">${escapeHTML(entry.error)}</div>
+                    <p>While this file is in the m3u folder, no channel-list address loads at all, not even the lists that are fine. Delete it below, correct that line in it, and upload it again.</p>
+                </div>`).join('');
+            const skipped = unchecked
+                .map(entry => `<p class="footnote">${escapeHTML(entry.file)}: ${escapeHTML(entry.error || 'This file was not checked.')}</p>`)
+                .join('');
+            panel.innerHTML = warnings
+                + (skipped ? `<div class="card m3u-health-notes">${skipped}</div>` : '');
+            panel.classList.remove('hidden');
+        }
+
+        function markBrokenM3UFiles(files) {
+            document.querySelectorAll('[data-m3u-file]').forEach(item => {
+                const link = item.querySelector('.m3u-file-link');
+                if (!link) return;
+                let marker = item.querySelector('.m3u-file-broken');
+                if (!files.includes(item.dataset.m3uFile)) {
+                    if (marker) marker.remove();
+                    return;
+                }
+                if (!marker) {
+                    marker = document.createElement('div');
+                    marker.className = 'field-validation m3u-file-broken';
+                    link.appendChild(marker);
+                }
+                marker.textContent = 'This file stops every channel list from loading.';
+            });
+        }
 
         function normalizedBase(value, defaultPort) {
             value = String(value || '').trim();
@@ -251,6 +336,7 @@
             } catch (error) {
                 status.className = 'm3u-action-status connection-state--error';
                 status.textContent = error.message;
+                loadM3UHealth();
             } finally {
                 button.disabled = false;
             }
@@ -283,6 +369,7 @@
             } catch (error) {
                 status.className = 'm3u-action-status connection-state--error';
                 status.textContent = error.message;
+                loadM3UHealth();
             }
         }
 
@@ -315,6 +402,8 @@
             document.getElementById('copy-m3u-second').addEventListener('click', copyAddress);
             updateChoice();
         }
+
+        loadM3UHealth();
     </script>
 </body>
 </html>

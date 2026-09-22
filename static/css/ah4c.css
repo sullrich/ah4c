@@ -1058,6 +1058,10 @@ table.table {
 .push-right { margin-left: auto; }
 .hidden { display: none !important; }
 .footnote { margin: 0.8rem 0 0; font-size: 0.78rem; color: var(--text-muted); }
+/* The channel lists that were not checked are notes rather than warnings, so
+   they sit in a plain card instead of loose above the first one. */
+.m3u-health-notes { margin: 0.8rem 0; }
+.m3u-health-notes > .footnote:first-child { margin-top: 0; }
 
 .pagebar--inline {
   position: static;
