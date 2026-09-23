@@ -1450,6 +1450,7 @@ body.release-popover-open { overflow: hidden; }
 .capture-fields .field { margin-bottom: 0; min-width: 0; }
 .capture-fields input, .capture-fields select { width: 100%; }
 .tuner-card .capture-remote-help { margin: 0 0 .9rem; }
+.capture-remote-help p { margin: 0 0 .4rem; }
 .capture-passthrough { margin-top: .9rem; }
 .capture-passthrough summary { cursor: pointer; }
 .capture-device-list { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .8rem; }

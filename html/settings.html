@@ -824,10 +824,10 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         <div class="capture-fields tuner-capture-only">
             <div class="field"><label>Sound device</label><input type="text" data-capture-field="audio" list="capture-audio-choices" placeholder="hw:Video,0" spellcheck="false"></div>
             <div class="field capture-local-only hidden"><label>Format</label><select data-capture-field="format"></select></div>
-            <div class="field"><label>Picture</label><select data-capture-field="size"><option value="1920x1080">1920 × 1080</option><option value="1280x720">1280 × 720</option><option value="3840x2160">3840 × 2160</option></select></div>
-            <div class="field"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30" selected>30</option></select></div>
+            <div class="field capture-local-only hidden"><label>Picture</label><select data-capture-field="size"><option value="1920x1080">1920 × 1080</option><option value="1280x720">1280 × 720</option><option value="3840x2160">3840 × 2160</option></select></div>
+            <div class="field capture-local-only hidden"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30" selected>30</option></select></div>
         </div>
-        <div class="setting-description tuner-capture-only capture-remote-only capture-remote-help">Type the card's name and sound device as the computer it's plugged into names them, such as <code>video0</code> and <code>hw:1,0</code>. ah4c can't see that card, so the card's format is left to that computer. If the picture is choppy or slow, the card is probably sending uncompressed video: in Channels DVR's settings, open the <strong>AH4C Capture</strong> source and, in this card's line, change the picture size, such as <code>width=1920&amp;height=1080</code>, to <code>video_size=1920x1080&amp;pixel_format=mjpeg</code>. ah4c keeps that change.</div>
+        <div class="setting-description tuner-capture-only capture-remote-only capture-remote-help"><p><strong>For advanced users.</strong> ah4c can't see a card on another computer, so it can't tell what picture sizes, frame rates or formats the card supports. Those are set in Channels DVR, not here.</p><p>Type the card's name and sound device as that computer names them, such as <code>video0</code> and <code>hw:1,0</code>. When you save, ah4c adds the card to the <strong>AH4C Capture</strong> source in Channels DVR at 1920×1080 and 30 frames a second, the usual starting point.</p><p>To change that, open Channels DVR's settings, edit the <strong>AH4C Capture</strong> source, and change the card's line, for example to <code>capture://v4l2/video0/hw:1,0/?framerate=30&amp;video_size=1920x1080&amp;pixel_format=mjpeg</code>. Use a size, rate and format the card supports. Many USB 2.0 cards need <code>pixel_format=mjpeg</code> for 1080p at 30 frames a second; without it the picture is choppy. ah4c keeps what you set there.</p></div>
         <div class="field-validation tuner-capture-only" data-capture-error></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
         <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
@@ -2182,9 +2182,10 @@ function renderCaptureModes(card) {
     const field = name => card.querySelector(`[data-capture-field="${name}"]`);
     const allModes = captureModesOf(captureVideoOf(card));
     if (!allModes.length) {
-        // A card ah4c cannot see has no list of modes, so its format is left
-        // to the computer it is on: none is named unless its line in Channels
-        // DVR already names one, which is kept as it is.
+        // A card ah4c cannot see has no list of modes, so its picture is set
+        // in Channels DVR: the hidden size and rate hold what its line there
+        // says, or the guide's starting point, and no format is named unless
+        // that line names one.
         return;
     }
     const format = field('format');
@@ -2298,6 +2299,8 @@ function captureTunerSwitched(card) {
         card.querySelector('[data-capture-field="videoLocal"]').innerHTML = '';
         card.dataset.captureFilled = '';
         card.dataset.pixelFormat = '';
+        setCaptureSelect(card.querySelector('[data-capture-field="size"]'), '1920x1080');
+        setCaptureSelect(card.querySelector('[data-capture-field="framerate"]'), '30');
         card.querySelector('[data-tuner="encoderURL"]').value = '';
         if (!captureFound) findCaptureCards();
         fillCaptureFields(card);
