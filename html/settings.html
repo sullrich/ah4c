@@ -121,27 +121,38 @@
                 <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
                 <p id="tuner-lock-hint" class="section-help hidden">Environment-owned tuner numbers remain fixed. Other tuner numbers can still be managed here.</p>
                 <div id="no-tuners-hint" class="empty-state hidden"><strong>No tuners are configured.</strong> ah4c can start this way. Add one now, or return to Settings from the main navigation when you have the details.</div>
-                <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
                 <div id="tuners" class="tuner-grid"></div>
                 <datalist id="capture-audio-choices"></datalist>
-                <details id="capture-help" class="capture-passthrough hidden">
-                    <summary>Using USB capture cards</summary>
-                    <p class="setting-description">Channels DVR records a USB capture card itself. When you save, ah4c sets each card up in Channels DVR and fills in its tuner's stream address. The computer needs drivers for the card, and Channels DVR needs these devices from the computer the cards are plugged into. If Channels DVR runs in a container or a virtual machine, pass them through to it and restart it.</p>
-                    <ul id="capture-devices-list" class="capture-device-list"></ul>
-                    <div class="btn-row"><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
-                    <p class="setting-description"><strong>To set it up in Channels DVR yourself,</strong> add a custom channels source with the source type Text and paste this into it. Then give each channel's stream address to its tuner as a network encoder.</p>
-                    <textarea id="capture-manual-text" class="capture-manual-text" rows="6" readonly spellcheck="false" aria-label="Text to paste into Channels DVR"></textarea>
-                    <div class="btn-row"><button id="capture-manual-copy" class="btn" type="button">Copy</button><span id="capture-manual-status" class="muted" aria-live="polite"></span></div>
-                    <label class="capture-debug"><input type="checkbox" id="capture-debug"><span>Debug mode</span></label>
-                    <p class="setting-description">For testing only. A card's sound device may be left empty, to set up the picture alone on a computer with no sound driver; this is untested with Channels DVR. It also shows exactly what was sent to Channels DVR and what Channels DVR kept.</p>
-                    <div id="capture-debug-output" class="capture-debug-output hidden"></div>
-                </details>
                 <div class="btn-row">
                     <button id="add-tuner" class="btn" type="button">Add tuner</button>
                     <button id="edit-tuner-order" class="btn" type="button">Edit tuner order</button>
                     <button id="check-connections" class="btn" type="button">Check connections</button>
                     <span id="connection-check-status" class="muted"></span>
                 </div>
+            </section>
+            <section class="card settings-section" data-section="capture">
+                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>The computer needs drivers for the card.</strong> A capture card needs a picture driver and a sound driver on the computer itself; a container cannot supply them. Most Linux systems include both. This section says if one is missing.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
+                <p class="section-help">Every capture card plugged into this computer is listed here. Channels DVR records a card itself; to record from one, press <strong>Use on a new tuner</strong>, or choose the card as a tuner's video source under Tuners. <strong>Save all changes</strong> then sets the card up in Channels DVR.</p>
+                <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
+                <div id="capture-list" class="capture-list"></div>
+                <div class="btn-row"><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
+                <details id="capture-passthrough" class="capture-passthrough hidden" open>
+                    <summary>Giving the cards to Channels DVR</summary>
+                    <p class="setting-description">Channels DVR needs these devices from the computer the cards are plugged into. If Channels DVR runs in a container or a virtual machine, pass them through to it and restart it.</p>
+                    <ul id="capture-devices-list" class="capture-device-list"></ul>
+                </details>
+                <details id="capture-manual" class="capture-passthrough hidden">
+                    <summary>Or set it up in Channels DVR yourself</summary>
+                    <p class="setting-description">In Channels DVR, add a custom channels source with the source type Text and paste this into it. Then give each channel's stream address to a tuner as a network encoder.</p>
+                    <textarea id="capture-manual-text" class="capture-manual-text" rows="6" readonly spellcheck="false" aria-label="Text to paste into Channels DVR"></textarea>
+                    <div class="btn-row"><button id="capture-manual-copy" class="btn" type="button">Copy</button><span id="capture-manual-status" class="muted" aria-live="polite"></span></div>
+                </details>
+                <details id="capture-advanced" class="capture-passthrough">
+                    <summary>Advanced</summary>
+                    <label class="capture-debug"><input type="checkbox" id="capture-debug"><span>Debug mode</span></label>
+                    <p class="setting-description">For testing only. A card's sound device may be left empty, to set up the picture alone on a computer with no sound driver. It also shows exactly what was sent to Channels DVR and what Channels DVR kept.</p>
+                    <div id="capture-debug-output" class="capture-debug-output hidden"></div>
+                </details>
             </section>
 
             <section class="card settings-section" data-section="playback">
@@ -803,7 +814,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         </div>
         <div class="field-validation tuner-capture-only" data-capture-error></div>
         <div class="field tuner-network-only"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
-        <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
+        <div class="field tuner-network-only"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
         if (!canDeleteTunerCard(card)) return;
         card.remove();
@@ -1721,6 +1732,7 @@ function showWizardStep(step) {
     document.querySelectorAll('.settings-section, .settings-actions').forEach(el => el.classList.add('wizard-hidden'));
     const section = sections[wizardStep - 1];
     document.querySelector(`[data-section="${section}"]`).classList.remove('wizard-hidden');
+    if (section === 'tuners') document.querySelector('[data-section="capture"]').classList.remove('wizard-hidden');
     const actions = document.querySelector('.settings-actions');
     actions.classList.remove('wizard-hidden');
     byId('wizard-back').classList.remove('hidden');
@@ -1934,6 +1946,7 @@ function fillCaptureFields(card) {
         }
     }
     card.querySelector('[data-capture-stream]').textContent = channel ? `Channels DVR channel ${channel}` : 'Set up in Channels DVR when you save';
+    card.id = `tuner-card-${tunerNumber(card)}`;
 }
 
 function captureFieldChanged(card, input) {
@@ -1957,7 +1970,7 @@ function captureTunerSwitched(card) {
         const encoder = card.querySelector('[data-tuner="encoderURL"]');
         if (!captureChannelOf(encoder.value)) encoder.value = '';
         card.querySelector('[data-tuner="cmd"]').value = '';
-        byId('capture-help').open = true;
+        card.querySelector('[data-tuner="teecmd"]').value = '';
         if (!captureFound) findCaptureCards();
         fillCaptureFields(card);
     }
@@ -1986,12 +1999,13 @@ function findCaptureCards() {
     return captureFinding;
 }
 
-// Called whenever the tuner list is drawn: reads back what Channels DVR holds
-// for the capture tuners, so each shows its card, sound and picture again.
+// Called whenever the tuner list is drawn: finds the cards on this computer,
+// and reads back what Channels DVR holds for the capture tuners, so each shows
+// its card, sound and picture again.
 async function refreshCaptureTuners() {
+    if (!captureFound) findCaptureCards();
     renderCaptureHelp();
     if (!captureTunerCards().length) return;
-    if (!captureFound) findCaptureCards();
     try {
         const payload = await captureRequest('/api/capture/channels');
         captureKnown = {};
@@ -2006,7 +2020,7 @@ async function refreshCaptureTuners() {
         const cards = captureTunerCards();
         cards.forEach(card => {
             fillCaptureFields(card);
-            card.querySelector('[data-capture-error]').textContent = `Channels DVR could not be asked about this card right now: ${error.message}`;
+            card.querySelector('[data-capture-error]').textContent = 'Channels DVR could not be reached just now, so this card is shown by its channel. It keeps recording as it is.';
         });
         // What is shown is what is saved, so an untouched tuner saves as it is.
         captureSavedSignature = JSON.stringify(cards.map(captureDetailsOf));
@@ -2014,20 +2028,65 @@ async function refreshCaptureTuners() {
     renderCaptureHelp();
 }
 
+// The section lists every card plugged into this computer, whether a tuner
+// records it and which, so the cards are always in view, not only once a
+// tuner uses one.
 function renderCaptureHelp() {
-    const cards = captureTunerCards();
-    byId('capture-help').classList.toggle('hidden', !cards.length);
-    if (!cards.length) {
-        byId('capture-drivers').classList.add('hidden');
-        return;
-    }
+    const found = (captureFound && captureFound.cards) || [];
+    const tuners = captureTunerCards();
+    const users = new Map(tuners.map(card => [captureDetailsOf(card).video, card]).filter(([video]) => video));
     renderCaptureDrivers(captureFound && captureFound.drivers);
-    const details = cards.map(captureDetailsOf).filter(item => /^video\d+$/.test(item.video));
+    const list = byId('capture-list');
+    const locked = Boolean(state && state.tuners && state.tuners.countLocked);
+    const rows = found.map(item => {
+        const user = users.get(item.video);
+        const ip = user && user.querySelector('[data-tuner="tunerIP"]').value.trim();
+        const sound = item.audio ? `sound ${item.audio}` : 'no sound device';
+        const status = user
+            ? `<span class="connection-state--ready">Recorded by Tuner ${tunerNumber(user)}${ip ? ` (${escapeHTML(ip)})` : ''}</span>`
+            : '<span class="muted">Not used by a tuner yet</span>';
+        const action = user
+            ? `<button class="btn btn-sm" type="button" data-capture-show="${tunerNumber(user)}">Show tuner</button>`
+            : `<button class="btn btn-sm" type="button" data-capture-use="${escapeHTML(item.video)}" ${locked ? 'disabled' : ''}>Use on a new tuner</button>`;
+        return `<div class="capture-row"><div class="capture-row-text"><strong>${escapeHTML(item.name || 'USB capture card')}</strong><span class="muted">${escapeHTML(item.video)} · ${escapeHTML(sound)}</span>${status}</div>${action}</div>`;
+    });
+    list.innerHTML = rows.length ? rows.join('')
+        : `<div class="empty-state">${captureFound ? 'No capture card is plugged into this computer.' : 'Looking for capture cards…'}</div>`;
+    list.querySelectorAll('[data-capture-use]').forEach(button => button.addEventListener('click', () => useCaptureOnNewTuner(button.dataset.captureUse)));
+    list.querySelectorAll('[data-capture-show]').forEach(button => button.addEventListener('click', () => {
+        const card = [...byId('tuners').children].find(item => String(tunerNumber(item)) === button.dataset.captureShow);
+        if (card) showCaptureTuner(card);
+    }));
+    // The devices and the list to paste cover the cards tuners use, or every
+    // card found while none is used yet.
+    const details = tuners.length ? tuners.map(captureDetailsOf).filter(item => /^video\d+$/.test(item.video)) : found;
+    byId('capture-passthrough').classList.toggle('hidden', !details.length);
+    byId('capture-manual').classList.toggle('hidden', !details.length);
     const code = value => `<code>${escapeHTML(value)}</code>`;
     byId('capture-devices-list').innerHTML = details.map(item => `<li>${code('/dev/' + item.video)}</li>`).join('') + `<li>${code('/dev/snd')} <span class="muted">(the cards' sound)</span></li>`;
     // Only what ah4c itself would write: a sound device, or none in Debug mode.
-    byId('capture-manual-text').value = captureSourceTextFor(details.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio) || (!item.audio && captureDebug())));
+    byId('capture-manual-text').value = captureSourceTextFor(details.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio || '') || (!item.audio && captureDebug())));
     byId('capture-manual-status').textContent = '';
+}
+
+function showCaptureTuner(card) {
+    card.scrollIntoView({block: 'center', behavior: 'smooth'});
+    card.classList.add('tuner-card--flash');
+    setTimeout(() => card.classList.remove('tuner-card--flash'), 1600);
+}
+
+// Adds a tuner already set to record this card, with the card's sound
+// paired, and puts the cursor where the device's address goes.
+function useCaptureOnNewTuner(video) {
+    if (state.tuners.countLocked) return;
+    const card = appendTunerCard(undefined);
+    card.dataset.source = 'capture';
+    card.querySelector('[data-tuner-source]').value = 'capture';
+    const select = card.querySelector('[data-capture-field="video"]');
+    select.innerHTML = `<option value="${escapeHTML(video)}" selected></option>`;
+    captureTunerSwitched(card);
+    showCaptureTuner(card);
+    card.querySelector('[data-tuner="tunerIP"]').focus({preventScroll: true});
 }
 
 // Runs before every save. Channels DVR is asked only when a capture tuner is
