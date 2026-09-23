@@ -802,6 +802,11 @@ func putCaptureSource(ctx context.Context, dvrBase string, cards []captureCard) 
 		}
 		return fmt.Errorf("Channels DVR returned %s: %s", response.Status, message)
 	}
+	// Channels DVR keeps capturing with the old line until the source is read
+	// again, so a changed frame rate or format would otherwise not apply.
+	if err := refreshChannelsM3USource(ctx, http.DefaultClient, dvrBase, captureSourceKey); err != nil {
+		return fmt.Errorf("The capture source was written, but Channels DVR did not reload it: %w", err)
+	}
 	return nil
 }
 
