@@ -1441,6 +1441,7 @@ body.release-popover-open { overflow: hidden; }
 .tuner-card .field-validation, .tuner-card .connection-message { overflow-wrap: anywhere; }
 .tuner-card select { min-width: 0; max-width: 100%; }
 .tuner-card .capture-fields { margin-bottom: .8rem; }
+.capture-typed-video { width: 100%; margin-top: .4rem; }
 .capture-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: .6rem .8rem; }
 .capture-fields .field { margin-bottom: 0; min-width: 0; }
 .capture-fields input, .capture-fields select { width: 100%; }
