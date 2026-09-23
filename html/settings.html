@@ -2134,7 +2134,7 @@ function showTunerSource(card) {
     const local = capture && card.dataset.captureWhere === 'local';
     card.querySelectorAll('.tuner-capture-only').forEach(element => element.classList.toggle('hidden', !capture));
     card.querySelectorAll('.tuner-network-only').forEach(element => element.classList.toggle('hidden', capture));
-    card.querySelectorAll('.capture-remote-only').forEach(element => element.classList.toggle('hidden', local));
+    card.querySelectorAll('.capture-remote-only').forEach(element => element.classList.toggle('hidden', !capture || local));
     card.querySelectorAll('.capture-local-only').forEach(element => element.classList.toggle('hidden', !local));
     const select = card.querySelector('[data-tuner-source]');
     const option = select.querySelector('option[value="capture-local"]');
