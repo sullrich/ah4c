@@ -118,7 +118,7 @@
                 <div class="card-title settings-section-title"><span class="title-with-tip">Tuners <span class="hint">— order determines tuner number</span><span id="tuner-environment-info" class="info-tip-wrap hidden"><button class="info-tip" type="button" aria-label="How environment-managed tuners work" aria-describedby="tuner-environment-tooltip">i</button><span id="tuner-environment-tooltip" class="info-tooltip" role="tooltip">Tuners are managed by environment variables because <code>NUMBER_TUNERS</code> is set there. To prevent two tuner lists from conflicting, tuner editing is turned off on this page. Remove <code>NUMBER_TUNERS</code> and the related tuner variables from your container settings if you want to manage tuners here instead.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
                 <p class="section-help"><strong>Optional during setup:</strong> Add tuners now or return later. Each tuner's video comes from a network encoder or a USB capture card plugged into this computer; these values are specific to your hardware and cannot be guessed. Choose <strong>Edit tuner order</strong> to assign the exact tuner numbers you need.</p>
                 <div id="section-tuners" class="settings-grid settings-grid--compact"></div>
-                <p class="section-help"><strong>Before saving:</strong> Android devices may show an <em>Allow USB debugging</em> message that must be approved on the TV. When <strong>Use pyatv</strong> is enabled, use <strong>Pair</strong> next to each Apple TV and enter the PIN shown on the television. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
+                <p class="section-help"><strong>Before saving:</strong> use <strong>Pair</strong> next to each tuner. The window shows that tuner's TV picture, so you do not need to be in the same room. An Android device shows an <em>Allow USB debugging</em> message to approve with its own remote. When <strong>Use pyatv</strong> is enabled, enter the PIN the Apple TV shows instead. <strong>Save setup</strong> checks every configured tuner and encoder and will not continue until they are ready.</p>
                 <p id="tuner-lock-hint" class="section-help hidden">Environment-owned tuner numbers remain fixed. Other tuner numbers can still be managed here.</p>
                 <div id="no-tuners-hint" class="empty-state hidden"><strong>No tuners are configured.</strong> ah4c can start this way. Add one now, or return to Settings from the main navigation when you have the details.</div>
                 <div id="tuners" class="tuner-grid"></div>
@@ -254,6 +254,13 @@
                 </div>
                 <button id="apple-tv-pair-close" class="btn btn-sm modal-close" type="button" aria-label="Close Apple TV pairing">Close</button>
             </div>
+            <div id="apple-tv-pair-preview" class="pairing-preview hidden">
+                <video id="apple-tv-pair-video" class="hidden" controls muted></video>
+                <div id="apple-tv-pair-preview-start" class="preview-start hidden">
+                    <button id="apple-tv-pair-preview-retry" class="btn btn-primary" type="button">Retry preview</button>
+                </div>
+                <p id="apple-tv-pair-preview-hint" class="modal-hint"></p>
+            </div>
             <div id="apple-tv-pin-panel" class="hidden">
                 <div class="pairing-ready"><span class="connection-dot"></span><strong>Look at your Apple TV</strong></div>
                 <p>A four-digit PIN should be visible on the television. Enter all four numbers below.</p>
@@ -263,9 +270,14 @@
                     <div id="apple-tv-pin-error" class="field-validation" aria-live="polite"></div>
                 </div>
             </div>
+            <div id="adb-pair-panel" class="hidden">
+                <div class="pairing-ready"><span class="connection-dot"></span><strong>Look at your TV</strong></div>
+                <p>A message asking to <strong>Allow USB debugging</strong> should be on the screen. Use the device's own remote to check <strong>Always allow from this computer</strong>, then choose <strong>Allow</strong>. This window notices by itself when you have done it.</p>
+            </div>
             <div id="apple-tv-pair-status" class="pairing-status muted" aria-live="polite"></div>
             <div class="btn-row apple-tv-pair-actions">
                 <button id="apple-tv-pair-submit" class="btn btn-primary hidden" type="button">Finish pairing</button>
+                <button id="adb-pair-retry" class="btn btn-primary hidden" type="button">Check again</button>
                 <button id="apple-tv-pair-cancel" class="btn" type="button">Cancel</button>
             </div>
         </div>
@@ -302,7 +314,8 @@
                 <button id="tuner-preview-retry" class="btn btn-primary" type="button">Retry preview</button>
             </div>
             <p id="tuner-preview-hint" class="modal-hint"></p>
-            <div class="remote">
+            <p id="tuner-preview-note" class="preview-note hidden"></p>
+            <div id="tuner-preview-remote" class="remote">
                 <div class="remote-dpad">
                     <span></span>
                     <button class="btn" data-tuner-preview-action="up" type="button" title="Up"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg></button>
@@ -337,13 +350,10 @@ const sectionKeys = {
     startup: ['CREATE_M3US', 'UPDATE_M3US', 'USER_SCRIPT']
 };
 let state = null;
-let tunerPreviewPlayer = null;
 let tunerPreviewNumber = null;
-let tunerPreviewStallTimer = null;
-let tunerPreviewRestartTimer = null;
-let tunerPreviewLastFrames = 0;
-let tunerPreviewStallTicks = 0;
-let tunerPreviewDeadline = 0;
+let tunerPreviewRemote = false;
+let tunerPreview = null;
+let appleTVPairPreview = null;
 const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
 let remoteStreamerChoices = [];
@@ -358,11 +368,18 @@ let appleTVPairCard = null;
 let appleTVPairAbort = null;
 let appleTVPairFinishAbort = null;
 let appleTVPairGeneration = 0;
+let adbPairTimer = null;
+let adbPairAbort = null;
+let adbPairWaiting = false;
+const adbPairInterval = 3000;
+const adbPairLimit = 180000;
 let tunerOrderCards = [];
 let restartWaitStarted = 0;
 let restartWaitLimit = 30000;
 
 const byId = id => document.getElementById(id);
+tunerPreview = createEncoderPreview('tuner-preview-video', 'tuner-preview-start', 'tuner-preview-hint');
+appleTVPairPreview = createEncoderPreview('apple-tv-pair-video', 'apple-tv-pair-preview-start', 'apple-tv-pair-preview-hint');
 const escapeHTML = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
 // The preview player only learns that a stream failed, not why. After the
@@ -834,7 +851,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     card.querySelectorAll('[data-capture-field]').forEach(input => input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => captureFieldChanged(card, input)));
     showTunerSource(card);
     if (capture) fillCaptureFields(card);
-    card.querySelector('[data-pair-apple-tv]').addEventListener('click', () => openAppleTVPairing(card));
+    card.querySelector('[data-pair-apple-tv]').addEventListener('click', () => openDevicePairing(card));
     card.querySelectorAll('[data-tuner]').forEach(input => input.addEventListener('input', () => {
         input.classList.remove('input-invalid');
         const output = card.querySelector(`[data-tuner-error="${input.dataset.tuner}"]`);
@@ -849,11 +866,12 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
 
 function updateTunerPreviewButton(card) {
     const button = card.querySelector('[data-tuner-preview]');
-    const available = Boolean(state.tuners.previewAvailable?.[tunerNumber(card)]);
+    const available = Boolean(tunerPreviewSource(card));
     const configured = Boolean(card.querySelector('[data-tuner="encoderURL"]')?.value.trim());
     button.disabled = !available;
     const commanded = Boolean(card.querySelector('[data-tuner="cmd"]')?.value.trim());
-    button.title = available ? '' : (configured ? 'Save and restart ah4c to preview this encoder URL'
+    button.title = available ? '' : (configured ? 'Enter the full encoder address, starting with http:// or https://, to preview it'
+        : card.dataset.source === 'capture' ? 'Save to set this card up in Channels DVR, then preview it'
         : commanded ? 'A CMD cannot be previewed'
         : 'Add an encoder URL to enable preview');
 }
@@ -897,7 +915,8 @@ function updateTunerDeviceLabels() {
         if (label) label.innerHTML = pyatv ? 'Apple TV address' : 'Tuner IP <span class="muted">(device)</span>';
         if (input) input.placeholder = pyatv ? '192.168.1.25' : 'hostname:5555';
         if (pairButton) {
-            pairButton.classList.toggle('hidden', !pyatv);
+            pairButton.classList.remove('hidden');
+            pairButton.title = pyatv ? 'Pair this Apple TV with ah4c' : 'Connect this Android device to ah4c';
             pairButton.disabled = !input?.value.trim();
         }
     });
@@ -997,129 +1016,198 @@ function closeTunerOrderEditor() {
     tunerOrderCards = [];
 }
 
-function openTunerPreview(card) {
-    tunerPreviewNumber = tunerNumber(card);
-    byId('tuner-preview-number').textContent = tunerPreviewNumber;
-    byId('tuner-preview-title').textContent = `Tuner ${tunerPreviewNumber} preview`;
-    byId('tuner-preview-modal').classList.add('open');
-    startTunerPreviewClicked();
-}
-
-function startTunerPreviewClicked() {
-    if (tunerPreviewNumber === null) return;
-    tunerPreviewSession++;
-    tunerPreviewNote = '';
-    tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
-    byId('tuner-preview-start').classList.add('hidden');
-    byId('tuner-preview-video').classList.remove('hidden');
-    startTunerPreview();
-}
-
-function startTunerPreview() {
-    stopTunerPreview();
-    const video = byId('tuner-preview-video');
-    const retry = byId('tuner-preview-start');
-    const hint = byId('tuner-preview-hint');
-    hint.textContent = tunerPreviewNote ? `Waiting for the encoder. ${tunerPreviewNote}` : 'Loading the encoder output from the currently running configuration…';
-    if (!window.mpegts || !mpegts.isSupported()) {
-        video.classList.add('hidden');
-        retry.classList.remove('hidden');
-        hint.textContent = 'This browser cannot display the tuner preview.';
-        return;
+// One encoder picture: the Settings preview modal and the device pairing
+// window each own one. Every behavior of the original tuner preview is kept:
+// jump to the live edge, retry two seconds after an error or end, restart when
+// no new frames arrive for three checks, and give up after a quiet grace.
+function createEncoderPreview(videoID, retryID, hintID) {
+    const preview = {player:null, source:null, stallTimer:null, restartTimer:null, lastFrames:0, stallTicks:0, deadline:0};
+    const video = () => byId(videoID);
+    const hint = text => { byId(hintID).textContent = text; };
+    function stopWatchdog() {
+        if (preview.stallTimer) {
+            window.clearInterval(preview.stallTimer);
+            preview.stallTimer = null;
+        }
+        if (preview.restartTimer) {
+            window.clearTimeout(preview.restartTimer);
+            preview.restartTimer = null;
+        }
     }
-    const previewCard = [...byId('tuners').children].find(item => tunerNumber(item) === tunerPreviewNumber);
-    const previewRoute = previewCard && previewCard.dataset.source === 'capture' ? 'capture-preview' : 'preview';
-    tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/${previewRoute}`}, {isLive:true});
-    tunerPreviewPlayer.attachMediaElement(video);
-    video.addEventListener('loadedmetadata', () => {
-        if (isFinite(video.duration)) video.currentTime = video.duration;
-        hint.textContent = 'Showing the encoder output from the currently running configuration.';
-    }, {once:true});
-    video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
-    tunerPreviewPlayer.on(mpegts.Events.ERROR, handleTunerPreviewError);
-    tunerPreviewPlayer.load();
-    tunerPreviewPlayer.play().catch(() => {});
-    startTunerPreviewWatchdog();
-}
-
-function stopTunerPreview() {
-    stopTunerPreviewWatchdog();
-    if (tunerPreviewPlayer) {
-        tunerPreviewPlayer.destroy();
-        tunerPreviewPlayer = null;
+    function stop() {
+        stopWatchdog();
+        if (preview.player) {
+            preview.player.destroy();
+            preview.player = null;
+        }
     }
-}
-
-function startTunerPreviewWatchdog() {
-    tunerPreviewLastFrames = 0;
-    tunerPreviewStallTicks = 0;
-    tunerPreviewStallTimer = window.setInterval(() => {
-        if (!tunerPreviewPlayer || tunerPreviewNumber === null) return;
-        const video = byId('tuner-preview-video');
-        if (video.paused && !video.ended) {
-            tunerPreviewStallTicks = 0;
+    function showRetry(text) {
+        stop();
+        preview.deadline = 0;
+        video().classList.add('hidden');
+        byId(retryID).classList.remove('hidden');
+        hint(text);
+    }
+    function restartSoon() {
+        if (preview.restartTimer) return;
+        preview.restartTimer = window.setTimeout(() => {
+            preview.restartTimer = null;
+            restart();
+        }, 2000);
+    }
+    function restart() {
+        if (!preview.source || document.hidden) return;
+        if (Date.now() > preview.deadline) {
+            showRetry('No video from the encoder. If the device was asleep, give it a moment and retry.');
             return;
         }
-        const frames = tunerPreviewPlayer.statisticsInfo?.decodedFrames || 0;
-        if (frames === tunerPreviewLastFrames) {
-            tunerPreviewStallTicks++;
-            if (tunerPreviewStallTicks >= 3) {
-                restartTunerPreview();
+        hint('Waiting for video from the encoder…');
+        start();
+    }
+    function startWatchdog() {
+        preview.lastFrames = 0;
+        preview.stallTicks = 0;
+        preview.stallTimer = window.setInterval(() => {
+            if (!preview.player || !preview.source) return;
+            if (video().paused && !video().ended) {
+                preview.stallTicks = 0;
                 return;
             }
-        } else {
-            tunerPreviewStallTicks = 0;
-            tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
-            byId('tuner-preview-hint').textContent = 'Showing the encoder output from the currently running configuration.';
+            const frames = preview.player.statisticsInfo?.decodedFrames || 0;
+            if (frames === preview.lastFrames) {
+                preview.stallTicks++;
+                if (preview.stallTicks >= 3) {
+                    restart();
+                    return;
+                }
+            } else {
+                preview.stallTicks = 0;
+                preview.deadline = Date.now() + tunerPreviewGrace;
+                hint(preview.source.showing);
+            }
+            preview.lastFrames = frames;
+        }, 2000);
+    }
+    function start() {
+        stop();
+        const element = video();
+        hint(preview.source.loading);
+        if (!window.mpegts || !mpegts.isSupported()) {
+            element.classList.add('hidden');
+            byId(retryID).classList.remove('hidden');
+            hint('This browser cannot display the tuner preview.');
+            return;
         }
-        tunerPreviewLastFrames = frames;
-    }, 2000);
+        const player = mpegts.createPlayer({type:'mse', isLive:true, url:preview.source.url}, {isLive:true});
+        preview.player = player;
+        player.attachMediaElement(element);
+        element.addEventListener('loadedmetadata', () => {
+            if (preview.player !== player) return;
+            // A live stream can report an endless duration, which cannot be
+            // seeked to and would stop the hint below from updating.
+            if (Number.isFinite(element.duration)) element.currentTime = element.duration;
+            hint(preview.source.showing);
+        }, {once:true});
+        element.addEventListener('ended', () => {
+            if (preview.player === player) restartSoon();
+        }, {once:true});
+        player.on(mpegts.Events.ERROR, (type, detail, info) => {
+            if (preview.player !== player) return;
+            // A preview of an unsaved address is refused while a recording or
+            // live stream is starting or playing. Stop asking until the person
+            // retries, rather than knocking every two seconds during a tune.
+            if (preview.source.staged && info?.code === 409) {
+                showRetry('A recording or live stream is starting or playing, so the preview is paused. Retry when it has finished.');
+                return;
+            }
+            restartSoon();
+        });
+        player.load();
+        player.play().catch(() => {});
+        startWatchdog();
+    }
+    return {
+        open(source) {
+            preview.source = source;
+            this.retry();
+        },
+        retry() {
+            if (!preview.source) return;
+            preview.deadline = Date.now() + tunerPreviewGrace;
+            byId(retryID).classList.add('hidden');
+            video().classList.remove('hidden');
+            start();
+        },
+        extend() {
+            if (preview.deadline) preview.deadline = Date.now() + tunerPreviewGrace;
+        },
+        close() {
+            stop();
+            preview.deadline = 0;
+            preview.source = null;
+        },
+        stop,
+    };
 }
 
-function stopTunerPreviewWatchdog() {
-    if (tunerPreviewStallTimer) {
-        window.clearInterval(tunerPreviewStallTimer);
-        tunerPreviewStallTimer = null;
+// The live route plays the encoder of the running tuner in this slot. An
+// address that has not been saved and applied yet is played through the
+// staged preview instead, which gives way to any tune.
+// The pairing window always uses the route that gives way to a tune: it can
+// stay open for minutes, and the running tuner's own route does not.
+function tunerPreviewSource(card, pairing = false) {
+    const encoderURL = card.querySelector('[data-tuner="encoderURL"]')?.value.trim() || '';
+    if (!encoderURL || httpURLMessage(encoderURL)) return null;
+    const number = tunerNumber(card);
+    const live = state.tuners.live?.[number];
+    const tunerIP = card.querySelector('[data-tuner="tunerIP"]')?.value.trim() || '';
+    if (!pairing && live && live.encoderURL === encoderURL) {
+        return {
+            // A capture tuner's picture goes through the route that takes a
+            // graphics driver's stray text out of it; see capturePreviewHandler.
+            url:card.dataset.source === 'capture' ? `/api/tuner/${number}/capture-preview` : `/api/tuner/${number}/preview`,
+            staged:false,
+            remote:live.tunerIP === tunerIP,
+            loading:'Loading the encoder output from the currently running configuration…',
+            showing:'Showing the encoder output from the currently running configuration.'
+        };
     }
-    if (tunerPreviewRestartTimer) {
-        window.clearTimeout(tunerPreviewRestartTimer);
-        tunerPreviewRestartTimer = null;
-    }
+    return {
+        url:`/api/config/preview?url=${encodeURIComponent(encoderURL)}`,
+        staged:true,
+        remote:false,
+        loading:'Loading the picture from the encoder address in this card…',
+        showing:'Showing the picture from the encoder address in this card. It has not been saved yet.'
+    };
 }
 
-function restartTunerPreviewSoon() {
-    if (tunerPreviewRestartTimer) return;
-    tunerPreviewRestartTimer = window.setTimeout(() => {
-        tunerPreviewRestartTimer = null;
-        restartTunerPreview();
-    }, 2000);
-}
-
-function restartTunerPreview() {
-    if (tunerPreviewNumber === null || document.hidden) return;
-    if (Date.now() > tunerPreviewDeadline) {
-        stopTunerPreview();
-        tunerPreviewDeadline = 0;
-        byId('tuner-preview-video').classList.add('hidden');
-        byId('tuner-preview-start').classList.remove('hidden');
-        byId('tuner-preview-hint').textContent = 'No video from the encoder. If the device was asleep, give it a moment and retry.';
-        return;
-    }
-    byId('tuner-preview-hint').textContent = 'Waiting for video from the encoder…';
-    startTunerPreview();
+function openTunerPreview(card) {
+    const source = tunerPreviewSource(card);
+    if (!source) return;
+    appleTVPairPreview.close();
+    tunerPreviewNumber = tunerNumber(card);
+    tunerPreviewRemote = source.remote;
+    byId('tuner-preview-number').textContent = tunerPreviewNumber;
+    byId('tuner-preview-title').textContent = `Tuner ${tunerPreviewNumber} preview`;
+    byId('tuner-preview-remote').classList.toggle('hidden', !source.remote);
+    const note = byId('tuner-preview-note');
+    note.textContent = source.remote ? '' : 'Use the device\'s own remote while you watch here. The on-screen remote is available after this tuner is saved and ah4c restarts.';
+    note.classList.toggle('hidden', !note.textContent);
+    byId('tuner-preview-modal').classList.add('open');
+    tunerPreview.open(source);
 }
 
 function closeTunerPreview() {
-    stopTunerPreview();
-    tunerPreviewDeadline = 0;
+    tunerPreview.close();
     tunerPreviewNumber = null;
+    tunerPreviewRemote = false;
     byId('tuner-preview-modal').classList.remove('open');
 }
 
 async function sendTunerPreviewKey(action) {
-    if (tunerPreviewNumber === null) return;
+    if (tunerPreviewNumber === null || !tunerPreviewRemote) return;
     if (action === 'reboot' && !window.confirm('Reboot this device?')) return;
-    if (tunerPreviewDeadline) tunerPreviewDeadline = Date.now() + tunerPreviewGrace;
+    tunerPreview.extend();
     const hint = byId('tuner-preview-hint');
     try {
         const response = await fetch(`/api/tuner/${tunerPreviewNumber}/control/${action}`, {method:'POST'});
@@ -1127,6 +1215,18 @@ async function sendTunerPreviewKey(action) {
     } catch (_) {
         hint.textContent = 'Control failed. This device may not be reachable over ADB.';
     }
+}
+
+function startAppleTVPairPreview(card, showing) {
+    appleTVPairPreview.close();
+    const source = tunerPreviewSource(card, true);
+    byId('apple-tv-pair-preview').classList.toggle('hidden', !source);
+    if (!source) return;
+    tunerPreview.close();
+    appleTVPairPreview.open({
+        ...source,
+        showing
+    });
 }
 
 function selectedStreamerPath(root = document) {
@@ -1314,6 +1414,21 @@ function tunerConfigurationSnapshot() {
     });
 }
 
+function openDevicePairing(card) {
+    if (document.querySelector('[data-setting="PYATV"]')?.value === 'true') openAppleTVPairing(card);
+    else openAndroidPairing(card);
+}
+
+function stopAndroidPairingChecks() {
+    if (adbPairTimer) {
+        window.clearTimeout(adbPairTimer);
+        adbPairTimer = null;
+    }
+    adbPairAbort?.abort();
+    adbPairAbort = null;
+    adbPairWaiting = false;
+}
+
 function openAppleTVPairing(card) {
     const target = card.querySelector('[data-tuner="tunerIP"]').value.trim();
     const generation = ++appleTVPairGeneration;
@@ -1321,9 +1436,14 @@ function openAppleTVPairing(card) {
     appleTVPairAbort = null;
     appleTVPairFinishAbort?.abort();
     appleTVPairFinishAbort = null;
+    stopAndroidPairingChecks();
     appleTVPairCard = card;
     card.querySelector('[data-pair-apple-tv]').disabled = true;
     appleTVPairSession = '';
+    byId('apple-tv-pair-title').textContent = 'Pair Apple TV';
+    byId('apple-tv-pair-close').setAttribute('aria-label', 'Close Apple TV pairing');
+    byId('adb-pair-panel').classList.add('hidden');
+    byId('adb-pair-retry').classList.add('hidden');
     byId('apple-tv-pair-target').textContent = `Apple TV: ${target}`;
     byId('apple-tv-pin-panel').classList.add('hidden');
     byId('apple-tv-pair-submit').classList.add('hidden');
@@ -1335,7 +1455,93 @@ function openAppleTVPairing(card) {
     byId('apple-tv-pin').value = '';
     byId('apple-tv-pair-modal').classList.add('open');
     byId('apple-tv-pair-modal').dataset.target = target;
+    startAppleTVPairPreview(card, 'Showing this tuner\'s TV picture, so you can read the PIN here.');
     startAppleTVPairing(generation);
+}
+
+// Android devices approve ah4c on their own screen, so this window shows that
+// screen and keeps asking the device, without restarting the handshake, until
+// Allow has been chosen with the device's remote.
+function openAndroidPairing(card) {
+    const target = card.querySelector('[data-tuner="tunerIP"]').value.trim();
+    const generation = ++appleTVPairGeneration;
+    appleTVPairAbort?.abort();
+    appleTVPairAbort = null;
+    appleTVPairFinishAbort?.abort();
+    appleTVPairFinishAbort = null;
+    stopAndroidPairingChecks();
+    appleTVPairCard = card;
+    appleTVPairSession = '';
+    card.querySelector('[data-pair-apple-tv]').disabled = true;
+    byId('apple-tv-pair-title').textContent = 'Connect Android device';
+    byId('apple-tv-pair-close').setAttribute('aria-label', 'Close Android device connection');
+    byId('apple-tv-pair-target').textContent = `Device: ${target}`;
+    byId('apple-tv-pin-panel').classList.add('hidden');
+    byId('apple-tv-pair-submit').classList.add('hidden');
+    byId('adb-pair-panel').classList.add('hidden');
+    byId('adb-pair-retry').classList.add('hidden');
+    byId('apple-tv-pair-cancel').textContent = 'Cancel';
+    byId('apple-tv-pair-cancel').disabled = false;
+    byId('apple-tv-pair-status').textContent = 'Connecting to the device…';
+    byId('apple-tv-pair-modal').classList.add('open');
+    startAppleTVPairPreview(card, 'Showing this tuner\'s TV picture, so you can see the message here.');
+    checkAndroidPairing(generation, Date.now());
+}
+
+function retryAndroidPairing() {
+    if (!appleTVPairCard) return;
+    byId('adb-pair-retry').classList.add('hidden');
+    // Check again starts a fresh handshake, which brings back a message that
+    // was missed or timed out; only the automatic checks leave it alone.
+    adbPairWaiting = false;
+    byId('apple-tv-pair-status').textContent = 'Checking the device again…';
+    checkAndroidPairing(appleTVPairGeneration, Date.now());
+}
+
+async function checkAndroidPairing(generation, started) {
+    const card = appleTVPairCard;
+    if (!card || generation !== appleTVPairGeneration) return;
+    adbPairTimer = null;
+    const status = byId('apple-tv-pair-status');
+    const tuner = Object.fromEntries([...card.querySelectorAll('[data-tuner]')].map(input => [input.dataset.tuner, input.value]));
+    const controller = new AbortController();
+    adbPairAbort = controller;
+    let device = null;
+    try {
+        const response = await fetch('/api/config/check-connection', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({index:tunerNumber(card), tuner, usePyatv:false, recheck:adbPairWaiting}), signal:controller.signal});
+        const payload = await response.json().catch(() => ({}));
+        if (generation !== appleTVPairGeneration) return;
+        if (response.status === 409) throw new Error('A recording or live stream is starting or playing. ah4c will try again when it has finished.');
+        if (!response.ok) throw new Error(payload.error || 'ah4c could not check the device.');
+        device = payload.device;
+    } catch (error) {
+        if (error.name === 'AbortError' || generation !== appleTVPairGeneration) return;
+        status.textContent = error.message;
+    } finally {
+        if (adbPairAbort === controller) adbPairAbort = null;
+    }
+    if (device) {
+        setConnectionState(card, 'device', device.state, device.message);
+        card.querySelector('[data-pair-apple-tv]').disabled = true;
+        // Only a device that has answered changes the waiting state: a passing
+        // error must not make the next check replace the message on the TV.
+        if (device.state === 'authorize' || device.state === 'ready') adbPairWaiting = device.state === 'authorize';
+        byId('adb-pair-panel').classList.toggle('hidden', !adbPairWaiting);
+        if (device.state === 'ready') {
+            status.textContent = 'Connected. ah4c can now control this Android device.';
+            byId('apple-tv-pair-cancel').textContent = 'Done';
+            return;
+        }
+        status.textContent = adbPairWaiting ? 'Waiting for Allow to be chosen on the TV…' : `${device.message}. ah4c will keep trying.`;
+    }
+    if (Date.now() - started >= adbPairLimit) {
+        status.textContent = adbPairWaiting
+            ? 'Allow has not been chosen yet. When the message is on the TV, choose Allow and then Check again.'
+            : 'The device is still not ready. Check its address and that it is turned on, then choose Check again.';
+        byId('adb-pair-retry').classList.remove('hidden');
+        return;
+    }
+    adbPairTimer = window.setTimeout(() => checkAndroidPairing(generation, started), adbPairInterval);
 }
 
 async function startAppleTVPairing(generation) {
@@ -1409,6 +1615,8 @@ async function closeAppleTVPairing() {
     if (sessionID) {
         fetch('/api/config/apple-tv-pairing', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sessionId:sessionID})}).catch(() => {});
     }
+    appleTVPairPreview.close();
+    stopAndroidPairingChecks();
     appleTVPairSession = '';
     appleTVPairCard = null;
     byId('apple-tv-pair-cancel').textContent = 'Cancel';
@@ -1792,7 +2000,8 @@ byId('tuner-order-modal').addEventListener('click', event => {
     if (event.target === byId('tuner-order-modal')) closeTunerOrderEditor();
 });
 byId('tuner-preview-close').addEventListener('click', closeTunerPreview);
-byId('tuner-preview-retry').addEventListener('click', startTunerPreviewClicked);
+byId('tuner-preview-retry').addEventListener('click', () => tunerPreview.retry());
+byId('apple-tv-pair-preview-retry').addEventListener('click', () => appleTVPairPreview.retry());
 document.querySelectorAll('[data-tuner-preview-action]').forEach(button => {
     button.addEventListener('click', () => sendTunerPreviewKey(button.dataset.tunerPreviewAction));
 });
@@ -1801,6 +2010,7 @@ byId('tuner-preview-modal').addEventListener('click', event => {
 });
 byId('check-connections').addEventListener('click', checkConnections);
 byId('apple-tv-pair-submit').addEventListener('click', finishAppleTVPairing);
+byId('adb-pair-retry').addEventListener('click', retryAndroidPairing);
 byId('apple-tv-pair-cancel').addEventListener('click', closeAppleTVPairing);
 byId('apple-tv-pair-close').addEventListener('click', closeAppleTVPairing);
 byId('apple-tv-pin').addEventListener('input', event => {
@@ -1821,7 +2031,10 @@ document.addEventListener('keydown', event => {
     if (byId('tuner-order-modal').classList.contains('open')) closeTunerOrderEditor();
     if (byId('tuner-preview-modal').classList.contains('open')) closeTunerPreview();
 });
-window.addEventListener('pagehide', stopTunerPreview);
+window.addEventListener('pagehide', () => {
+    tunerPreview.stop();
+    appleTVPairPreview.stop();
+});
 byId('preroll-file').addEventListener('change', renderPreroll);
 byId('upload-preroll').addEventListener('click', uploadPreroll);
 byId('delete-preroll').addEventListener('click', requestDeletePreroll);

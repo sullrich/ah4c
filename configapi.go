@@ -361,8 +361,10 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		list = tunersFromEnvironment()
 	}
 	previewAvailable := make([]bool, len(tuners))
+	live := make([]gin.H, len(tuners))
 	for i := range tuners {
 		previewAvailable[i] = strings.TrimSpace(tuners[i].url) != ""
+		live[i] = gin.H{"encoderURL": tuners[i].url, "tunerIP": tuners[i].tunerip}
 	}
 	items := make([]gin.H, 0, len(list))
 	for i, tuner := range list {
@@ -390,7 +392,7 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		}
 		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
 	}
-	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "previewAvailable": previewAvailable, "list": items}
+	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "previewAvailable": previewAvailable, "live": live, "list": items}
 }
 
 func tunerTopologyLocked(locked map[string]bool) bool {
