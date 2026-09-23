@@ -813,8 +813,8 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
             <div class="field"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30">30</option></select></div>
         </div>
         <div class="field-validation tuner-capture-only" data-capture-error></div>
-        <div class="field tuner-network-only"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
-        <div class="field tuner-network-only"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
+        <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
+        <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
         if (!canDeleteTunerCard(card)) return;
         card.remove();
@@ -1965,12 +1965,11 @@ function captureFieldChanged(card, input) {
 
 function captureTunerSwitched(card) {
     if (card.dataset.source === 'capture') {
-        // A network address or CMD left behind would be saved as this card's
-        // video, so both go; Save fills in the card's stream address.
+        // A network address left behind would be saved as this card's stream,
+        // so it goes; Save fills in the card's stream address. CMD and TEECMD
+        // stay, as on any tuner.
         const encoder = card.querySelector('[data-tuner="encoderURL"]');
         if (!captureChannelOf(encoder.value)) encoder.value = '';
-        card.querySelector('[data-tuner="cmd"]').value = '';
-        card.querySelector('[data-tuner="teecmd"]').value = '';
         if (!captureFound) findCaptureCards();
         fillCaptureFields(card);
     }
@@ -2195,7 +2194,7 @@ function renderCaptureDrivers(drivers) {
         steps.push('The driver is there but did not pick the card up. Unplug the card and plug it back in.');
     }
     if (modules.some(module => !loaded.includes(module))) {
-        const soundOnly = sound.length && !video.length ? ' Without a sound driver the card records no sound; <strong>Debug mode</strong>, under Using USB capture cards below, can set it up with the picture only, for testing.' : '';
+        const soundOnly = sound.length && !video.length ? ' Without a sound driver the card records no sound; <strong>Debug mode</strong>, under Advanced below, can set it up with the picture only, for testing.' : '';
         steps.push(`Install the driver for your system on the computer itself, not in a container, and restart.${soundOnly}`);
     }
     box.innerHTML = `<strong>${heading}</strong><p>${names.map(escapeHTML).join(', ')}</p><p>${steps.join(' ')} Then press <strong>Find cards again</strong>.</p>`;
