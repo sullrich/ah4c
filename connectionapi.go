@@ -111,9 +111,15 @@ func checkADBConnection(ctx context.Context, target string, recheck bool) connec
 				// person is still reaching for the remote.
 				return connectionCheckResult{State: "authorize", Message: "Waiting for Allow USB debugging to be approved on the Android device"}
 			}
-			// A fresh ADB handshake makes Android show its authorization dialog.
-			// Return immediately so the browser never waits for the person to find
-			// the remote and approve it.
+			// The connect above was a new connection, and a new connection is
+			// what makes Android show its message: it is on the screen now.
+			// Connecting again would replace it with a second one.
+			if !strings.Contains(strings.ToLower(connectOutput), "already connected") {
+				return connectionCheckResult{State: "authorize", Message: "Look at the Android device and approve Allow USB debugging, then check again"}
+			}
+			// An old connection that was never allowed shows nothing, so a fresh
+			// handshake brings the message back. Return immediately so the
+			// browser never waits for the person to find the remote.
 			_, _ = boundedCommand(ctx, time.Second, "adb", "disconnect", address)
 			_, _ = boundedCommand(ctx, 2500*time.Millisecond, "adb", "connect", address)
 			return connectionCheckResult{State: "authorize", Message: "Look at the Android device and approve Allow USB debugging, then check again"}
