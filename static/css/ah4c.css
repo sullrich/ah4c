@@ -1287,6 +1287,9 @@ body.release-popover-open { overflow: hidden; }
   text-align: center;
 }
 .pairing-status { min-height: 1.4rem; margin-top: .8rem; }
+.pairing-preview { margin-bottom: .9rem; }
+.pairing-preview video { border-radius: var(--radius-sm); background: #000; }
+.preview-note { margin: .6rem 0 0; padding: .6rem .75rem; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: .8rem; line-height: 1.5; }
 .apple-tv-pair-actions { margin-top: .6rem; }
 
 .remote {
