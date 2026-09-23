@@ -1449,6 +1449,7 @@ body.release-popover-open { overflow: hidden; }
 .capture-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: .6rem .8rem; }
 .capture-fields .field { margin-bottom: 0; min-width: 0; }
 .capture-fields input, .capture-fields select { width: 100%; }
+.tuner-card .capture-remote-help { margin: 0 0 .9rem; }
 .capture-passthrough { margin-top: .9rem; }
 .capture-passthrough summary { cursor: pointer; }
 .capture-device-list { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .8rem; }
