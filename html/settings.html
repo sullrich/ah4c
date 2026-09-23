@@ -2228,7 +2228,11 @@ function fillCaptureFields(card) {
     const known = captureKnown[channel];
     const found = captureFoundCards();
     if (!card.dataset.captureWhere) {
-        card.dataset.captureWhere = known && found.some(item => item.video === known.video) ? 'local' : 'remote';
+        // Settled only once both the cards here and what Channels DVR holds
+        // are known: decided earlier, a saved card on this computer came
+        // back as one on another computer and stayed that way.
+        const where = known && found.some(item => item.video === known.video) ? 'local' : 'remote';
+        if (where === 'local' || !channel || (captureFound && captureKnownLoaded)) card.dataset.captureWhere = where;
     }
     const local = card.dataset.captureWhere === 'local';
     let chosen = captureVideoOf(card) || (known && known.video) || '';
