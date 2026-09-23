@@ -101,6 +101,38 @@ atvConnections() {
   done
 }
 
+# Check if a given script is already present in the appropriate scripts directory, and if not, copy it
+checkScripts() {
+
+  local scripts=($@)
+  mkdir -p ./scripts/firetv/directv
+  [[ -n "$streamerAppValid" ]] && mkdir -p ./$STREAMER_APP
+  #scripts=( prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh )
+  for script in "${scripts[@]}"
+    do
+      if [ ! -f /opt/scripts/firetv/directv/$script ] && [ -f /tmp/scripts/firetv/directv/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
+        cp /tmp/scripts/firetv/directv/$script ./scripts/firetv/directv 2>/dev/null \
+        && chmod +x ./scripts/firetv/directv/$script \
+        && echo "No existing ./scripts/firetv/directv/$script found or UPDATE_SCRIPTS set to true"
+      else
+        if [ -f /tmp/scripts/firetv/directv/$script ]; then
+          echo "Existing ./scripts/firetv/directv/$script found, and will be preserved"
+        fi
+      fi
+
+      [[ -n "$streamerAppValid" ]] || continue
+      if [ ! -f /opt/$STREAMER_APP/$script ] && [ -f /tmp/$STREAMER_APP/$script ] || [[ $UPDATE_SCRIPTS == "true" ]]; then
+        cp /tmp/$STREAMER_APP/$script ./$STREAMER_APP 2>/dev/null \
+        && chmod +x ./$STREAMER_APP/$script \
+        && echo "No existing ./$STREAMER_APP/$script found or UPDATE_SCRIPTS set to true"
+      else
+        if [ -f /tmp/$STREAMER_APP/$script ]; then
+          echo "Existing ./$STREAMER_APP/$script found, and will be preserved"
+        fi
+      fi
+  done
+}
+
 # A package may contain any number of helpers, but these are its three entry points.
 scriptPackageComplete() {
   local dir="$1" file
@@ -109,25 +141,37 @@ scriptPackageComplete() {
   done
 }
 
-# Download only the configured streamer directory, never the repository's full scripts tree.
-fetchConfiguredScripts() {
-  local work api name url packageTarget packageParent packageName stage backup
+# Settings may save the folder as ./scripts/x/ or scripts/x; every step below
+# wants scripts/x, and none of them may touch a path outside ./scripts.
+prepareStreamerApp() {
+  local target backup
   STREAMER_APP="${STREAMER_APP#./}"
   while [[ "$STREAMER_APP" == */ ]]; do STREAMER_APP="${STREAMER_APP%/}"; done
   export STREAMER_APP
+  streamerAppValid=""
   [[ -n "$STREAMER_APP" ]] || { echo "No STREAMER_APP configured; no tuner scripts requested"; return; }
   [[ "$STREAMER_APP" =~ ^scripts/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]] || { echo "WARNING: Invalid STREAMER_APP path '$STREAMER_APP'"; return; }
-  packageTarget="/opt/$STREAMER_APP"
-  packageParent="${packageTarget%/*}"
-  packageName="${packageTarget##*/}"
-  backup="$packageParent/.${packageName}.backup"
-  if ! scriptPackageComplete "$packageTarget" && scriptPackageComplete "$backup"; then
-    [ -e "$packageTarget" ] && rm -rf "$packageTarget"
-    mv "$backup" "$packageTarget" && echo "Restored the previous $STREAMER_APP package after an interrupted update"
-  elif scriptPackageComplete "$packageTarget" && [ -e "$backup" ]; then
-    rm -rf "$backup"
+  streamerAppValid=true
+  # An earlier version swapped whole folders and kept the old one aside while
+  # it did. Put that one back only where nothing has taken its place: a folder
+  # that exists is the user's, complete or not.
+  target="/opt/$STREAMER_APP"
+  backup="${target%/*}/.${target##*/}.backup"
+  if [ ! -e "$target" ] && scriptPackageComplete "$backup"; then
+    mv "$backup" "$target" && echo "Restored the previous $STREAMER_APP package after an interrupted update"
   fi
-  if scriptPackageComplete "/opt/$STREAMER_APP" && [[ "${UPDATE_SCRIPTS,,}" != "true" ]]; then
+}
+
+# checkScripts copies what this image carries. A selection it does not carry
+# comes from sullrich/ah4c on GitHub under the same rule: a file already here
+# is kept unless UPDATE_SCRIPTS is true, and nothing here is ever removed,
+# because the folder may hold the user's own edits and helpers.
+fetchConfiguredScripts() {
+  local work api name url file target
+  [[ -n "$streamerAppValid" ]] || return
+  [ -d "/tmp/$STREAMER_APP" ] && return
+  target="/opt/$STREAMER_APP"
+  if scriptPackageComplete "$target" && [[ "${UPDATE_SCRIPTS,,}" != "true" ]]; then
     echo "Existing $STREAMER_APP scripts found; GitHub was not checked"
     return
   fi
@@ -136,7 +180,7 @@ fetchConfiguredScripts() {
   work=$(mktemp -d /tmp/ah4c-streamer.XXXXXX) || return
   api="https://api.github.com/repos/sullrich/ah4c/contents/$STREAMER_APP?ref=main"
   if ! curl -fsSL --connect-timeout 3 --max-time 8 "$api" -o "$work/files.json"; then
-    if scriptPackageComplete "/opt/$STREAMER_APP"; then
+    if scriptPackageComplete "$target"; then
       echo "WARNING: GitHub could not be reached; continuing with the complete local $STREAMER_APP package"
     else
       echo "WARNING: GitHub could not be reached and $STREAMER_APP is not complete locally; it needs bmitune.sh, prebmitune.sh, and stopbmitune.sh"
@@ -159,32 +203,21 @@ fetchConfiguredScripts() {
     rm -rf "$work"
     return
   fi
-  if ! mkdir -p "$packageParent"; then
+  if ! mkdir -p "$target"; then
     echo "WARNING: Could not prepare the local folder for $STREAMER_APP"
     rm -rf "$work"
     return
   fi
-  stage=$(mktemp -d "$packageParent/.${packageName}.update.XXXXXX") || { rm -rf "$work"; return; }
-  if ! cp -a "$work/files/." "$stage/"; then
-    echo "WARNING: Could not stage the updated $STREAMER_APP package"
-    rm -rf "$stage" "$work"
-    return
-  fi
-  find "$stage" -maxdepth 1 -name '*.sh' -exec chmod +x {} +
-  [ -e "$backup" ] && rm -rf "$backup"
-  if [ -e "$packageTarget" ] && ! mv "$packageTarget" "$backup"; then
-    echo "WARNING: Could not preserve the existing $STREAMER_APP package"
-    rm -rf "$stage" "$work"
-    return
-  fi
-  if ! mv "$stage" "$packageTarget"; then
-    echo "WARNING: Could not activate the updated $STREAMER_APP package; restoring the existing package"
-    [ -e "$backup" ] && mv "$backup" "$packageTarget"
-    rm -rf "$stage" "$work"
-    return
-  fi
-  [ -e "$backup" ] && rm -rf "$backup"
-  echo "Downloaded only the configured $STREAMER_APP directory from sullrich/ah4c"
+  for file in "$work/files"/*; do
+    name="${file##*/}"
+    if [ -e "$target/$name" ] && [[ "${UPDATE_SCRIPTS,,}" != "true" ]]; then
+      echo "Existing ./$STREAMER_APP/$name found, and will be preserved"
+      continue
+    fi
+    cp "$file" "$target/$name" \
+    && { [[ "$name" != *.sh ]] || chmod +x "$target/$name"; } \
+    && echo "Copied ./$STREAMER_APP/$name from sullrich/ah4c"
+  done
   [[ "$STREAMER_APP" == "scripts/all/all" ]] && echo "WARNING: scripts/all/all dispatch targets must already exist under /opt/scripts; ah4c does not bulk-download every provider"
   rm -rf "$work"
 }
@@ -246,11 +279,13 @@ checkVersions() {
 main() {
 
   eval "$(./ah4c -print-env)"
-  fetchConfiguredScripts || echo "WARNING: Script package preparation failed; continuing ah4c startup"
+  prepareStreamerApp
 
   fixTunerDNS $(expandVars TUNER)
   fixEncoderDNS $(expandVars ENCODER)
   atvConnections $(expandVars TUNER)
+  checkScripts prebmitune.sh bmitune.sh stopbmitune.sh isconnected.sh keep_alive.sh reboot.sh createm3u.sh atvpair.sh
+  fetchConfiguredScripts || echo "WARNING: Script package preparation failed; continuing ah4c startup"
   checkM3Us directv.m3u dtvosprey.m3u dtvstream.m3u foo-fighters.m3u fubo.m3u hulu.m3u livetv.m3u npo.m3u silicondust.m3u sling.m3u spectrum.m3u youtubetv_shield.m3u youtubetv.m3u
   #createM3Us $TUNER1_IP $TUNER2_IP $TUNER3_IP $TUNER4_IP
   [[ -n $USER_SCRIPT ]] && { ./"$USER_SCRIPT" & } || echo "No user-defined custom script to run"

@@ -175,28 +175,52 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 		return errScriptInstallTune
 	}
 
-	backup := filepath.Join(parent, "."+packageName+".backup")
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("could not remove an old script backup: %w", err)
-	}
-	hadTarget := false
-	if _, err := os.Lstat(target); err == nil {
-		if err := os.Rename(target, backup); err != nil {
-			return fmt.Errorf("could not preserve the current script folder: %w", err)
+	// A folder that is already here belongs to the user and may hold their own
+	// edits and helpers, so it is never swapped out or emptied: it only gains
+	// the files it is missing.
+	if info, err := os.Lstat(target); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a folder", selection)
 		}
-		hadTarget = true
+		return addMissingScriptFiles(stage, target)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("could not inspect the current script folder: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
-		if hadTarget {
-			_ = os.Rename(backup, target)
-		}
 		return fmt.Errorf("could not activate the downloaded script folder: %w", err)
 	}
-	if hadTarget {
-		if err := os.RemoveAll(backup); err != nil {
-			logger("[SCRIPTS] could not remove the old %s backup: %v", selection, err)
+	return nil
+}
+
+// addMissingScriptFiles copies each staged file whose name is not yet taken in
+// target. O_EXCL makes "not yet taken" hold at the moment of writing.
+func addMissingScriptFiles(stage, target string) error {
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		return fmt.Errorf("could not read the downloaded scripts: %w", err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(stage, entry.Name()))
+		if err != nil {
+			return fmt.Errorf("could not read %s: %w", entry.Name(), err)
+		}
+		mode := os.FileMode(0644)
+		if strings.HasSuffix(entry.Name(), ".sh") {
+			mode = 0755
+		}
+		file, err := os.OpenFile(filepath.Join(target, entry.Name()), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("could not add %s: %w", entry.Name(), err)
+		}
+		_, writeErr := file.Write(data)
+		if closeErr := file.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			return fmt.Errorf("could not add %s: %w", entry.Name(), writeErr)
 		}
 	}
 	return nil
@@ -239,10 +263,10 @@ func repairScriptPackageTransactionsIn(parent, displayParent string) {
 				} else {
 					logger("[SCRIPTS] restored %s/%s after an interrupted update", displayParent, packageName)
 				}
-			} else if targetErr == nil && scriptPackageComplete(target) {
-				if err := os.RemoveAll(backup); err != nil {
-					logger("[SCRIPTS] could not remove stale backup %s: %v", backup, err)
-				}
+			} else if targetErr == nil {
+				// The folder set aside by an interrupted update is the user's old
+				// copy; with a folder back in place it is left alone, not deleted.
+				logger("[SCRIPTS] kept %s/%s aside; %s/%s is in use", displayParent, entry.Name(), displayParent, packageName)
 			}
 			continue
 		}

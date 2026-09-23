@@ -73,7 +73,7 @@ var varCatalog = []VarSpec{
 	{Key: "ALERT_WEBHOOK_URL", Label: "Alert webhook URL", Desc: "URL to GET when tuning fails; $reason is replaced with the encoded failure message.", Type: varURL, Applies: applyLive},
 	{Key: "LIVETV_ATTEMPTS", Label: "Live TV attempts", Desc: "Maximum attempts at finding a channel with Fire TV Live Guide tuning.", Placeholder: "3", Type: varInt, Applies: applyLive, ScriptVaries: true},
 	{Key: "CREATE_M3US", Label: "Create device M3Us", Desc: "Create device-specific M3Us for Amazon Prime Premium channels at startup.", Type: varBool, Applies: applyRestart},
-	{Key: "UPDATE_SCRIPTS", Label: "Update selected GitHub scripts", Desc: "Yes checks for a newer copy of only your selected scripts when ah4c starts. No keeps the stored copy unchanged. If GitHub is unavailable, ah4c keeps using the stored copy.", Type: varBool, Applies: applyRestart},
+	{Key: "UPDATE_SCRIPTS", Label: "Update selected scripts", Desc: "Yes replaces the standard files of your selected scripts and the sample scripts each time ah4c starts, using the copy included with ah4c, or GitHub for scripts ah4c does not include. Other files in the folder are never removed. No keeps every file you already have and only adds missing ones.", Type: varBool, Applies: applyRestart},
 	{Key: "UPDATE_M3US", Label: "Update sample M3Us", Desc: "Replace bundled sample M3Us at startup.", Type: varBool, Applies: applyRestart},
 	{Key: "USER_SCRIPT", Label: "Custom startup script", Desc: "Path to a custom script run alongside ah4c at container startup.", Type: varPath, Applies: applyRestart},
 	{Key: "TZ", Label: "Time zone", Desc: "Local time zone used for logs and scheduled behavior.", Placeholder: "America/New_York", Type: varString, Applies: applyRestart},
