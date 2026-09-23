@@ -130,25 +130,6 @@
                     <span id="connection-check-status" class="muted"></span>
                 </div>
             </section>
-            <section class="card settings-section" data-section="capture">
-                <div class="card-title settings-section-title"><span class="title-with-tip">USB capture cards<span class="info-tip-wrap"><button class="info-tip" type="button" aria-label="Drivers a capture card needs" aria-describedby="capture-driver-tooltip">i</button><span id="capture-driver-tooltip" class="info-tooltip" role="tooltip"><strong>The computer needs drivers for the card.</strong> A capture card needs a picture driver and a sound driver on the computer itself; a container cannot supply them. Most Linux systems include both. This section says if one is missing.</span></span></span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
-                <p class="section-help">Every capture card plugged into this computer is listed here. Channels DVR records a card itself; to record from one, press <strong>Use on a new tuner</strong>, or choose the card as a tuner's video source under Tuners. <strong>Save all changes</strong> then sets the card up in Channels DVR.</p>
-                <p class="section-help">If the card is plugged into the computer Channels DVR runs on and that is not this one, ah4c cannot see it: choose <strong>A USB capture card through Channels DVR</strong> on a tuner, then <strong>On the Channels DVR computer</strong>, and type the card's device name, such as <code>video0</code>, and its sound device, such as <code>hw:Video,0</code>, as that computer names them.</p>
-                <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
-                <div id="capture-list" class="capture-list"></div>
-                <div class="btn-row"><button id="capture-apply" class="btn btn-primary" type="button">Set up in Channels DVR</button><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
-                <details id="capture-passthrough" class="capture-passthrough hidden" open>
-                    <summary>Giving the cards to Channels DVR</summary>
-                    <p class="setting-description">Channels DVR needs these devices from the computer the cards are plugged into. If Channels DVR runs in a container or a virtual machine, pass them through to it and restart it.</p>
-                    <ul id="capture-devices-list" class="capture-device-list"></ul>
-                </details>
-                <details id="capture-manual" class="capture-passthrough hidden">
-                    <summary>Or set it up in Channels DVR yourself</summary>
-                    <p class="setting-description">In Channels DVR, add a custom channels source with the source type Text and paste this into it. Then give each channel's stream address to a tuner as a network encoder.</p>
-                    <textarea id="capture-manual-text" class="capture-manual-text" rows="6" readonly spellcheck="false" aria-label="Text to paste into Channels DVR"></textarea>
-                    <div class="btn-row"><button id="capture-manual-copy" class="btn" type="button">Copy</button><span id="capture-manual-status" class="muted" aria-live="polite"></span></div>
-                </details>
-            </section>
 
             <section class="card settings-section" data-section="playback">
                 <div class="card-title settings-section-title"><span>Playback &amp; recording</span><button class="btn btn-sm section-save" data-save-settings type="button">Save all changes</button></div>
@@ -198,6 +179,27 @@
                 <div id="extra-vars"></div>
                 <div class="btn-row"><button id="add-extra" class="btn btn-sm" type="button">Add variable</button></div>
             </section>
+
+            <details class="card settings-section capture-advanced-section" data-section="capture">
+                <summary class="card-title settings-section-title capture-advanced-summary">Capture Cards (Advanced)</summary>
+                <p class="capture-advanced-note"><strong>For advanced users.</strong> Channels DVR records the capture card itself, so the card's video and sound drivers have to be installed on the computer it's plugged into, and Channels DVR has to be able to reach the card. What that takes depends on that computer's system.</p>
+                <p class="section-help">These are the capture cards plugged into this computer. Set a card up in Channels DVR here, then choose it on a tuner under <strong>A USB capture card on this computer</strong>.</p>
+                <p class="section-help"><strong>Card plugged into a different computer?</strong> You don't need this section. On the tuner, choose <strong>A USB capture card on another computer</strong> and type the card's name and sound device.</p>
+                <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
+                <div id="capture-list" class="capture-list"></div>
+                <div class="btn-row"><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
+                <details id="capture-passthrough" class="capture-passthrough hidden" open>
+                    <summary>Giving the cards to Channels DVR</summary>
+                    <p class="setting-description">Channels DVR needs these devices from the computer the cards are plugged into. If Channels DVR runs in a container or a virtual machine, pass them through to it and restart it.</p>
+                    <ul id="capture-devices-list" class="capture-device-list"></ul>
+                </details>
+                <details id="capture-manual" class="capture-passthrough hidden">
+                    <summary>Or set it up in Channels DVR yourself</summary>
+                    <p class="setting-description">In Channels DVR, add a custom channels source with the source type Text and paste this into it. Then give each channel's stream address to a tuner as a network encoder.</p>
+                    <textarea id="capture-manual-text" class="capture-manual-text" rows="6" readonly spellcheck="false" aria-label="Text to paste into Channels DVR"></textarea>
+                    <div class="btn-row"><button id="capture-manual-copy" class="btn" type="button">Copy</button><span id="capture-manual-status" class="muted" aria-live="polite"></span></div>
+                </details>
+            </details>
 
             <details class="card settings-section" data-section="host">
                 <summary class="card-title">Container environment</summary>
@@ -817,13 +819,13 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     const capture = Boolean(captureChannelOf(tuner.encoderURL));
     card.dataset.source = capture ? 'capture' : 'network';
     card.innerHTML = `<div class="tuner-card-header"><span class="tuner-number">${number}</span><h3>Tuner ${number}</h3><span class="spacer"></span><button class="btn btn-sm tuner-preview-button" data-tuner-preview type="button">Preview</button><button class="btn btn-sm connection-pair-button hidden" data-pair-apple-tv type="button">Pair</button><button class="btn btn-danger btn-sm delete-tuner" type="button">Delete</button></div>
-        <div class="field tuner-source-field"><label>Video comes from</label><select data-tuner-source ${lock.encoderURL ? 'disabled' : ''}><option value="network" ${capture ? '' : 'selected'}>A network encoder</option><option value="capture" ${capture ? 'selected' : ''}>A USB capture card through Channels DVR</option></select></div>
-        <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field tuner-capture-only"><label>Capture card</label><select data-capture-field="video"></select><input type="text" class="hidden capture-typed-video" data-capture-field="videoTyped" placeholder="video0" spellcheck="false" aria-label="The card's device name on the Channels DVR computer"><div class="connection-message" data-capture-stream></div></div><div class="field tuner-network-only"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
+        <div class="field tuner-source-field"><label>Video comes from</label><select data-tuner-source ${lock.encoderURL ? 'disabled' : ''}><option value="network" ${capture ? '' : 'selected'}>A network encoder</option><option value="capture-remote" ${capture ? 'selected' : ''}>A USB capture card on another computer</option><option value="capture-local" hidden>A USB capture card on this computer</option></select></div>
+        <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field tuner-capture-only"><label>Capture card</label><input type="text" class="capture-remote-only" data-capture-field="video" placeholder="video0" spellcheck="false"><select class="capture-local-only hidden" data-capture-field="videoLocal"></select><div class="connection-message" data-capture-stream></div></div><div class="field tuner-network-only"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="capture-fields tuner-capture-only">
             <div class="field"><label>Sound device</label><input type="text" data-capture-field="audio" list="capture-audio-choices" placeholder="hw:Video,0" spellcheck="false"></div>
             <div class="field"><label>Format</label><select data-capture-field="format"><option value="">Automatic</option></select></div>
             <div class="field"><label>Picture</label><select data-capture-field="size"><option value="1920x1080">1920 × 1080</option><option value="1280x720">1280 × 720</option><option value="3840x2160">3840 × 2160</option></select></div>
-            <div class="field"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30">30</option></select></div>
+            <div class="field"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30" selected>30</option></select></div>
         </div>
         <div class="field-validation tuner-capture-only" data-capture-error></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
@@ -840,7 +842,9 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
     });
     card.querySelector('[data-tuner-preview]').addEventListener('click', () => openTunerPreview(card));
     card.querySelector('[data-tuner-source]').addEventListener('change', event => {
-        card.dataset.source = event.target.value;
+        const value = event.target.value;
+        card.dataset.source = value === 'network' ? 'network' : 'capture';
+        card.dataset.captureWhere = value === 'capture-local' ? 'local' : value === 'capture-remote' ? 'remote' : '';
         captureTunerSwitched(card);
     });
     card.querySelectorAll('[data-capture-field]').forEach(input => input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => captureFieldChanged(card, input)));
@@ -2084,15 +2088,19 @@ async function handleSaveClick() {
 document.querySelectorAll('[data-save-settings]').forEach(button => button.addEventListener('click', handleSaveClick));
 byId('restart-settings').addEventListener('click', () => showRestartPrompt(true));
 byId('restart-top').addEventListener('click', () => restart());
-// USB capture cards. A tuner's video can come from a USB capture card plugged
-// into this computer instead of a network encoder. Channels DVR does the
-// capturing: when Settings are saved, ah4c writes one Channels DVR capture
-// source with a channel for each capture tuner and puts that channel's stream
-// address in the tuner, so a capture tuner is saved, previewed and connected
-// exactly like any other tuner.
+// USB capture cards. Channels DVR records a capture card itself; ah4c writes
+// one Channels DVR source, AH4C Capture, with a channel per card, and a tuner
+// whose video comes from a card gets that channel's stream address, so it is
+// saved, previewed and connected like any other tuner.
+//
+// A tuner's card is either on another computer, the one Channels DVR runs on,
+// and typed, or on this computer, and picked from the cards set up in the
+// Capture Cards (Advanced) section. The third choice only appears once a card
+// has been set up there.
 let captureFound = null;
 let captureFinding = null;
 let captureKnown = {};
+let captureKnownLoaded = false;
 let captureSavedSignature = '';
 
 // Two addresses are the same capture channel when they name the same channel
@@ -2106,18 +2114,37 @@ function captureTunerCards() {
     return [...byId('tuners').children].filter(card => card.dataset.source === 'capture');
 }
 
-function showTunerSource(card) {
-    const capture = card.dataset.source === 'capture';
-    card.querySelectorAll('.tuner-capture-only').forEach(element => element.classList.toggle('hidden', !capture));
-    card.querySelectorAll('.tuner-network-only').forEach(element => element.classList.toggle('hidden', capture));
+function captureKnownByVideo(video) {
+    return Object.values(captureKnown).find(item => item.video === video);
 }
 
-// A card on this computer is chosen from the list; one on the Channels DVR
-// computer, which ah4c cannot see, is typed.
-const captureTypedChoice = '__typed';
+function captureFoundCards() {
+    return (captureFound && captureFound.cards) || [];
+}
+
+// The cards on this computer that are set up in Channels DVR: the only ones a
+// tuner can pick as a card on this computer.
+function captureSetUpHere() {
+    return captureFoundCards().filter(item => captureKnownByVideo(item.video));
+}
+
+function showTunerSource(card) {
+    const capture = card.dataset.source === 'capture';
+    const local = capture && card.dataset.captureWhere === 'local';
+    card.querySelectorAll('.tuner-capture-only').forEach(element => element.classList.toggle('hidden', !capture));
+    card.querySelectorAll('.tuner-network-only').forEach(element => element.classList.toggle('hidden', capture));
+    card.querySelectorAll('.capture-remote-only').forEach(element => element.classList.toggle('hidden', local));
+    card.querySelectorAll('.capture-local-only').forEach(element => element.classList.toggle('hidden', !local));
+    const select = card.querySelector('[data-tuner-source]');
+    const option = select.querySelector('option[value="capture-local"]');
+    option.hidden = !local && !captureSetUpHere().length;
+    select.value = !capture ? 'network' : local ? 'capture-local' : 'capture-remote';
+}
+
 function captureVideoOf(card) {
-    const select = card.querySelector('[data-capture-field="video"]');
-    return select.value === captureTypedChoice ? card.querySelector('[data-capture-field="videoTyped"]').value.trim() : select.value;
+    return card.dataset.captureWhere === 'local'
+        ? card.querySelector('[data-capture-field="videoLocal"]').value
+        : card.querySelector('[data-capture-field="video"]').value.trim();
 }
 
 function captureDetailsOf(card) {
@@ -2127,7 +2154,7 @@ function captureDetailsOf(card) {
 }
 
 function captureModesOf(video) {
-    return (((captureFound && captureFound.cards) || []).find(item => item.video === video) || {}).modes || [];
+    return (captureFoundCards().find(item => item.video === video) || {}).modes || [];
 }
 
 // The same rule as the server's: name no format when the card sends this size
@@ -2187,81 +2214,88 @@ function setCaptureSelect(select, value) {
     select.value = value;
 }
 
-// Fills a capture tuner from what Channels DVR already holds for its channel,
-// or, for a tuner just switched to a capture card, from the first card found
-// that no other tuner uses, with its sound already paired, so most people
-// never have to choose anything but the card.
+// Fills a capture tuner: its card from what Channels DVR holds for its
+// channel, or for a new one on this computer the first set-up card no other
+// tuner uses; then its sound and picture from the card's setup.
 function fillCaptureFields(card) {
     const field = name => card.querySelector(`[data-capture-field="${name}"]`);
-    const select = field('video');
     const encoder = card.querySelector('[data-tuner="encoderURL"]');
-    const known = captureKnown[captureChannelOf(encoder.value)];
-    const found = (captureFound && captureFound.cards) || [];
-    const typed = field('videoTyped');
-    let chosen = captureVideoOf(card) || (known && known.video) || '';
-    if (!chosen && card.dataset.source === 'capture') {
-        const taken = new Set(captureTunerCards().filter(other => other !== card).map(other => captureVideoOf(other)));
-        chosen = found.find(item => !taken.has(item.video))?.video || '';
-    }
     const channel = captureChannelOf(encoder.value);
-    const options = found.map(item => [item.video, `${item.name || 'USB capture card'} (${item.video})`]);
-    // A card this computer does not have is on the Channels DVR computer, or
-    // unplugged; either way it is typed, and kept as it was saved.
-    const typedCard = select.value === captureTypedChoice || (chosen && !options.some(([video]) => video === chosen)) || (!chosen && captureFound && !found.length && !channel);
-    if (typedCard && chosen && !typed.value) typed.value = chosen;
+    const known = captureKnown[channel];
+    const found = captureFoundCards();
+    if (!card.dataset.captureWhere) {
+        card.dataset.captureWhere = known && found.some(item => item.video === known.video) ? 'local' : 'remote';
+    }
+    const local = card.dataset.captureWhere === 'local';
+    let chosen = captureVideoOf(card) || (known && known.video) || '';
+    if (local) {
+        const setUp = captureSetUpHere();
+        if (!chosen || !setUp.some(item => item.video === chosen) && !(known && known.video === chosen)) {
+            const taken = new Set(captureTunerCards().filter(other => other !== card).map(other => captureVideoOf(other)));
+            chosen = (setUp.find(item => !taken.has(item.video)) || setUp[0] || {}).video || chosen;
+        }
+        const options = setUp.map(item => [item.video, `${item.name || 'USB capture card'} (${item.video})`]);
+        if (chosen && !options.some(([video]) => video === chosen)) options.unshift([chosen, `${chosen} (not plugged in right now)`]);
+        field('videoLocal').innerHTML = options.map(([video, label]) => `<option value="${escapeHTML(video)}" ${video === chosen ? 'selected' : ''}>${escapeHTML(label)}</option>`).join('');
+    } else if (chosen && captureVideoOf(card) !== chosen) {
+        field('video').value = chosen;
+    }
     // A saved card whose details Channels DVR could not give back is kept as
     // it is, never shown as missing: its tuner still records it.
     card.dataset.captureUnknown = !chosen && channel ? 'true' : 'false';
-    if (!chosen && channel) options.unshift(['', `The card on Channels DVR channel ${channel}`]);
-    if (!captureFound && !options.length) options.push(['', 'Looking for cards…']);
-    options.push([captureTypedChoice, 'On the Channels DVR computer (type its name)']);
-    const selected = typedCard ? captureTypedChoice : chosen;
-    select.innerHTML = options.map(([video, label]) => `<option value="${escapeHTML(video)}" ${video === selected ? 'selected' : ''}>${escapeHTML(label)}</option>`).join('');
-    typed.classList.toggle('hidden', !typedCard);
+    field('video').placeholder = !chosen && channel ? `The card on Channels DVR channel ${channel}` : 'video0';
     if (chosen && card.dataset.captureFilled !== chosen) {
-        const from = known && known.video === chosen ? known : found.find(item => item.video === chosen);
-        // A typed card is filled in from what Channels DVR holds, or not at all.
+        const from = (known && known.video === chosen ? known : captureKnownByVideo(chosen)) || found.find(item => item.video === chosen);
         if (from) {
             field('audio').value = from.audio || '';
             setCaptureSelect(field('size'), `${from.width || 1920}x${from.height || 1080}`);
-            setCaptureSelect(field('framerate'), String(from.framerate || 60));
+            setCaptureSelect(field('framerate'), String(from.framerate || 30));
             card.dataset.pixelFormat = from.pixelFormat || '';
-            const modes = captureModesOf(chosen);
-            const automatic = captureFormatFor(modes, Number(from.width || 1920), Number(from.height || 1080), Number(from.framerate || 60));
+            const automatic = captureFormatFor(captureModesOf(chosen), Number(from.width || 1920), Number(from.height || 1080), Number(from.framerate || 30));
             field('format').innerHTML = '<option value="">Automatic</option>' + (from.pixelFormat && from.pixelFormat !== automatic ? `<option value="${escapeHTML(from.pixelFormat)}" selected>${escapeHTML(captureFormatNames[from.pixelFormat] || from.pixelFormat)}</option>` : '');
             card.dataset.captureFilled = chosen;
         }
     }
     renderCaptureModes(card);
-    card.querySelector('[data-capture-stream]').textContent = channel ? `Channels DVR channel ${channel}` : 'Set up in Channels DVR when you save';
+    card.querySelector('[data-capture-stream]').textContent = channel
+        ? `Channels DVR channel ${channel}`
+        : local ? 'Added to the tuner when you save' : 'The name the Channels DVR computer uses for the card';
     card.id = `tuner-card-${tunerNumber(card)}`;
+    showTunerSource(card);
+}
+
+// A tuner's stream address follows its card: another card is another
+// Channels DVR channel, so the old address goes and Save sets up the new one.
+function syncCaptureEncoder(card) {
+    const encoder = card.querySelector('[data-tuner="encoderURL"]');
+    const known = captureKnownByVideo(captureVideoOf(card));
+    encoder.value = known ? known.url : '';
 }
 
 function captureFieldChanged(card, input) {
     card.querySelector('[data-capture-error]').textContent = '';
     if (['format', 'size', 'framerate'].includes(input.dataset.captureField)) renderCaptureModes(card);
-    if (input.dataset.captureField === 'video' || input.dataset.captureField === 'videoTyped') {
-        // Another card is another Channels DVR channel, so the old stream
-        // address goes and Save sets up the new one.
+    if (input.dataset.captureField === 'video' || input.dataset.captureField === 'videoLocal') {
         card.dataset.captureFilled = '';
-        const video = captureVideoOf(card);
-        const known = Object.values(captureKnown).find(item => item.video === video);
-        card.querySelector('[data-tuner="encoderURL"]').value = known ? known.url : '';
+        syncCaptureEncoder(card);
         fillCaptureFields(card);
         updateTunerPreviewButton(card);
-        if (input.dataset.captureField === 'video' && input.value === captureTypedChoice) card.querySelector('[data-capture-field="videoTyped"]').focus();
     }
     renderCaptureHelp();
 }
 
 function captureTunerSwitched(card) {
     if (card.dataset.source === 'capture') {
-        // A network address left behind would be saved as this card's stream,
-        // so it goes; Save fills in the card's stream address. CMD and TEECMD
-        // stay, as on any tuner.
-        const encoder = card.querySelector('[data-tuner="encoderURL"]');
-        if (!captureChannelOf(encoder.value)) encoder.value = '';
+        // Switching where the card is starts the card over. A network address
+        // left behind would be saved as the card's stream, so it goes too;
+        // Save fills in the card's stream address. CMD and TEECMD stay.
+        card.querySelector('[data-capture-field="video"]').value = '';
+        card.querySelector('[data-capture-field="videoLocal"]').innerHTML = '';
+        card.dataset.captureFilled = '';
+        card.querySelector('[data-tuner="encoderURL"]').value = '';
         if (!captureFound) findCaptureCards();
+        fillCaptureFields(card);
+        syncCaptureEncoder(card);
         fillCaptureFields(card);
     }
     showTunerSource(card);
@@ -2280,82 +2314,112 @@ function findCaptureCards() {
     }).catch(error => {
         captureFound = {cards: [], sound: [], drivers: null};
         byId('capture-find-status').textContent = error.message;
+    }).then(async () => {
+        byId('capture-audio-choices').innerHTML = [...new Set(captureFound.sound.map(item => item.audio))].map(audio => `<option value="${escapeHTML(audio)}"></option>`).join('');
+        if (captureFound.cards.length && !captureKnownLoaded) await loadCaptureKnown();
+        captureTunerCards().forEach(fillCaptureFields);
+        [...byId('tuners').children].forEach(showTunerSource);
+        renderCaptureHelp();
     }).finally(() => {
         captureFinding = null;
-        byId('capture-audio-choices').innerHTML = [...new Set(captureFound.sound.map(item => item.audio))].map(audio => `<option value="${escapeHTML(audio)}"></option>`).join('');
-        captureTunerCards().forEach(fillCaptureFields);
-        renderCaptureHelp();
     });
     return captureFinding;
 }
 
-// Called whenever the tuner list is drawn: finds the cards on this computer,
-// and reads back what Channels DVR holds for the capture tuners, so each shows
-// its card, sound and picture again.
+function setCaptureKnown(payload) {
+    captureKnown = {};
+    (payload.streams || []).forEach(stream => {
+        const details = (payload.cards || []).find(item => item.video === stream.video) || {};
+        captureKnown[captureChannelOf(stream.url)] = {...details, video: stream.video, url: stream.url};
+    });
+    captureKnownLoaded = true;
+}
+
+// Reads what Channels DVR holds in AH4C Capture: which cards are set up, on
+// which channels, with what sound and picture.
+async function loadCaptureKnown() {
+    try {
+        setCaptureKnown(await captureRequest('/api/capture/channels'));
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+// Called whenever the tuner list is drawn: finds the cards on this computer
+// and reads back what Channels DVR holds, so each capture tuner shows its
+// card, sound and picture again.
 async function refreshCaptureTuners() {
     if (!captureFound) findCaptureCards();
     renderCaptureHelp();
     if (!captureTunerCards().length) return;
-    try {
-        const payload = await captureRequest('/api/capture/channels');
-        captureKnown = {};
-        (payload.streams || []).forEach(stream => {
-            const details = (payload.cards || []).find(item => item.video === stream.video) || {};
-            captureKnown[captureChannelOf(stream.url)] = {...details, video: stream.video, url: stream.url};
-        });
-        const cards = captureTunerCards();
-        cards.forEach(fillCaptureFields);
-        captureSavedSignature = JSON.stringify(cards.map(captureDetailsOf));
-    } catch (error) {
-        const cards = captureTunerCards();
-        cards.forEach(card => {
-            fillCaptureFields(card);
-            card.querySelector('[data-capture-error]').textContent = 'Channels DVR could not be reached just now, so this card is shown by its channel. It keeps recording as it is.';
-        });
-        // What is shown is what is saved, so an untouched tuner saves as it is.
-        captureSavedSignature = JSON.stringify(cards.map(captureDetailsOf));
-    }
+    const loaded = await loadCaptureKnown();
+    const cards = captureTunerCards();
+    cards.forEach(card => {
+        fillCaptureFields(card);
+        if (!loaded) card.querySelector('[data-capture-error]').textContent = 'Channels DVR could not be reached just now, so this card is shown by its channel. It keeps recording as it is.';
+    });
+    // What is shown is what is saved, so an untouched tuner saves as it is.
+    captureSavedSignature = JSON.stringify(captureSourceCards());
     renderCaptureHelp();
 }
 
-// The section lists every card plugged into this computer, whether a tuner
-// records it and which, so the cards are always in view, not only once a
-// tuner uses one.
+// Everything the AH4C Capture source should hold: each capture tuner's card,
+// then each card set up in the Advanced section that no tuner uses yet, so
+// saving a tuner never drops a card set up there.
+function captureSourceCards() {
+    const cards = captureTunerCards().map(captureDetailsOf);
+    const used = new Set(cards.map(item => item.video));
+    Object.values(captureKnown).forEach(item => {
+        if (item.video && !used.has(item.video)) {
+            cards.push({video: item.video, audio: item.audio || '', width: item.width, height: item.height, framerate: item.framerate, pixelFormat: item.pixelFormat || ''});
+            used.add(item.video);
+        }
+    });
+    return cards;
+}
+
+// The section lists every card plugged into this computer: whether it is set
+// up in Channels DVR, and which tuner uses it.
 function renderCaptureHelp() {
-    const found = (captureFound && captureFound.cards) || [];
+    const found = captureFoundCards();
     const tuners = captureTunerCards();
-    const users = new Map(tuners.map(card => [captureDetailsOf(card).video, card]).filter(([video]) => video));
+    const users = new Map(tuners.map(card => [captureVideoOf(card), card]).filter(([video]) => video));
     renderCaptureDrivers(captureFound && captureFound.drivers);
     const list = byId('capture-list');
-    const locked = Boolean(state && state.tuners && state.tuners.countLocked);
     const rows = found.map(item => {
+        const known = captureKnownByVideo(item.video);
         const user = users.get(item.video);
         const ip = user && user.querySelector('[data-tuner="tunerIP"]').value.trim();
-        const sound = item.audio ? `sound ${item.audio}` : 'no sound device';
-        const status = user
-            ? `<span class="connection-state--ready">Recorded by Tuner ${tunerNumber(user)}${ip ? ` (${escapeHTML(ip)})` : ''}</span>`
-            : '<span class="muted">Not used by a tuner yet</span>';
-        const action = user
-            ? `<button class="btn btn-sm" type="button" data-capture-show="${tunerNumber(user)}">Show tuner</button>`
-            : `<button class="btn btn-sm" type="button" data-capture-use="${escapeHTML(item.video)}" ${locked ? 'disabled' : ''}>Use on a new tuner</button>`;
+        const sound = item.audio ? `sound ${item.audio}` : 'no sound device found';
+        let status;
+        let action = '';
+        if (!known) {
+            status = '<span class="muted">Not set up yet</span>';
+            action = `<button class="btn btn-sm btn-primary" type="button" data-capture-setup="${escapeHTML(item.video)}">Set up in Channels DVR</button>`;
+        } else if (user) {
+            status = `<span class="connection-state--ready">Set up · recorded by Tuner ${tunerNumber(user)}${ip ? ` (${escapeHTML(ip)})` : ''}</span>`;
+            action = `<button class="btn btn-sm" type="button" data-capture-show="${tunerNumber(user)}">Show tuner</button>`;
+        } else {
+            status = '<span class="connection-state--ready">Set up in Channels DVR</span><span class="muted">To record from it, set a tuner to <strong>A USB capture card on this computer</strong>.</span>';
+        }
         return `<div class="capture-row"><div class="capture-row-text"><strong>${escapeHTML(item.name || 'USB capture card')}</strong><span class="muted">${escapeHTML(item.video)} · ${escapeHTML(sound)}</span>${status}</div>${action}</div>`;
     });
     list.innerHTML = rows.length ? rows.join('')
-        : `<div class="empty-state">${captureFound ? 'No capture card is plugged into this computer. A card on the Channels DVR computer can still be set up on a tuner by typing its device name.' : 'Looking for capture cards…'}</div>`;
-    list.querySelectorAll('[data-capture-use]').forEach(button => button.addEventListener('click', () => useCaptureOnNewTuner(button.dataset.captureUse)));
+        : `<div class="empty-state">${captureFound ? 'No capture cards are plugged into this computer.' : 'Looking for capture cards…'}</div>`;
+    list.querySelectorAll('[data-capture-setup]').forEach(button => button.addEventListener('click', () => setUpCaptureCard(button.dataset.captureSetup, button)));
     list.querySelectorAll('[data-capture-show]').forEach(button => button.addEventListener('click', () => {
         const card = [...byId('tuners').children].find(item => String(tunerNumber(item)) === button.dataset.captureShow);
         if (card) showCaptureTuner(card);
     }));
-    // The devices and the list to paste cover the cards tuners use, or every
-    // card found while none is used yet.
-    const details = tuners.length ? tuners.map(captureDetailsOf).filter(item => /^video\d+$/.test(item.video)) : found;
-    byId('capture-passthrough').classList.toggle('hidden', !details.length);
-    byId('capture-manual').classList.toggle('hidden', !details.length);
+    const details = captureSourceCards().filter(item => /^video\d+$/.test(item.video));
+    const listed = details.length ? details : found;
+    byId('capture-passthrough').classList.toggle('hidden', !listed.length);
+    byId('capture-manual').classList.toggle('hidden', !listed.length);
     const code = value => `<code>${escapeHTML(value)}</code>`;
-    byId('capture-devices-list').innerHTML = details.map(item => `<li>${code('/dev/' + item.video)}</li>`).join('') + `<li>${code('/dev/snd')} <span class="muted">(the cards' sound)</span></li>`;
+    byId('capture-devices-list').innerHTML = listed.map(item => `<li>${code('/dev/' + item.video)}</li>`).join('') + `<li>${code('/dev/snd')} <span class="muted">(the cards' sound)</span></li>`;
     // Only what ah4c itself would write: cards with a sound device.
-    byId('capture-manual-text').value = captureSourceTextFor(details.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio || '')));
+    byId('capture-manual-text').value = captureSourceTextFor(listed.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio || '')));
     byId('capture-manual-status').textContent = '';
 }
 
@@ -2365,23 +2429,91 @@ function showCaptureTuner(card) {
     setTimeout(() => card.classList.remove('tuner-card--flash'), 1600);
 }
 
-// Adds a tuner already set to record this card, with the card's sound
-// paired, and puts the cursor where the device's address goes.
-function useCaptureOnNewTuner(video) {
-    if (state.tuners.countLocked) return;
-    const card = appendTunerCard(undefined);
-    card.dataset.source = 'capture';
-    card.querySelector('[data-tuner-source]').value = 'capture';
-    const select = card.querySelector('[data-capture-field="video"]');
-    select.innerHTML = `<option value="${escapeHTML(video)}" selected></option>`;
-    captureTunerSwitched(card);
-    showCaptureTuner(card);
-    card.querySelector('[data-tuner="tunerIP"]').focus({preventScroll: true});
+// ah4c asks the Channels DVR it is running with, so an address typed on this
+// page, as in setup, is saved before Channels DVR is asked. Returns an error
+// to show, or ''.
+async function captureChannelsAddressReady() {
+    const address = document.querySelector('[data-setting="CHANNELSIP"]');
+    const running = state.catalog.find(spec => spec.key === 'CHANNELSIP');
+    if (address && !address.value.trim()) return 'Enter the Channels DVR address first; capture cards are set up in Channels DVR.';
+    if (address && running && !running.locked && address.value.trim() !== String(running.value || '').trim()) {
+        let saved = null;
+        try {
+            const response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(collectPayload())});
+            if (response.ok) saved = await response.json();
+        } catch (error) {}
+        if (!saved) return 'The Channels DVR address could not be saved, so the capture cards were not set up.';
+        state = saved;
+    }
+    return '';
 }
 
-// Runs before every save. Channels DVR is asked only when a capture tuner is
-// new or changed; each capture tuner then carries its channel's stream address,
-// and the save that follows keeps it like any tuner.
+async function writeCaptureSource(cards) {
+    const payload = await captureRequest('/api/capture/channels', {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cards}),
+    });
+    setCaptureKnown(payload);
+    const others = payload.otherSources || [];
+    if (others.length) showNotice(`Channels DVR also has ${others.length === 1 ? 'a capture source' : 'capture sources'} of its own: ${others.join(', ')}. A card can only be opened once, so remove ${others.length === 1 ? 'it' : 'them'} in Channels DVR if ${others.length === 1 ? 'it uses' : 'they use'} the same cards.`, 'warning');
+    return payload;
+}
+
+// Sets one card on this computer up in Channels DVR, with its sound paired
+// and its best mode, keeping every card already there. No tuner is needed
+// and nothing in ah4c is saved, so no restart follows.
+async function setUpCaptureCard(video, button) {
+    const item = captureFoundCards().find(card => card.video === video);
+    const status = byId('capture-find-status');
+    if (!item) return;
+    if (!item.audio) {
+        status.textContent = `${item.name || 'This card'} has no sound device, and Channels DVR will not record a card without sound. Install its sound driver, then press Find cards again.`;
+        return;
+    }
+    button.disabled = true;
+    status.textContent = 'Setting the card up in Channels DVR…';
+    try {
+        const problem = await captureChannelsAddressReady();
+        if (problem) {
+            status.textContent = problem;
+            return;
+        }
+        if (!captureKnownLoaded && !await loadCaptureKnown()) {
+            status.textContent = 'Channels DVR could not be reached, so the card was not set up.';
+            return;
+        }
+        const cards = captureSourceCards();
+        cards.push({video: item.video, audio: item.audio, width: item.width, height: item.height, framerate: item.framerate, pixelFormat: item.pixelFormat || ''});
+        const payload = await writeCaptureSource(cards);
+        const stream = (payload.streams || []).find(entry => entry.video === item.video);
+        status.textContent = stream
+            ? `${item.name || 'The card'} is set up in Channels DVR on channel ${captureChannelOf(stream.url)}. To record from it, set a tuner to A USB capture card on this computer.`
+            : 'The card was added to Channels DVR, which has not listed its channel yet. Press Find cards again in a moment.';
+        // Channels DVR can number the channels afresh when the list changes, so
+        // a tuner already on a card follows its card's new address; that is a
+        // tuner change, kept by Save all changes like any other.
+        const moved = captureTunerCards().filter(card => {
+            const known = captureKnownByVideo(captureVideoOf(card));
+            const encoder = card.querySelector('[data-tuner="encoderURL"]');
+            if (!known || encoder.value === known.url) return false;
+            encoder.value = known.url;
+            return true;
+        });
+        if (moved.length) status.textContent += ` Channels DVR renumbered the cards, so ${moved.length === 1 ? 'Tuner' : 'Tuners'} ${moved.map(tunerNumber).join(', ')} now ${moved.length === 1 ? 'has a' : 'have'} new stream address${moved.length === 1 ? '' : 'es'}; press Save all changes to keep ${moved.length === 1 ? 'it' : 'them'}.`;
+        else captureSavedSignature = JSON.stringify(captureSourceCards());
+    } catch (error) {
+        status.textContent = `The card could not be set up in Channels DVR: ${error.message}`;
+    } finally {
+        button.disabled = false;
+        captureTunerCards().forEach(fillCaptureFields);
+        [...byId('tuners').children].forEach(showTunerSource);
+        renderCaptureHelp();
+    }
+}
+
+// Runs before every save. Channels DVR is asked only when a capture card is
+// new or changed; each capture tuner then carries its channel's stream
+// address, and the save that follows keeps it like any tuner.
 async function setUpCaptureTuners() {
     const cards = captureTunerCards();
     if (!cards.length || state.tuners.locked) return true;
@@ -2393,14 +2525,12 @@ async function setUpCaptureTuners() {
         return false;
     };
     const seen = new Map();
-    const details = [];
     const unknown = [];
     for (const card of cards) {
         const number = tunerNumber(card);
         const item = captureDetailsOf(card);
         if (!item.video && card.dataset.captureUnknown === 'true') {
             unknown.push(number);
-            details.push(item);
             continue;
         }
         const fail = message => {
@@ -2409,55 +2539,37 @@ async function setUpCaptureTuners() {
             return stop(`Tuner ${number}: ${message}`);
         };
         if (!/^video\d+$/.test(item.video)) {
-            return fail(card.querySelector('[data-capture-field="video"]').value === captureTypedChoice
-                ? 'Type the card\'s device name as the Channels DVR computer names it, such as video0.'
-                : 'Choose its capture card. If it is plugged into the Channels DVR computer instead of this one, choose On the Channels DVR computer and type its name.');
+            return fail(card.dataset.captureWhere === 'local'
+                ? 'Choose its capture card.'
+                : 'Type the capture card\'s name, like video0, as the Channels DVR computer names it.');
         }
         if (seen.has(item.video)) return fail(`Tuner ${seen.get(item.video)} already uses this capture card. Each card can feed one tuner.`);
-        if (!item.audio) return fail('Choose its sound device.');
+        if (!item.audio) return fail('Enter its sound device, like hw:Video,0.');
         seen.set(item.video, number);
-        details.push(item);
     }
     const encoders = cards.map(card => card.querySelector('[data-tuner="encoderURL"]'));
-    if (JSON.stringify(details) === captureSavedSignature && encoders.every(input => captureChannelOf(input.value))) return true;
+    const wanted = captureSourceCards();
+    if (JSON.stringify(wanted) === captureSavedSignature && encoders.every(input => captureChannelOf(input.value))) return true;
     // Channels DVR keeps every card in one list, so it cannot be rewritten
     // while a card in it is unknown here.
     if (unknown.length) return stop(`Channels DVR could not be reached to read the card for ${unknown.length === 1 ? 'Tuner' : 'Tuners'} ${unknown.join(', ')}, so the capture cards were not changed. Choose Save again when Channels DVR is running.`);
-    // ah4c asks the Channels DVR it is running with, so an address typed on
-    // this page, as in setup, is saved before Channels DVR is asked.
-    const address = document.querySelector('[data-setting="CHANNELSIP"]');
-    const running = state.catalog.find(spec => spec.key === 'CHANNELSIP');
-    if (address && !address.value.trim()) return stop('Enter the Channels DVR address first; capture cards are set up in Channels DVR.');
-    if (address && running && !running.locked && address.value.trim() !== String(running.value || '').trim()) {
-        let saved = null;
-        try {
-            const response = await fetch('/api/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(collectPayload())});
-            if (response.ok) saved = await response.json();
-        } catch (error) {}
-        if (!saved) return stop('The Channels DVR address could not be saved, so the capture cards were not set up.');
-        state = saved;
-    }
+    const problem = await captureChannelsAddressReady();
+    if (problem) return stop(problem);
     status.classList.remove('validation-error');
     status.textContent = 'Setting up the capture cards in Channels DVR…';
     let payload;
     try {
-        payload = await captureRequest('/api/capture/channels', {
-            method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({cards: details}),
-        });
+        payload = await writeCaptureSource(wanted);
     } catch (error) {
         return stop(`The capture cards could not be set up in Channels DVR: ${error.message}`);
     }
     for (const [index, card] of cards.entries()) {
-        const stream = (payload.streams || []).find(item => item.video === details[index].video);
+        const stream = (payload.streams || []).find(item => item.video === captureVideoOf(card));
         if (!stream) return stop(`Channels DVR has not listed the channel for Tuner ${tunerNumber(card)} yet. Choose Save again in a moment.`);
         encoders[index].value = stream.url;
-        captureKnown[captureChannelOf(stream.url)] = {...details[index], url: stream.url};
         fillCaptureFields(card);
     }
-    captureSavedSignature = JSON.stringify(details);
-    const others = payload.otherSources || [];
-    if (others.length) showNotice(`Channels DVR also has ${others.length === 1 ? 'a capture source' : 'capture sources'} of its own: ${others.join(', ')}. A card can only be opened once, so remove ${others.length === 1 ? 'it' : 'them'} in Channels DVR if ${others.length === 1 ? 'it uses' : 'they use'} the same cards.`, 'warning');
+    captureSavedSignature = JSON.stringify(captureSourceCards());
     status.textContent = '';
     return true;
 }
@@ -2513,29 +2625,9 @@ async function captureRequest(url, options) {
     return payload;
 }
 
-// Adds the AH4C Capture source to Channels DVR for every tuner that records a
-// card, even when nothing changed, then saves like Save all changes, restart
-// prompt and all.
-byId('capture-apply').addEventListener('click', async () => {
-    if (!captureTunerCards().length) {
-        byId('capture-find-status').textContent = 'No tuner records a card yet. Press Use on a new tuner first.';
-        return;
-    }
-    const button = byId('capture-apply');
-    button.disabled = true;
-    captureSavedSignature = '';
-    try {
-        await handleSaveClick();
-    } finally {
-        button.disabled = false;
-    }
-    if (captureSavedSignature) {
-        const count = captureTunerCards().length;
-        byId('capture-find-status').textContent = `Channels DVR has the AH4C Capture source with ${count === 1 ? '1 card' : `${count} cards`}.`;
-    }
-});
 byId('capture-find').addEventListener('click', () => {
     captureFound = null;
+    captureKnownLoaded = false;
     findCaptureCards();
 });
 byId('capture-manual-copy').addEventListener('click', async () => {
