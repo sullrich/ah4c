@@ -1028,23 +1028,45 @@ func previewCheckHandler(c *gin.Context) {
 // player on these pages cannot find its place again and stalls, then the page
 // restarts it. So the preview of a capture tuner is passed through
 // copyAlignedTS, which forwards only whole packets and skips anything else.
-// copyAlignedTS copies whole MPEG-TS packets from src to dst. A packet is
-// taken as real only when the byte after it starts another packet, so text
-// that happens to contain the sync byte is skipped too. flush runs after each
-// write so the browser gets the picture as it comes.
+// copyAlignedTS copies MPEG-TS from src to dst with the driver's text taken
+// out. The driver buffers its warnings and writes them 4 KB at a time, which
+// lands a run of plain text in the middle of a packet. Where a packet does not
+// line up with the next, the run of text inside it is found and cut out, and
+// the packet is whole again, so no picture is lost. Anything that still does
+// not line up is skipped up to the next packet. flush runs after each write so
+// the browser gets the picture as it comes.
 func copyAlignedTS(dst io.Writer, src io.Reader, flush func()) error {
-	buf := make([]byte, 0, 64*1024)
+	const (
+		packet = tsPacketSize
+		// Room to find a whole run of text and check two packets after it.
+		window = 3*packet + 16*1024
+	)
+	buf := make([]byte, 0, 4*window)
 	chunk := make([]byte, 32*1024)
 	out := make([]byte, 0, 64*1024)
+	eof := false
 	for {
-		n, readErr := src.Read(chunk)
-		buf = append(buf, chunk[:n]...)
+		if !eof {
+			n, err := src.Read(chunk)
+			buf = append(buf, chunk[:n]...)
+			if err == io.EOF {
+				eof = true
+			} else if err != nil {
+				return err
+			}
+		}
 		out = out[:0]
-		for len(buf) >= 2*tsPacketSize || (readErr != nil && len(buf) >= tsPacketSize) {
-			if buf[0] == 0x47 && (len(buf) < 2*tsPacketSize || buf[tsPacketSize] == 0x47) {
-				out = append(out, buf[:tsPacketSize]...)
-				buf = buf[tsPacketSize:]
+		for len(buf) >= packet && (eof || len(buf) >= window) {
+			if buf[0] == 0x47 && (len(buf) < 2*packet || buf[packet] == 0x47) {
+				out = append(out, buf[:packet]...)
+				buf = buf[packet:]
 				continue
+			}
+			if buf[0] == 0x47 {
+				if repaired, ok := cutDriverText(buf); ok {
+					buf = repaired
+					continue
+				}
 			}
 			next := bytes.IndexByte(buf[1:], 0x47)
 			if next < 0 {
@@ -1061,15 +1083,110 @@ func copyAlignedTS(dst io.Writer, src io.Reader, flush func()) error {
 				flush()
 			}
 		}
-		// Keep the tail small and at the front, so a long stream reuses memory.
-		buf = append(make([]byte, 0, 64*1024), buf...)
-		if readErr != nil {
-			if readErr == io.EOF {
-				return nil
+		if eof {
+			return nil
+		}
+		// Keep the unread tail at the front so a long stream reuses memory.
+		buf = append(buf[:0:0], buf...)
+	}
+}
+
+// cutDriverText looks for a run of plain text inside the packet at the start
+// of buf and returns buf without it, if the three packets after it then line
+// up. The packet's own bytes on either side of the text can happen to be
+// printable too, so the exact start and end are found by trying the few
+// positions near each edge of the run and keeping the cut that lines up.
+func cutDriverText(buf []byte) ([]byte, bool) {
+	const (
+		packet   = tsPacketSize
+		shortest = 64
+		slack    = 16
+	)
+	printable := func(b byte) bool { return b == '\n' || (b >= 0x20 && b <= 0x7e) }
+	runStart := -1
+	// The text can also start right where the next packet should, leaving
+	// this packet whole.
+	for i := 1; i <= packet && i < len(buf); i++ {
+		if !printable(buf[i]) {
+			continue
+		}
+		end := i
+		for end < len(buf) && printable(buf[end]) {
+			end++
+		}
+		if end-i >= shortest {
+			runStart = i
+			break
+		}
+		i = end
+	}
+	if runStart < 0 {
+		return nil, false
+	}
+	runEnd := runStart
+	for runEnd < len(buf) && printable(buf[runEnd]) {
+		runEnd++
+	}
+	// Lining up fixes only the length of the cut, not where it starts: the
+	// packet's own bytes next to the text are often printable, and a cut one
+	// byte early keeps a byte of text and loses a byte of picture. Text that
+	// repeats one line, as a driver's warning does, settles it: the cut that
+	// takes out exactly that repetition is the right one.
+	line := repeatedLine(buf[runStart:runEnd])
+	first := []byte(nil)
+	for start := runStart; start <= runStart+slack && start <= packet; start++ {
+		for end := runEnd; end >= runEnd-slack && end-start >= shortest; end-- {
+			cut := end - start
+			if 3*packet+cut >= len(buf) {
+				continue
 			}
-			return readErr
+			if buf[packet+cut] != 0x47 || buf[2*packet+cut] != 0x47 || buf[3*packet+cut] != 0x47 {
+				continue
+			}
+			repaired := append(append(make([]byte, 0, len(buf)-cut), buf[:start]...), buf[end:]...)
+			if line == nil || isRepetitionOf(buf[start:end], line) {
+				return repaired, true
+			}
+			if first == nil {
+				first = repaired
+			}
 		}
 	}
+	if first != nil {
+		return first, true
+	}
+	return nil, false
+}
+
+// repeatedLine returns the line a run of text is made of, taken between its
+// first two line ends, or nil when the run holds fewer than two.
+func repeatedLine(run []byte) []byte {
+	a := bytes.IndexByte(run, '\n')
+	if a < 0 {
+		return nil
+	}
+	b := bytes.IndexByte(run[a+1:], '\n')
+	if b < 0 {
+		return nil
+	}
+	return run[a+1 : a+1+b+1]
+}
+
+// isRepetitionOf reports whether seg is a stretch of line repeated, starting
+// anywhere inside a line and ending anywhere inside one.
+func isRepetitionOf(seg, line []byte) bool {
+	k := bytes.IndexByte(seg, '\n')
+	if k < 0 || k+1 > len(line) || !bytes.Equal(seg[:k+1], line[len(line)-(k+1):]) {
+		return false
+	}
+	for rest := seg[k+1:]; len(rest) > 0; {
+		n := min(len(rest), len(line))
+		if !bytes.Equal(rest[:n], line[:n]) {
+			return false
+		}
+		rest = rest[n:]
+	}
+	return true
 }
 
 // capturePreviewHandler shows a capture tuner's picture with only whole
