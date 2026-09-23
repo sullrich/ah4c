@@ -77,7 +77,7 @@
                     <button id="query-streamers" class="btn btn-sm btn-primary" type="button">Check GitHub for scripts</button>
                     <span id="streamer-query-status" class="muted"></span>
                 </div>
-                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. <strong>Check GitHub for scripts</strong> reads only the available folder names; it does not download every script. ah4c downloads only the choice you select, and a GitHub outage never prevents it from using a complete stored copy.</p>
+                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. Choices <strong>included with ah4c</strong> are copied from ah4c itself, without going online. <strong>Check GitHub for scripts</strong> lists what is on GitHub in its own group; ah4c downloads only a choice it does not already include. Your own copy of a script is never deleted, and a GitHub outage never prevents ah4c from using a complete stored copy.</p>
                 <div id="section-streamer" class="settings-grid"></div>
                 <div id="local-script-browser" class="local-script-browser hidden">
                     <div class="local-script-browser-head">
@@ -353,6 +353,7 @@ let tunerPreview = null;
 let appleTVPairPreview = null;
 const tunerPreviewGrace = 90000;
 let localStreamerChoices = [];
+let bundledStreamerChoices = [];
 let remoteStreamerChoices = [];
 let streamerLoadGeneration = 0;
 let settingsSaveInProgress = false;
@@ -575,6 +576,7 @@ async function loadStreamers(remote) {
         const payload = await response.json();
         if (generation !== streamerLoadGeneration) return;
         if (Array.isArray(payload.local)) localStreamerChoices = payload.local;
+        if (Array.isArray(payload.bundled)) bundledStreamerChoices = payload.bundled;
         if (Array.isArray(payload.remote)) remoteStreamerChoices = payload.remote;
         if (settingsSaveInProgress) {
             if (status && remote) status.textContent = response.ok
@@ -741,16 +743,22 @@ function renderFieldInto(spec, target, replace = false) {
     let control;
     if (spec.key === 'STREAMER_APP') {
         const local = [...new Set(localStreamerChoices)].sort();
+        const bundled = [...new Set(bundledStreamerChoices)].sort();
         const remote = [...new Set(remoteStreamerChoices)].sort();
-        const known = [...new Set([...local, ...remote])];
+        const known = [...new Set([...local, ...bundled, ...remote])];
         const updateValue = document.querySelector('[data-setting="UPDATE_SCRIPTS"]')?.value
             || state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
-        const preferGitHub = String(updateValue).toLowerCase() === 'true';
-        const localOptions = local.map(value => `<option value="local::${escapeHTML(value)}" ${value === spec.value && (!remote.includes(value) || !preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
-        const remoteOptions = remote.map(value => `<option value="github::${escapeHTML(value)}" ${value === spec.value && (!local.includes(value) || preferGitHub) ? 'selected' : ''}>${escapeHTML(value)}</option>`).join('');
+        const preferUpdate = String(updateValue).toLowerCase() === 'true';
+        const selectedSource = !local.includes(spec.value) ? (bundled.includes(spec.value) ? 'bundled' : 'github')
+            : preferUpdate && bundled.includes(spec.value) ? 'bundled'
+            : preferUpdate && remote.includes(spec.value) ? 'github' : 'local';
+        const option = (source, value) => `<option value="${source}::${escapeHTML(value)}" ${value === spec.value && source === selectedSource ? 'selected' : ''}>${escapeHTML(value)}</option>`;
+        const localOptions = local.map(value => option('local', value)).join('');
+        const bundledOptions = bundled.map(value => option('bundled', value)).join('');
+        const remoteOptions = remote.map(value => option('github', value)).join('');
         const savedOption = spec.value && !known.includes(spec.value) ? `<optgroup label="Saved selection"><option value="saved::${escapeHTML(spec.value)}" selected>${escapeHTML(spec.value)}</option></optgroup>` : '';
         const clearOption = '<option value="none::">No streaming app selected</option>';
-        control = `<select data-setting="${spec.key}" ${disabled}><option value="" disabled ${!spec.value ? 'selected' : ''}>Choose scripts for your streaming app…</option>${clearOption}${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
+        control = `<select data-setting="${spec.key}" ${disabled}><option value="" disabled ${!spec.value ? 'selected' : ''}>Choose scripts for your streaming app…</option>${clearOption}${localOptions ? `<optgroup label="Local scripts on this server">${localOptions}</optgroup>` : ''}${bundledOptions ? `<optgroup label="Included with ah4c">${bundledOptions}</optgroup>` : ''}${remoteOptions ? `<optgroup label="From sullrich/ah4c on GitHub">${remoteOptions}</optgroup>` : ''}${savedOption}</select><input class="custom-streamer" type="text" data-custom-streamer value="${known.includes(spec.value) ? '' : escapeHTML(spec.value)}" placeholder="Advanced: enter a folder path" ${disabled}>`;
     } else if (spec.type === 'bool' && !spec.scriptVaries) {
         const usingDefault = spec.source === 'default';
         const defaultLabel = String(spec.defaultValue).toLowerCase() === 'true' ? 'Yes' : 'No';
@@ -773,10 +781,14 @@ function renderFieldInto(spec, target, replace = false) {
             const choice = decodeStreamerChoice(event.target.value);
             const updateScripts = document.querySelector('[data-setting="UPDATE_SCRIPTS"]');
             if (updateScripts && !updateScripts.disabled && choice.source === 'local') updateScripts.value = 'false';
-            if (updateScripts && !updateScripts.disabled && choice.source === 'github') updateScripts.value = 'true';
             if (updateScripts && !updateScripts.disabled && choice.source === 'none') updateScripts.value = 'false';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
-            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c will download only these scripts when it starts and check this selection for updates on future starts.';
+            if (byId('streamer-query-status') && choice.source === 'bundled') byId('streamer-query-status').textContent = 'Included with ah4c. ah4c copies these scripts into your scripts folder when it starts. Files you already have there are kept unless updates are turned on.';
+            // Startup copies a folder ah4c includes from its own copy and goes
+            // to GitHub only for one it does not, so say which this is.
+            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = bundledStreamerChoices.includes(choice.path)
+                ? 'These scripts are also included with ah4c, so ah4c uses its own copy of them. Files you already have there are kept unless updates are turned on.'
+                : 'GitHub version selected. ah4c downloads only these scripts when it starts. Files you already have there are kept unless updates are turned on.';
             if (byId('streamer-query-status') && choice.source === 'none') byId('streamer-query-status').textContent = 'The streaming app selection will be cleared when you save all changes.';
         });
         customInput?.addEventListener('input', () => {
@@ -1243,7 +1255,7 @@ function selectedStreamerPath(root = document) {
 }
 
 function decodeStreamerChoice(value) {
-    const match = /^(local|github|saved|none)::(.*)$/.exec(value || '');
+    const match = /^(local|bundled|github|saved|none)::(.*)$/.exec(value || '');
     return match ? {source:match[1], path:match[2]} : {source:'', path:value || ''};
 }
 

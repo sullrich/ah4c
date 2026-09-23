@@ -23,6 +23,10 @@ const (
 	localScriptTotalLimit = 32 << 20
 )
 
+// bundledScriptsRoot holds the scripts this image was built with. The start
+// script copies the selected folder from here into ./scripts.
+const bundledScriptsRoot = "/tmp/scripts"
+
 var (
 	localScriptsRootOverride string
 	scriptUploadMu           sync.Mutex
@@ -36,24 +40,25 @@ func registerScriptConfigRoutes(r *gin.Engine) {
 
 func streamersConfigHandler(c *gin.Context) {
 	local := discoverLocalStreamers()
+	bundled := discoverBundledStreamers()
 	remote := loadStreamerCache()
 	if c.Query("remote") == "true" {
 		queried, err := queryUpstreamStreamers()
 		if err != nil {
 			if c.Query("details") == "true" {
-				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "local": local, "remote": remote})
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "local": local, "bundled": bundled, "remote": remote})
 			} else {
-				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "streamers": mergeStreamers(local, remote)})
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "streamers": mergeStreamers(local, bundled, remote)})
 			}
 			return
 		}
 		remote = queried
 	}
 	if c.Query("details") == "true" {
-		c.JSON(http.StatusOK, gin.H{"local": local, "remote": remote})
+		c.JSON(http.StatusOK, gin.H{"local": local, "bundled": bundled, "remote": remote})
 		return
 	}
-	c.JSON(http.StatusOK, mergeStreamers(local, remote))
+	c.JSON(http.StatusOK, mergeStreamers(local, bundled, remote))
 }
 
 type localScriptEntry struct {
@@ -306,7 +311,11 @@ func missingRequiredStreamerFiles(directory string) []string {
 }
 
 func discoverStreamers() []string {
-	return mergeStreamers(discoverLocalStreamers(), loadStreamerCache())
+	return mergeStreamers(discoverLocalStreamers(), discoverBundledStreamers(), loadStreamerCache())
+}
+
+func discoverBundledStreamers() []string {
+	return discoverLocalStreamersAt(bundledScriptsRoot)
 }
 
 type githubTreeResponse struct {
