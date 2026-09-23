@@ -19,12 +19,16 @@ var connectionCheckSlots = make(chan struct{}, 4)
 func registerConnectionConfigRoutes(r *gin.Engine) {
 	r.POST("/api/config/check-connection", checkConfigConnectionHandler)
 	registerAppleTVPairingRoutes(r)
+	registerStagedPreviewRoute(r)
 }
 
 type connectionCheckRequest struct {
 	Index    int       `json:"index"`
 	Tuner    TunerSpec `json:"tuner"`
 	UsePYATV bool      `json:"usePyatv"`
+	// Recheck asks whether a device already showing its authorization message
+	// has been approved, without restarting the handshake that shows it.
+	Recheck bool `json:"recheck"`
 }
 
 type connectionCheckResult struct {
@@ -67,7 +71,7 @@ func checkConfigConnectionHandler(c *gin.Context) {
 			deviceResult <- checkPYATVConnection(ctx, request.Tuner.TunerIP)
 			return
 		}
-		deviceResult <- checkADBConnection(ctx, request.Tuner.TunerIP)
+		deviceResult <- checkADBConnection(ctx, request.Tuner.TunerIP, request.Recheck)
 	}()
 	go func() { encoderResult <- checkEncoderConnection(ctx, request.Tuner.EncoderURL) }()
 	result := tunerConnectionCheck{Index: request.Index}
@@ -76,7 +80,7 @@ func checkConfigConnectionHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func checkADBConnection(ctx context.Context, target string) connectionCheckResult {
+func checkADBConnection(ctx context.Context, target string, recheck bool) connectionCheckResult {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return connectionCheckResult{State: "empty", Message: "Enter a device address"}
@@ -102,6 +106,11 @@ func checkADBConnection(ctx context.Context, target string) connectionCheckResul
 	state = strings.TrimSpace(state)
 	if err != nil || state != "device" {
 		if adbAuthorizationPending(connectOutput, state) {
+			if recheck {
+				// Reconnecting would take the message off the screen while the
+				// person is still reaching for the remote.
+				return connectionCheckResult{State: "authorize", Message: "Waiting for Allow USB debugging to be approved on the Android device"}
+			}
 			// A fresh ADB handshake makes Android show its authorization dialog.
 			// Return immediately so the browser never waits for the person to find
 			// the remote and approve it.
