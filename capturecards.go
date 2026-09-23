@@ -422,9 +422,10 @@ func parseUVCModes(raw []byte) []captureMode {
 	return modes
 }
 
-// captureFormatFor names the format to ask for at a size and rate. When the
-// card sends that uncompressed, nothing is named, as in the Channels
-// community's guide; only when it takes MJPEG to reach the rate is mjpeg named.
+// captureFormatFor is the format a card is first set up with at a size and
+// rate: its uncompressed picture when it sends that uncompressed, MJPEG only
+// when that is the way to reach it. The format is always named in the line,
+// so the card sends what the tuner shows; the user can pick another.
 func captureFormatFor(modes []captureMode, width, height, rate int) string {
 	format := ""
 	for _, mode := range modes {
@@ -436,7 +437,7 @@ func captureFormatFor(modes []captureMode, width, height, rate int) string {
 				continue
 			}
 			if mode.Format != "mjpeg" {
-				return ""
+				return mode.Format
 			}
 			format = "mjpeg"
 		}
