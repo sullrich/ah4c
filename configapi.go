@@ -80,6 +80,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	registerM3UIntegrationRoutes(r)
 	registerChannelsRecordingRoutes(r)
 	registerCaptureCardRoutes(r)
+	registerDevicePictureRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {

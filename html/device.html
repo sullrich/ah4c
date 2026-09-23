@@ -31,9 +31,845 @@
 				<svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
 			</button>
 		</div>
-		<div class="shell-body">
-			<iframe src="/scrcpy/" class="frame-fill" allow="clipboard-read; clipboard-write"></iframe>
+		<div class="shell-body device-body">
+			<div class="device-bar">
+				<label class="device-field device-field--device">
+					<span>Device</span>
+					<select id="deviceSelect"><option value="">Looking for devices…</option></select>
+				</label>
+				<label class="device-field">
+					<span>Picture</span>
+					<select id="pictureSelect"></select>
+				</label>
+				<div class="device-actions">
+					<button id="openBtn" class="btn btn-primary btn-sm" type="button">Open</button>
+					<button id="stopBtn" class="btn btn-sm hidden" type="button">Stop</button>
+					<button id="customBtn" class="btn btn-sm" type="button">Custom settings</button>
+				</div>
+				<p id="deviceHint" class="device-hint"></p>
+			</div>
+			<div id="deviceStage" class="device-stage">
+				<div id="devicePlaceholder" class="device-placeholder">
+					<div class="empty-state" id="placeholderText">Choose a device and press <strong>Open</strong>.</div>
+				</div>
+			</div>
 		</div>
 	</div>
+
+	<div id="customModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="customTitle">
+		<div class="modal custom-picture-modal">
+			<div class="modal-head">
+				<div>
+					<div id="customTitle" class="card-title">Custom picture settings</div>
+					<div class="muted">Saved with AH4C's settings, so every browser sees them.</div>
+				</div>
+				<button id="customClose" class="btn btn-sm modal-close" type="button">Close</button>
+			</div>
+			<div id="customList" class="custom-picture-list"></div>
+			<div class="custom-picture-section">
+				<div class="custom-picture-form-title">Starting picture for each device</div>
+				<p class="modal-hint">Opening a device uses its starting picture. You can still pick another one from the Picture list at any time.</p>
+				<div id="assignList" class="custom-picture-list"></div>
+			</div>
+			<div class="custom-picture-form">
+				<div id="customFormTitle" class="custom-picture-form-title">New setting</div>
+				<div class="field">
+					<label for="cpName">Name</label>
+					<input id="cpName" type="text" maxlength="40" placeholder="Living room box">
+				</div>
+				<div class="custom-picture-grid">
+					<div class="field">
+						<label for="cpWidth">Width</label>
+						<input id="cpWidth" type="number" min="128" max="4096" step="8" value="1280">
+					</div>
+					<div class="field">
+						<label for="cpHeight">Height</label>
+						<input id="cpHeight" type="number" min="128" max="4096" step="8" value="720">
+					</div>
+					<div class="field">
+						<label for="cpQuality">Quality (Mbps)</label>
+						<input id="cpQuality" type="number" min="0.25" max="50" step="0.25" value="7">
+					</div>
+					<div class="field">
+						<label for="cpFps">Frames per second</label>
+						<select id="cpFps">
+							<option value="60">60</option>
+							<option value="30">30</option>
+							<option value="24">24</option>
+							<option value="15">15</option>
+						</select>
+					</div>
+				</div>
+				<p id="cpSizeNote" class="modal-hint"></p>
+				<div class="field">
+					<label for="cpEncoder">Compression on the Android device</label>
+					<select id="cpEncoder"></select>
+					<p id="cpEncoderNote" class="modal-hint"></p>
+				</div>
+				<div id="customError" class="field-validation" role="alert"></div>
+				<div class="btn-row">
+					<button id="customSave" class="btn btn-primary" type="button">Save setting</button>
+					<button id="customCancelEdit" class="btn hidden" type="button">Cancel changes</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+	(function () {
+		// ws-scrcpy is served under /scrcpy/ on this same address, so it shares
+		// this page's saved browser settings. A picture setting is written where
+		// ws-scrcpy looks for its own saved video settings, then the stream is
+		// opened in the frame below. ws-scrcpy itself is not modified.
+		//
+		// It files those settings under the device and the exact size of the
+		// window the stream runs in, which is why the stream is opened here in
+		// a frame we can measure rather than in a new tab.
+
+		// ws-scrcpy's "H264 Converter" player where the browser can play it.
+		// Otherwise its WebCodecs player (which browsers only offer over
+		// https), and failing that its Broadway software player: iPhone and
+		// iPad Safari, for one, have no MediaSource. Each saves its settings
+		// under its own name.
+		var PLAYER = (typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"'))
+			? { code: 'mse', storage: 'MseDecoder' }
+			: typeof VideoDecoder === 'function' ? { code: 'webcodecs', storage: 'WebCodecsPlayer' }
+			: typeof WebAssembly === 'object' ? { code: 'broadway', storage: 'BroadwayDecoder' }
+			: null;
+		var SERVER_PORT = 8886;          // where ws-scrcpy's server listens on the device
+		var CHOICE_KEY = 'ah4c-device-choice';
+		var SOFTWARE = '@software';      // the device's software encoder, whatever it is called
+
+		// Widths are multiples of 64 and heights multiples of 16: many
+		// streaming boxes' video chips need that, and an unaligned size is what
+		// turns the picture into slanted stripes. Standard and Sharp keep
+		// ws-scrcpy's own bitrate, frame rate and keyframe spacing.
+		var BUILT_IN = [
+			{ key: 'standard', name: 'Standard', width: 1280, height: 720, bitrate: 7340032, maxFps: 60, iFrameInterval: 10, encoder: '',
+			  hint: 'A clear picture that works on most devices.' },
+			{ key: 'light', name: 'Light', width: 1024, height: 576, bitrate: 2097152, maxFps: 30, iFrameInterval: 10, encoder: '',
+			  hint: 'Uses less network. Good for Wi-Fi or an older computer.' },
+			{ key: 'sharp', name: 'Sharp', width: 1920, height: 1080, bitrate: 7340032, maxFps: 60, iFrameInterval: 10, encoder: '',
+			  hint: 'The sharpest picture. If it turns into stripes or a garbled picture, go back to Standard.' },
+			{ key: 'compat', name: 'Compatibility', width: 1280, height: 720, bitrate: 7340032, maxFps: 30, iFrameInterval: 10, encoder: SOFTWARE,
+			  hint: 'A slower but more forgiving way of sending the picture. Try this if Standard still shows stripes or a garbled picture.' }
+		];
+		var PASSTHROUGH = { key: 'passthrough', name: 'Pass-through (full ws-scrcpy)',
+			hint: 'The complete ws-scrcpy screen, unchanged, with every setting. Open a device from its list.' };
+
+		function byId(id) { return document.getElementById(id); }
+		var deviceSelect = byId('deviceSelect');
+		var pictureSelect = byId('pictureSelect');
+		var openBtn = byId('openBtn');
+		var stopBtn = byId('stopBtn');
+		var customBtn = byId('customBtn');
+		var hint = byId('deviceHint');
+		var stage = byId('deviceStage');
+		var placeholder = byId('devicePlaceholder');
+		var placeholderText = byId('placeholderText');
+
+		var devices = new Map();    // udid -> ws-scrcpy device descriptor
+		var tunerIndex = new Map(); // "ip:port" -> tuner number
+		var custom = [];            // custom settings saved in the config directory
+		var assignments = {};       // device address -> the picture it starts with
+		var customLoaded = false;
+		var appliedFor = null;      // the device whose starting picture was last applied
+		var listReached = false;
+		var showing = '';           // '', 'stream' or 'passthrough'
+
+		function mbps(bitrate) {
+			return (Math.round(bitrate / 1e6 * 100) / 100) + ' Mbps';
+		}
+		function summary(p) {
+			var parts = [p.width + ' × ' + p.height, mbps(p.bitrate), p.maxFps + ' fps'];
+			if (p.encoder === SOFTWARE) parts.push('software compression');
+			else if (p.encoder) parts.push(p.encoder);
+			return parts.join(' · ');
+		}
+
+		function allPictures() {
+			return BUILT_IN.concat(custom.map(function (c) {
+				return Object.assign({ key: c.id, hint: summary(c) + '.' }, c);
+			}), [PASSTHROUGH]);
+		}
+		function picture(key) {
+			var list = allPictures();
+			for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+			return BUILT_IN[0];
+		}
+
+		function renderPictures() {
+			var keep = pictureSelect.value || loadChoice().picture || 'standard';
+			pictureSelect.innerHTML = '';
+			function add(parent, p, label) {
+				var o = document.createElement('option');
+				o.value = p.key;
+				o.textContent = label;
+				parent.appendChild(o);
+			}
+			BUILT_IN.forEach(function (p) { add(pictureSelect, p, p.name + ' (' + p.width + ' × ' + p.height + ')'); });
+			if (custom.length) {
+				var g = document.createElement('optgroup');
+				g.label = 'Your settings';
+				custom.forEach(function (c) { add(g, { key: c.id }, c.name + ' (' + c.width + ' × ' + c.height + ')'); });
+				pictureSelect.appendChild(g);
+			}
+			add(pictureSelect, PASSTHROUGH, PASSTHROUGH.name);
+			// A remembered custom setting that has since been deleted falls
+			// back to Standard, but only once the saved list has been read.
+			pictureSelect.value = picture(keep).key === keep || !customLoaded ? keep : 'standard';
+			if (!pictureSelect.value) pictureSelect.value = 'standard';
+			update();
+		}
+
+		function loadChoice() {
+			try { return JSON.parse(localStorage.getItem(CHOICE_KEY)) || {}; } catch (e) { return {}; }
+		}
+		function saveChoice() {
+			try {
+				localStorage.setItem(CHOICE_KEY, JSON.stringify({ udid: deviceSelect.value, picture: pictureSelect.value }));
+			} catch (e) {}
+		}
+
+		function withPort(addr) {
+			return /:\d+$/.test(addr) ? addr : addr + ':5555';
+		}
+
+		function isReady(d) {
+			return !!d && d.state === 'device' && d.pid !== -1;
+		}
+
+		function deviceName(d) {
+			var name = [d['ro.product.manufacturer'], d['ro.product.model']].filter(Boolean).join(' ');
+			var t = tunerIndex.get(withPort(d.udid));
+			return t !== undefined
+				? 'Tuner ' + t + (name ? ' · ' + name : '')
+				: (name ? name + ' (' + d.udid + ')' : d.udid);
+		}
+
+		function deviceLabel(d) {
+			var label = deviceName(d);
+			if (d.state === 'unauthorized') label += ' — waiting for permission';
+			else if (d.state !== 'device') label += ' — not connected';
+			else if (d.pid === -1) label += ' — getting ready';
+			return label;
+		}
+
+		function sortedDevices() {
+			return Array.from(devices.values()).sort(function (a, b) {
+				var ta = tunerIndex.get(withPort(a.udid)), tb = tunerIndex.get(withPort(b.udid));
+				if (ta !== undefined && tb !== undefined) return ta - tb;
+				if (ta !== undefined) return -1;
+				if (tb !== undefined) return 1;
+				return a.udid < b.udid ? -1 : a.udid > b.udid ? 1 : 0;
+			});
+		}
+
+		function renderDevices() {
+			var keep = deviceSelect.value || loadChoice().udid || '';
+			deviceSelect.innerHTML = '';
+			var list = sortedDevices();
+			if (!list.length) {
+				var none = document.createElement('option');
+				none.value = '';
+				none.textContent = listReached ? 'No devices found' : 'Looking for devices…';
+				deviceSelect.appendChild(none);
+			}
+			list.forEach(function (d) {
+				var o = document.createElement('option');
+				o.value = d.udid;
+				o.textContent = deviceLabel(d);
+				deviceSelect.appendChild(o);
+			});
+			if (list.some(function (d) { return d.udid === keep; })) deviceSelect.value = keep;
+			applyStartingPicture();
+			update();
+			if (modal.classList.contains('open') && !saving) renderAssignments();
+		}
+
+		// When a device is chosen, switch to the picture it starts with. Only
+		// once per choice, so picking something else by hand sticks.
+		function applyStartingPicture() {
+			var udid = deviceSelect.value;
+			if (!udid || !customLoaded || appliedFor === udid) return;
+			appliedFor = udid;
+			var key = assignments[udid];
+			if (!key || pictureSelect.value === 'passthrough') return;
+			if (picture(key).key !== key) return;
+			pictureSelect.value = key;
+			saveChoice();
+		}
+
+		function update() {
+			var p = picture(pictureSelect.value);
+			var passthrough = p.key === 'passthrough';
+			var d = devices.get(deviceSelect.value);
+			deviceSelect.disabled = passthrough || !devices.size;
+			openBtn.classList.toggle('hidden', passthrough);
+			openBtn.disabled = !PLAYER || !isReady(d);
+			openBtn.textContent = showing === 'stream' ? 'Reopen' : 'Open';
+			stopBtn.classList.toggle('hidden', showing !== 'stream');
+
+			var text = p.hint;
+			if (!passthrough && d && assignments[d.udid] === p.key) text = 'This device\u2019s starting picture. ' + text;
+			if (!passthrough) {
+				if (!PLAYER) text = 'This browser can’t play the picture settings. Choose Pass-through instead.';
+				else if (!listReached) text = 'Can’t reach ws-scrcpy yet. Trying again…';
+				else if (!devices.size) text = 'No Android devices are connected. Check that each device is on and has network debugging allowed.';
+				else if (d && d.state === 'unauthorized') text = 'This device is asking for permission. Look at the TV and allow debugging from this computer.';
+				else if (d && d.state !== 'device') text = 'This device isn’t connected right now.';
+				else if (d && d.pid === -1) text = 'This device is getting ready. Open becomes available in a few seconds.';
+			}
+			hint.textContent = text;
+		}
+
+		function newFrame(src) {
+			var old = stage.querySelector('iframe');
+			if (old) old.remove();
+			var f = document.createElement('iframe');
+			f.setAttribute('allow', 'clipboard-read; clipboard-write');
+			f.setAttribute('title', 'ws-scrcpy');
+			stage.appendChild(f);
+			placeholder.classList.add('hidden');
+			if (src) f.src = src;
+			return f;
+		}
+
+		function showPlaceholder(html) {
+			var old = stage.querySelector('iframe');
+			if (old) old.remove();
+			placeholderText.innerHTML = html;
+			placeholder.classList.remove('hidden');
+			showing = '';
+			update();
+		}
+
+		function encoderFor(p, d) {
+			if (p.encoder !== SOFTWARE) return p.encoder || '';
+			// Android 10 and later name their software encoder differently.
+			return parseInt(d['ro.build.version.sdk'], 10) >= 29 ? 'c2.android.avc.encoder' : 'OMX.google.h264.encoder';
+		}
+
+		function videoSettings(p, d) {
+			var s = {
+				bitrate: p.bitrate,
+				maxFps: p.maxFps,
+				iFrameInterval: p.iFrameInterval || 10,
+				bounds: { width: p.width, height: p.height },
+				crop: null,
+				sendFrameMeta: false,
+				lockedVideoOrientation: -1,
+				displayId: 0
+			};
+			var encoder = encoderFor(p, d);
+			if (encoder) s.encoderName = encoder;
+			return s;
+		}
+
+		function deviceSocketUrl(udid) {
+			return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host +
+				'/scrcpy/?' + new URLSearchParams({ action: 'proxy-adb', remote: 'tcp:' + SERVER_PORT, udid: udid });
+		}
+
+		function streamUrl(udid) {
+			// fitToScreen=false: otherwise ws-scrcpy sizes the picture to the
+			// window, which is how unaligned sizes happen in the first place.
+			return '/scrcpy/#!' + new URLSearchParams({ action: 'stream', udid: udid, player: PLAYER.code, ws: deviceSocketUrl(udid), fitToScreen: 'false' });
+		}
+
+		function openStream() {
+			var p = picture(pictureSelect.value);
+			var d = devices.get(deviceSelect.value);
+			if (!PLAYER || p.key === 'passthrough' || !isReady(d)) return;
+			// Settle the bar first (its hint and buttons change height), then
+			// pin a blank frame to whole pixels and read its size back, so the
+			// size the setting is filed under is the size ws-scrcpy will see
+			// when it loads.
+			showing = 'stream';
+			update();
+			var f = newFrame('');
+			var box = stage.getBoundingClientRect();
+			f.style.width = Math.floor(box.width) + 'px';
+			f.style.height = Math.floor(box.height) + 'px';
+			var w = f.contentWindow;
+			var size = w.innerWidth + 'x' + w.innerHeight;
+			var prefix = PLAYER.storage + ':' + d.udid + ':';
+			try {
+				var stale = [];
+				for (var i = 0; i < localStorage.length; i++) {
+					var k = localStorage.key(i);
+					if (k && k.indexOf(prefix) === 0) stale.push(k);
+				}
+				stale.forEach(function (k) { localStorage.removeItem(k); });
+				localStorage.setItem(prefix + size, JSON.stringify(videoSettings(p, d)));
+			} catch (e) {
+				showPlaceholder('This browser isn’t allowing saved settings, so a picture setting can’t be applied. Choose <strong>Pass-through</strong> instead.');
+				return;
+			}
+			f.src = streamUrl(d.udid);
+		}
+
+		function showPassthrough() {
+			newFrame('/scrcpy/');
+			showing = 'passthrough';
+			update();
+		}
+
+		pictureSelect.addEventListener('change', function () {
+			saveChoice();
+			if (pictureSelect.value === 'passthrough') showPassthrough();
+			else if (showing === 'stream') openStream();
+			else if (showing === 'passthrough') showPlaceholder('Choose a device and press <strong>Open</strong>.');
+			else update();
+		});
+		deviceSelect.addEventListener('change', function () {
+			applyStartingPicture();
+			saveChoice();
+			if (showing === 'stream') openStream();
+			else update();
+		});
+		openBtn.addEventListener('click', openStream);
+		stopBtn.addEventListener('click', function () {
+			showPlaceholder('Stopped. Press <strong>Open</strong> to watch again.');
+		});
+		// The frame is pinned only while the stream starts; after that it can
+		// follow the window again.
+		window.addEventListener('resize', function () {
+			var f = stage.querySelector('iframe');
+			if (f) { f.style.width = ''; f.style.height = ''; }
+		});
+
+		// ws-scrcpy's own live device list, as plain JSON.
+		var retry = null;
+		function watchDevices() {
+			retry = null;
+			var ws;
+			try {
+				ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/scrcpy/?action=goog-device-list');
+			} catch (e) { retry = setTimeout(watchDevices, 5000); return; }
+			ws.onmessage = function (ev) {
+				var msg;
+				try { msg = JSON.parse(ev.data); } catch (e) { return; }
+				if (!msg || !msg.data) return;
+				if (msg.type === 'devicelist' && Array.isArray(msg.data.list)) {
+					listReached = true;
+					devices = new Map();
+					msg.data.list.forEach(function (d) { if (d && d.udid) devices.set(d.udid, d); });
+					renderDevices();
+				} else if (msg.type === 'device' && msg.data.device && msg.data.device.udid) {
+					devices.set(msg.data.device.udid, msg.data.device);
+					renderDevices();
+				}
+			};
+			ws.onclose = function () {
+				listReached = false;
+				update();
+				if (!retry) retry = setTimeout(watchDevices, 5000);
+			};
+		}
+
+		// ---- Custom settings --------------------------------------------
+
+		var modal = byId('customModal');
+		var customList = byId('customList');
+		var customError = byId('customError');
+		var customSave = byId('customSave');
+		var customCancelEdit = byId('customCancelEdit');
+		var formTitle = byId('customFormTitle');
+		var cp = {
+			name: byId('cpName'), width: byId('cpWidth'), height: byId('cpHeight'),
+			quality: byId('cpQuality'), fps: byId('cpFps'), encoder: byId('cpEncoder')
+		};
+		var sizeNote = byId('cpSizeNote');
+		var encoderNote = byId('cpEncoderNote');
+		var editingId = '';
+		var confirmingDelete = '';
+		var saving = false;
+		var probeGeneration = 0;
+		var probedEncoders = [];
+
+		// Server errors come back as JSON; anything else (a proxy page, a
+		// dropped connection) still has to leave the dialog usable.
+		function api(method, body) {
+			return fetch('/api/device/pictures', {
+				method: method,
+				headers: body ? { 'Content-Type': 'application/json' } : undefined,
+				body: body ? JSON.stringify(body) : undefined
+			}).catch(function () {
+				throw new Error('AH4C could not be reached. Check the connection and try again.');
+			}).then(function (r) {
+				return r.json().catch(function () { return null; }).then(function (data) {
+					if (!r.ok || !data) throw new Error((data && data.error) || 'AH4C answered with an error (' + r.status + ').');
+					return data;
+				});
+			});
+		}
+
+		function loadCustom() {
+			return api('GET').then(function (data) {
+				custom = Array.isArray(data.pictures) ? data.pictures : [];
+				assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
+				customLoaded = true;
+				renderPictures();
+				applyStartingPicture();
+				update();
+				renderCustomList();
+			}).catch(function () {
+				customLoaded = true;
+				renderPictures();
+			});
+		}
+
+		function labelForSerial(udid) {
+			var d = devices.get(udid);
+			if (d) return deviceName(d);
+			var t = tunerIndex.get(withPort(udid));
+			return t !== undefined ? 'Tuner ' + t + ' (' + udid + ')' : udid;
+		}
+
+		// One row per device the page knows of, plus any that have a starting
+		// picture but are not connected right now.
+		function renderAssignments() {
+			var list = byId('assignList');
+			list.innerHTML = '';
+			var serials = sortedDevices().map(function (d) { return d.udid; });
+			Object.keys(assignments).sort().forEach(function (u) { if (serials.indexOf(u) === -1) serials.push(u); });
+			if (!serials.length) {
+				var empty = document.createElement('div');
+				empty.className = 'empty-state';
+				empty.textContent = 'No devices are connected yet.';
+				list.appendChild(empty);
+				return;
+			}
+			serials.forEach(function (udid) {
+				var row = document.createElement('label');
+				row.className = 'custom-picture-row custom-picture-assign';
+				var name = document.createElement('span');
+				name.className = 'custom-picture-text';
+				name.textContent = labelForSerial(udid);
+				var select = document.createElement('select');
+				[['', 'Whatever was used last']].concat(BUILT_IN.map(function (p) { return [p.key, p.name]; }),
+					custom.map(function (c) { return [c.id, c.name]; })).forEach(function (e) {
+					var o = document.createElement('option');
+					o.value = e[0];
+					o.textContent = e[1];
+					select.appendChild(o);
+				});
+				select.value = assignments[udid] || '';
+				select.disabled = saving;
+				select.addEventListener('change', function () {
+					var next = Object.assign({}, assignments);
+					if (select.value) next[udid] = select.value; else delete next[udid];
+					persist(custom, next, false).then(function (ok) {
+						if (ok && udid === deviceSelect.value && select.value) {
+							appliedFor = null;
+							applyStartingPicture();
+							if (showing === 'stream') openStream(); else update();
+						}
+					});
+				});
+				row.appendChild(name);
+				row.appendChild(select);
+				list.appendChild(row);
+			});
+		}
+
+		function renderCustomList() {
+			renderAssignments();
+			customList.innerHTML = '';
+			if (!custom.length) {
+				var empty = document.createElement('div');
+				empty.className = 'empty-state';
+				empty.textContent = 'No custom settings yet. Make one below and it appears in the Picture list.';
+				customList.appendChild(empty);
+				return;
+			}
+			custom.forEach(function (c) {
+				var row = document.createElement('div');
+				row.className = 'custom-picture-row' + (c.id === editingId ? ' is-editing' : '');
+				var text = document.createElement('div');
+				text.className = 'custom-picture-text';
+				var name = document.createElement('strong');
+				name.textContent = c.name;
+				var detail = document.createElement('span');
+				detail.textContent = summary(c);
+				text.appendChild(name);
+				text.appendChild(detail);
+				var users = Object.keys(assignments).filter(function (u) { return assignments[u] === c.id; }).map(labelForSerial);
+				if (users.length) {
+					var used = document.createElement('span');
+					used.textContent = 'Starting picture for ' + users.join(', ');
+					text.appendChild(used);
+				}
+				var edit = document.createElement('button');
+				edit.type = 'button';
+				edit.className = 'btn btn-sm';
+				edit.textContent = 'Edit';
+				edit.disabled = saving;
+				edit.addEventListener('click', function () { startEdit(c.id); });
+				var del = document.createElement('button');
+				del.type = 'button';
+				del.className = 'btn btn-sm btn-danger';
+				del.textContent = confirmingDelete === c.id ? 'Delete it' : 'Delete';
+				del.disabled = saving;
+				del.addEventListener('click', function () {
+					if (confirmingDelete !== c.id) { confirmingDelete = c.id; renderCustomList(); return; }
+					var left = {};
+					Object.keys(assignments).forEach(function (u) { if (assignments[u] !== c.id) left[u] = assignments[u]; });
+					persist(custom.filter(function (x) { return x.id !== c.id; }), left, c.id === editingId);
+				});
+				row.appendChild(text);
+				row.appendChild(edit);
+				row.appendChild(del);
+				customList.appendChild(row);
+			});
+		}
+
+		function renderEncoderOptions(selected) {
+			var names = probedEncoders.slice();
+			if (selected && selected !== SOFTWARE && names.indexOf(selected) === -1) names.push(selected);
+			cp.encoder.innerHTML = '';
+			[['', 'The device’s usual choice'], [SOFTWARE, 'Software (slower, most compatible)']]
+				.concat(names.map(function (n) { return [n, n]; }))
+				.forEach(function (e) {
+					var o = document.createElement('option');
+					o.value = e[0];
+					o.textContent = e[1];
+					cp.encoder.appendChild(o);
+				});
+			cp.encoder.value = selected || '';
+		}
+
+		// Ask the device which encoders it has, the same way ws-scrcpy's own
+		// settings dialog does: its server sends the list as soon as a
+		// connection opens, before any picture is requested.
+		function probeEncoders() {
+			var generation = ++probeGeneration;
+			var d = devices.get(deviceSelect.value);
+			if (!isReady(d)) {
+				encoderNote.textContent = 'This is how the Android device compresses its picture to send it here. It isn’t your HDMI encoder. Pick a connected device on the page to see its choices. The first two work on any device.';
+				return;
+			}
+			encoderNote.textContent = 'Asking ' + deviceName(d) + ' which kinds of compression it has…';
+			var ws, done = false;
+			function finish(list, message) {
+				if (done) return;
+				done = true;
+				clearTimeout(timer);
+				try { ws.close(); } catch (e) {}
+				if (generation !== probeGeneration) return;
+				if (list) {
+					probedEncoders = list;
+					renderEncoderOptions(cp.encoder.value);
+				}
+				encoderNote.textContent = message;
+			}
+			var timer = setTimeout(function () {
+				finish(null, deviceName(d) + ' didn’t answer. The first two choices still work.');
+			}, 8000);
+			try {
+				ws = new WebSocket(deviceSocketUrl(d.udid));
+				ws.binaryType = 'arraybuffer';
+			} catch (e) {
+				finish(null, 'Couldn’t reach ' + deviceName(d) + '. The first two choices still work.');
+				return;
+			}
+			ws.onmessage = function (ev) {
+				var info = parseInitialInfo(ev.data);
+				if (!info) return;
+				var size = info.width ? ' Its screen is ' + info.width + ' × ' + info.height + '.' : '';
+				finish(info.encoders.filter(function (n) { return /avc|h264/i.test(n); }).length
+					? info.encoders.filter(function (n) { return /avc|h264/i.test(n); })
+					: info.encoders,
+					'This is how the Android device compresses its picture to send it here. It isn’t your HDMI encoder. The choices from ' + deviceName(d) + ' are listed above.' + size);
+			};
+			ws.onerror = ws.onclose = function () {
+				finish(null, 'Couldn’t reach ' + deviceName(d) + '. The first two choices still work.');
+			};
+		}
+
+		// ws-scrcpy's "scrcpy_initial" message: a 64-byte device name, the
+		// displays, then the encoder names (StreamReceiver.handleInitialInfo).
+		function parseInitialInfo(buf) {
+			if (!(buf instanceof ArrayBuffer)) return null;
+			var magic = 'scrcpy_initial';
+			var bytes = new Uint8Array(buf);
+			if (bytes.length <= magic.length) return null;
+			for (var i = 0; i < magic.length; i++) if (bytes[i] !== magic.charCodeAt(i)) return null;
+			try {
+				var v = new DataView(buf);
+				var o = magic.length + 64;
+				var displays = v.getInt32(o); o += 4;
+				var width = 0, height = 0;
+				for (var n = 0; n < displays; n++) {
+					var id = v.getInt32(o);
+					if (id === 0) { width = v.getInt32(o + 4); height = v.getInt32(o + 8); }
+					o += 24 + 4;                    // display info, connection count
+					o += 4 + v.getInt32(o);         // screen info
+					o += 4 + v.getInt32(o);         // video settings
+				}
+				var count = v.getInt32(o); o += 4;
+				var encoders = [];
+				var decoder = new TextDecoder();
+				for (var e = 0; e < count; e++) {
+					var len = v.getInt32(o); o += 4;
+					encoders.push(decoder.decode(bytes.subarray(o, o + len)));
+					o += len;
+				}
+				return { width: width, height: height, encoders: encoders };
+			} catch (err) {
+				return null;
+			}
+		}
+
+		function updateSizeNote() {
+			var w = parseInt(cp.width.value, 10);
+			sizeNote.textContent = w && w % 64
+				? 'Widths that are a multiple of 64 (1024, 1280, 1920) are safest. Other widths can turn the picture into slanted stripes on some devices.'
+				: 'The picture is fitted inside this size, keeping its shape.';
+			sizeNote.classList.toggle('custom-picture-warn', !!(w && w % 64));
+		}
+
+		function fillForm(c) {
+			cp.name.value = c ? c.name : '';
+			cp.width.value = c ? c.width : 1280;
+			cp.height.value = c ? c.height : 720;
+			cp.quality.value = c ? Math.round(c.bitrate / 1e6 * 100) / 100 : 7;
+			cp.fps.value = String(c ? c.maxFps : 60);
+			if (!cp.fps.value) {
+				var o = document.createElement('option');
+				o.value = String(c.maxFps);
+				o.textContent = String(c.maxFps);
+				cp.fps.appendChild(o);
+				cp.fps.value = o.value;
+			}
+			renderEncoderOptions(c ? c.encoder : '');
+			formTitle.textContent = c ? 'Editing ' + c.name : 'New setting';
+			customSave.textContent = c ? 'Save changes' : 'Save setting';
+			customCancelEdit.classList.toggle('hidden', !c);
+			customError.textContent = '';
+			updateSizeNote();
+		}
+
+		function startEdit(id) {
+			editingId = id;
+			confirmingDelete = '';
+			fillForm(custom.find(function (c) { return c.id === id; }));
+			renderCustomList();
+			cp.name.focus();
+		}
+
+		function readForm() {
+			var name = cp.name.value.trim();
+			var width = parseInt(cp.width.value, 10);
+			var height = parseInt(cp.height.value, 10);
+			var quality = parseFloat(cp.quality.value);
+			if (!name) return 'Give the setting a name.';
+			if (custom.some(function (c) { return c.id !== editingId && c.name.toLowerCase() === name.toLowerCase(); }))
+				return 'There is already a setting called ' + name + '.';
+			if (!(width >= 128 && width <= 4096 && height >= 128 && height <= 4096))
+				return 'Width and height must each be between 128 and 4096.';
+			if (!(quality >= 0.25 && quality <= 50)) return 'Quality must be between 0.25 and 50 Mbps.';
+			var existing = custom.find(function (c) { return c.id === editingId; });
+			return {
+				id: editingId || 'custom-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36),
+				name: name,
+				width: width,
+				height: height,
+				bitrate: Math.round(quality * 1e6),
+				maxFps: parseInt(cp.fps.value, 10),
+				iFrameInterval: existing ? existing.iFrameInterval : 10,
+				encoder: cp.encoder.value
+			};
+		}
+
+		function setSaving(on) {
+			saving = on;
+			Object.keys(cp).forEach(function (k) { cp[k].disabled = on; });
+			customSave.disabled = on;
+			customCancelEdit.disabled = on;
+			renderCustomList();
+		}
+
+		function persist(list, nextAssignments, resetForm) {
+			customError.textContent = '';
+			setSaving(true);
+			return api('PUT', { pictures: list, assignments: nextAssignments }).then(function (data) {
+				custom = Array.isArray(data.pictures) ? data.pictures : [];
+				assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
+				confirmingDelete = '';
+				if (resetForm) { editingId = ''; fillForm(null); }
+				setSaving(false);
+				renderPictures();
+				return true;
+			}).catch(function (err) {
+				setSaving(false);
+				customError.textContent = err.message;
+				renderCustomList();
+				return false;
+			});
+		}
+
+		customSave.addEventListener('click', function () {
+			var p = readForm();
+			if (typeof p === 'string') { customError.textContent = p; return; }
+			var isNew = !editingId;
+			var list = isNew ? custom.concat([p]) : custom.map(function (c) { return c.id === p.id ? p : c; });
+			persist(list, assignments, true).then(function (ok) {
+				if (!ok) return;
+				// A new setting becomes the page's choice; an edited one that is
+				// on screen now is reopened with its new values.
+				if (isNew || pictureSelect.value === p.id) {
+					pictureSelect.value = p.id;
+					saveChoice();
+					if (showing === 'stream') openStream();
+					else if (showing === 'passthrough') showPlaceholder('Choose a device and press <strong>Open</strong>.');
+					else update();
+				}
+			});
+		});
+		customCancelEdit.addEventListener('click', function () {
+			editingId = '';
+			fillForm(null);
+			renderCustomList();
+		});
+		cp.width.addEventListener('input', updateSizeNote);
+
+		function openModal() {
+			editingId = '';
+			confirmingDelete = '';
+			fillForm(null);
+			renderCustomList();
+			modal.classList.add('open');
+			probeEncoders();
+			cp.name.focus();
+		}
+		function closeModal() {
+			if (saving) return;
+			probeGeneration++;
+			modal.classList.remove('open');
+			customBtn.focus();
+		}
+		customBtn.addEventListener('click', openModal);
+		byId('customClose').addEventListener('click', closeModal);
+		modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+		document.addEventListener('keydown', function (e) {
+			if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+		});
+
+		// Tuner numbers, so each device can be named the way Activity names it.
+		fetch('/api/status').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+			if (!s || !Array.isArray(s.Tuners)) return;
+			s.Tuners.forEach(function (t, i) { if (t && t.Tunerip) tunerIndex.set(withPort(t.Tunerip), i); });
+			renderDevices();
+		}).catch(function () {});
+
+		renderPictures();
+		if (pictureSelect.value === 'passthrough') showPassthrough();
+		renderDevices();
+		watchDevices();
+		loadCustom();
+	})();
+	</script>
 </body>
 </html>
