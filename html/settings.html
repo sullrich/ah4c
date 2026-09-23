@@ -809,6 +809,7 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         <div class="pair"><div class="field"><label class="connection-label"><span data-device-label>Tuner IP <span class="muted">(device)</span></span><span class="connection-state" data-connection-state="device"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="tunerIP" value="${escapeHTML(tuner.tunerIP)}" placeholder="hostname:5555" ${lock.tunerIP ? 'disabled' : ''}><div class="connection-message" data-connection-message="device"></div><div class="field-validation" data-tuner-error="tunerIP"></div></div><div class="pair-link">⇄</div><div class="field tuner-capture-only"><label>Capture card</label><select data-capture-field="video"></select><div class="connection-message" data-capture-stream></div></div><div class="field tuner-network-only"><label class="connection-label"><span>Encoder URL</span><span class="connection-state" data-connection-state="encoder"><span class="connection-dot"></span><span>Not checked</span></span></label><input type="text" data-tuner="encoderURL" value="${escapeHTML(tuner.encoderURL)}" placeholder="http://encoder/stream" ${lock.encoderURL ? 'disabled' : ''}><div class="connection-message" data-connection-message="encoder"></div><div class="field-validation" data-tuner-error="encoderURL"></div></div></div>
         <div class="capture-fields tuner-capture-only">
             <div class="field"><label>Sound device</label><input type="text" data-capture-field="audio" list="capture-audio-choices" placeholder="hw:Video,0" spellcheck="false"></div>
+            <div class="field"><label>Format</label><select data-capture-field="format"><option value="">Automatic</option></select></div>
             <div class="field"><label>Picture</label><select data-capture-field="size"><option value="1920x1080">1920 × 1080</option><option value="1280x720">1280 × 720</option><option value="3840x2160">3840 × 2160</option></select></div>
             <div class="field"><label>Frames per second</label><select data-capture-field="framerate"><option value="60">60</option><option value="30">30</option></select></div>
         </div>
@@ -1026,10 +1027,12 @@ function startTunerPreview() {
         hint.textContent = 'This browser cannot display the tuner preview.';
         return;
     }
-    tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/preview`}, {isLive:true});
+    const previewCard = [...byId('tuners').children].find(item => tunerNumber(item) === tunerPreviewNumber);
+    const previewRoute = previewCard && previewCard.dataset.source === 'capture' ? 'capture-preview' : 'preview';
+    tunerPreviewPlayer = mpegts.createPlayer({type:'mse', isLive:true, url:`/api/tuner/${tunerPreviewNumber}/${previewRoute}`}, {isLive:true});
     tunerPreviewPlayer.attachMediaElement(video);
     video.addEventListener('loadedmetadata', () => {
-        video.currentTime = video.duration;
+        if (isFinite(video.duration)) video.currentTime = video.duration;
         hint.textContent = 'Showing the encoder output from the currently running configuration.';
     }, {once:true});
     video.addEventListener('ended', restartTunerPreviewSoon, {once:true});
@@ -1922,13 +1925,24 @@ function captureFormatFor(modes, width, height, rate) {
     return format;
 }
 
-// Offers only the sizes and rates the chosen card says it can send, and works
-// out the format for the pair chosen, so no one is left asking a card for a
-// rate it cannot give.
+const captureFormatNames = {mjpeg: 'MJPEG (compressed)', yuyv422: 'Uncompressed (YUYV)', nv12: 'Uncompressed (NV12)'};
+
+// Offers only the formats, sizes and rates the chosen card says it can send.
+// Automatic, the default, uses the card's uncompressed picture when it reaches
+// the size and rate chosen, as it is the cleaner picture, and MJPEG only when
+// that is the only way to reach them; choosing a format narrows the sizes and
+// rates to what that format gives.
 function renderCaptureModes(card) {
     const field = name => card.querySelector(`[data-capture-field="${name}"]`);
-    const modes = captureModesOf(field('video').value);
-    if (!modes.length) return;
+    const allModes = captureModesOf(field('video').value);
+    if (!allModes.length) return;
+    const format = field('format');
+    const formats = [...new Set(allModes.map(mode => mode.format))];
+    const chosenFormat = formats.includes(format.value) ? format.value : '';
+    format.innerHTML = ['<option value="">Automatic</option>']
+        .concat(formats.map(value => `<option value="${escapeHTML(value)}" ${value === chosenFormat ? 'selected' : ''}>${escapeHTML(captureFormatNames[value] || value)}</option>`)).join('');
+    format.value = chosenFormat;
+    const modes = chosenFormat ? allModes.filter(mode => mode.format === chosenFormat) : allModes;
     const size = field('size');
     const sizes = [...new Set(modes.map(mode => `${mode.width}x${mode.height}`))]
         .sort((a, b) => { const [aw, ah] = a.split('x').map(Number); const [bw, bh] = b.split('x').map(Number); return bw * bh - aw * ah; });
@@ -1938,9 +1952,9 @@ function renderCaptureModes(card) {
     const rates = [...new Set(modes.filter(mode => mode.width === width && mode.height === height).flatMap(mode => mode.rates))].sort((a, b) => b - a);
     const framerate = field('framerate');
     const current = Number(framerate.value);
-    const chosenRate = rates.includes(current) ? current : (rates.find(rate => rate <= 60) || rates[0]);
+    const chosenRate = rates.includes(current) ? current : (rates.includes(30) ? 30 : (rates.find(rate => rate <= 60) || rates[rates.length - 1]));
     framerate.innerHTML = rates.map(rate => `<option value="${rate}" ${rate === chosenRate ? 'selected' : ''}>${rate}</option>`).join('');
-    card.dataset.pixelFormat = captureFormatFor(modes, width, height, chosenRate);
+    card.dataset.pixelFormat = chosenFormat || captureFormatFor(allModes, width, height, chosenRate);
 }
 
 function setCaptureSelect(select, value) {
@@ -1980,6 +1994,9 @@ function fillCaptureFields(card) {
             setCaptureSelect(field('size'), `${from.width || 1920}x${from.height || 1080}`);
             setCaptureSelect(field('framerate'), String(from.framerate || 60));
             card.dataset.pixelFormat = from.pixelFormat || '';
+            const modes = captureModesOf(chosen);
+            const automatic = captureFormatFor(modes, Number(from.width || 1920), Number(from.height || 1080), Number(from.framerate || 60));
+            field('format').innerHTML = '<option value="">Automatic</option>' + (from.pixelFormat && from.pixelFormat !== automatic ? `<option value="${escapeHTML(from.pixelFormat)}" selected>${escapeHTML(captureFormatNames[from.pixelFormat] || from.pixelFormat)}</option>` : '');
             card.dataset.captureFilled = chosen;
         }
     }
@@ -1990,7 +2007,7 @@ function fillCaptureFields(card) {
 
 function captureFieldChanged(card, input) {
     card.querySelector('[data-capture-error]').textContent = '';
-    if (input.dataset.captureField === 'size' || input.dataset.captureField === 'framerate') renderCaptureModes(card);
+    if (['format', 'size', 'framerate'].includes(input.dataset.captureField)) renderCaptureModes(card);
     if (input.dataset.captureField === 'video') {
         // Another card is another Channels DVR channel, so the old stream
         // address goes and Save sets up the new one.

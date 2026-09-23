@@ -128,6 +128,7 @@ type captureDrivers struct {
 func registerCaptureCardRoutes(r *gin.Engine) {
 	r.POST("/api/capture/detect", detectCaptureCardsHandler)
 	r.GET("/api/tuner/:index/preview-check", previewCheckHandler)
+	r.GET("/api/tuner/:index/capture-preview", capturePreviewHandler)
 	r.GET("/api/capture/channels", findCaptureStreamsHandler)
 	r.PUT("/api/capture/channels", putCaptureSourceHandler)
 }
@@ -445,10 +446,30 @@ func captureFormatFor(modes []captureMode, width, height, rate int) string {
 	return format
 }
 
+// captureDefaultRate starts a card at 30 frames a second when it offers 30:
+// cheap cards list 60 but deliver about 30 and drop the rest as broken
+// frames. A card without 30 starts at its fastest rate up to 60. The rate can
+// still be changed on the tuner.
+func captureDefaultRate(rates []int) int {
+	best := 0
+	for _, r := range rates {
+		if r == 30 {
+			return 30
+		}
+		if r <= 60 && r > best {
+			best = r
+		}
+	}
+	if best == 0 && len(rates) > 0 {
+		best = rates[len(rates)-1]
+	}
+	return best
+}
+
 // bestCaptureMode picks what a card is set up with at first: full HD when the
-// card offers it, otherwise its largest picture, at the fastest rate any of
-// its formats gives that size, so a card that sends full HD uncompressed at
-// five frames a second but as MJPEG at sixty is set up as MJPEG at sixty.
+// card offers it, otherwise its largest picture, at captureDefaultRate, so a
+// card that sends full HD uncompressed at five frames a second but as MJPEG
+// at thirty is set up as MJPEG at thirty.
 func bestCaptureMode(modes []captureMode) (captureMode, int, bool) {
 	var best captureMode
 	bestRate, bestScore := 0, -1
@@ -456,19 +477,10 @@ func bestCaptureMode(modes []captureMode) (captureMode, int, bool) {
 		if len(mode.Rates) == 0 {
 			continue
 		}
-		rate := mode.Rates[0]
+		rate := captureDefaultRate(mode.Rates)
 		score := mode.Width * mode.Height
 		if mode.Width == 1920 && mode.Height == 1080 {
 			score = 1 << 30
-		}
-		if rate > 60 {
-			rate = 60
-			for _, r := range mode.Rates {
-				if r <= 60 {
-					rate = r
-					break
-				}
-			}
 		}
 		if score > bestScore || (score == bestScore && rate > bestRate) {
 			best, bestRate, bestScore = mode, rate, score
@@ -1002,4 +1014,129 @@ func previewCheckHandler(c *gin.Context) {
 		reason += " Channels DVR could not capture from the card. Check that it has the card's devices, listed under USB capture cards in Settings, and that the computer has the card's drivers."
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": false, "definite": true, "reason": reason})
+}
+
+// A capture tuner's picture is Channels DVR's re-encode of the card, and on
+// some Intel systems the graphics driver prints a warning into that same
+// output about once a frame. The text lands between the 188-byte packets of
+// the stream. Channels DVR's own player throws such bytes away; the browser
+// player on these pages cannot find its place again and stalls, then the page
+// restarts it. So the preview of a capture tuner is passed through
+// copyAlignedTS, which forwards only whole packets and skips anything else.
+// copyAlignedTS copies whole MPEG-TS packets from src to dst. A packet is
+// taken as real only when the byte after it starts another packet, so text
+// that happens to contain the sync byte is skipped too. flush runs after each
+// write so the browser gets the picture as it comes.
+func copyAlignedTS(dst io.Writer, src io.Reader, flush func()) error {
+	buf := make([]byte, 0, 64*1024)
+	chunk := make([]byte, 32*1024)
+	out := make([]byte, 0, 64*1024)
+	for {
+		n, readErr := src.Read(chunk)
+		buf = append(buf, chunk[:n]...)
+		out = out[:0]
+		for len(buf) >= 2*tsPacketSize || (readErr != nil && len(buf) >= tsPacketSize) {
+			if buf[0] == 0x47 && (len(buf) < 2*tsPacketSize || buf[tsPacketSize] == 0x47) {
+				out = append(out, buf[:tsPacketSize]...)
+				buf = buf[tsPacketSize:]
+				continue
+			}
+			next := bytes.IndexByte(buf[1:], 0x47)
+			if next < 0 {
+				buf = buf[:0]
+				break
+			}
+			buf = buf[next+1:]
+		}
+		if len(out) > 0 {
+			if _, err := dst.Write(out); err != nil {
+				return err
+			}
+			if flush != nil {
+				flush()
+			}
+		}
+		// Keep the tail small and at the front, so a long stream reuses memory.
+		buf = append(make([]byte, 0, 64*1024), buf...)
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return readErr
+		}
+	}
+}
+
+// capturePreviewHandler shows a capture tuner's picture with only whole
+// packets, for the Activity and Settings previews. Like the preview check it
+// gives way to a tune at once: it refuses while one runs, and the moment one
+// starts, or the tuner lock is taken, it lets go of the stream.
+func capturePreviewHandler(c *gin.Context) {
+	index, err := strconv.Atoi(c.Param("index"))
+	if err != nil || index < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+		return
+	}
+	tunerLock.Lock()
+	if index >= len(tuners) {
+		tunerLock.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tuner index"})
+		return
+	}
+	address := tuners[index].url
+	active := tuners[index].active
+	tunerLock.Unlock()
+	if !strings.Contains(address, "/devices/"+captureDeviceID+"/channels/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "this tuner does not record a capture card"})
+		return
+	}
+	if active || tunesPending() {
+		c.JSON(http.StatusConflict, gin.H{"error": "A tune is running or starting, so the preview waits."})
+		return
+	}
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if tunesPending() || !tunerLock.TryLock() {
+					cancel()
+					return
+				}
+				claimed := index < len(tuners) && tuners[index].active
+				tunerLock.Unlock()
+				if claimed {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("Channels DVR returned %s", response.Status)})
+		return
+	}
+	c.Header("Content-Type", "video/mp2t")
+	c.Writer.WriteHeaderNow()
+	_ = copyAlignedTS(c.Writer, response.Body, c.Writer.Flush)
 }

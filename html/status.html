@@ -290,13 +290,15 @@
             player = mpegts.createPlayer({
                 type: 'mse',
                 isLive: true,
-                url: '/api/tuner/' + index + '/preview'
+                // A capture tuner is previewed with only whole packets; see
+                // capturePreviewHandler.
+                url: captureChannel(tunerUrls[index]) ? '/api/tuner/' + index + '/capture-preview' : '/api/tuner/' + index + '/preview'
             }, {
                 isLive: true
             });
             player.attachMediaElement(videoElement);
             videoElement.addEventListener('loadedmetadata', function() {
-                videoElement.currentTime = videoElement.duration;
+                if (isFinite(videoElement.duration)) videoElement.currentTime = videoElement.duration;
             }, { once: true });
             videoElement.addEventListener('ended', restartSoon, { once: true });
             player.on(mpegts.Events.ERROR, function() { previewFailed(index); });
