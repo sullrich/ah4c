@@ -44,7 +44,7 @@
             </div>
             <div class="btn-row" style="margin-top:0; margin-bottom:.8rem;">
                 <button class="btn btn-sm" id="check-scripts" type="button">Check GitHub for scripts</button>
-                <span class="muted" id="script-check-status">Each provider list is grouped like Settings: local scripts on this server, scripts included with ah4c, and, after checking GitHub, scripts from sullrich/ah4c on GitHub.</span>
+                <span class="muted" id="script-check-status">Devices are grouped like Settings: local scripts on this server, scripts included with ah4c, and, after checking GitHub, scripts from sullrich/ah4c on GitHub.</span>
             </div>
 
             {{if not .sources}}
@@ -61,16 +61,12 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{$devices := .devices}}
                         {{range .sources}}
                         <tr>
                             <td><input type="checkbox" class="src-enable"></td>
                             <td class="mono src-file">{{.}}</td>
                             <td>
-                                <select class="src-device">
-                                    <option value="">Select device</option>
-                                    {{range $devices}}<option value="{{.}}">{{.}}</option>{{end}}
-                                </select>
+                                <select class="src-device"></select>
                             </td>
                             <td><select class="src-provider"><option value="">Select device first</option></select></td>
                         </tr>
@@ -103,37 +99,51 @@
             ['github', 'From sullrich/ah4c on GitHub'],
         ];
 
-        document.querySelectorAll('.src-device').forEach(function (sel) {
-            sel.addEventListener('change', function () { populateProviders(sel); });
-        });
+        // The device list is grouped like the streaming-app scripts in
+        // Settings; the provider list then offers that group's providers.
+        function populateDevices(deviceSelect) {
+            const current = deviceSelect.value;
+            deviceSelect.innerHTML = '';
+            deviceSelect.add(new Option('Select device', ''));
+            sourceGroups.forEach(function ([source, label]) {
+                const devices = [...new Set((scriptSources[source] || []).map(path => path.split('/')[1]))].sort();
+                if (!devices.length) return;
+                const group = document.createElement('optgroup');
+                group.label = label;
+                devices.forEach(device => group.appendChild(new Option(device, source + '::' + device)));
+                deviceSelect.appendChild(group);
+            });
+            if ([...deviceSelect.options].some(option => option.value === current)) deviceSelect.value = current;
+            populateProviders(deviceSelect);
+        }
+
+        function decodeDevice(value) {
+            const match = /^(local|bundled|github)::(.+)$/.exec(value || '');
+            return match ? {source: match[1], device: match[2]} : {source: '', device: ''};
+        }
 
         function populateProviders(deviceSelect) {
             const providerSelect = deviceSelect.closest('tr').querySelector('.src-provider');
             const currentProvider = providerSelect.value;
+            const choice = decodeDevice(deviceSelect.value);
             providerSelect.innerHTML = '';
-            if (!deviceSelect.value) {
+            if (!choice.device) {
                 providerSelect.innerHTML = '<option value="">Select device first</option>';
                 return;
             }
-            const prefix = 'scripts/' + deviceSelect.value + '/';
-            sourceGroups.forEach(function ([source, label]) {
-                const providers = [...new Set((scriptSources[source] || []).filter(path => path.startsWith(prefix)))].map(path => path.slice(prefix.length)).sort();
-                if (!providers.length) return;
-                const group = document.createElement('optgroup');
-                group.label = label;
-                providers.forEach(function (p) {
-                    const incomplete = source === 'local' && packageStatuses[prefix + p] === 'incomplete';
-                    group.appendChild(new Option(p + (incomplete ? ' — missing required files' : ''), source + '::' + p));
-                });
-                providerSelect.appendChild(group);
+            const prefix = 'scripts/' + choice.device + '/';
+            const providers = [...new Set((scriptSources[choice.source] || []).filter(path => path.startsWith(prefix)))].map(path => path.slice(prefix.length)).sort();
+            providers.forEach(function (p) {
+                const incomplete = choice.source === 'local' && packageStatuses[prefix + p] === 'incomplete';
+                providerSelect.add(new Option(p + (incomplete ? ' — missing required files' : ''), p));
             });
-            if ([...providerSelect.options].some(option => option.value === currentProvider)) providerSelect.value = currentProvider;
+            if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
         }
 
-        function decodeProvider(value) {
-            const match = /^(local|bundled|github)::(.+)$/.exec(value || '');
-            return match ? {source: match[1], provider: match[2]} : {source: '', provider: ''};
-        }
+        document.querySelectorAll('.src-device').forEach(function (sel) {
+            populateDevices(sel);
+            sel.addEventListener('change', function () { populateProviders(sel); });
+        });
 
         function selectedSources() {
             const rows = document.querySelectorAll('#sourcesTable tbody tr');
@@ -141,12 +151,12 @@
             for (const row of rows) {
                 if (!row.querySelector('.src-enable').checked) continue;
                 const file = row.querySelector('.src-file').textContent.trim();
-                const device = row.querySelector('.src-device').value;
-                const choice = decodeProvider(row.querySelector('.src-provider').value);
-                if (!device || !choice.provider) {
+                const choice = decodeDevice(row.querySelector('.src-device').value);
+                const provider = row.querySelector('.src-provider').value;
+                if (!choice.device || !provider) {
                     throw new Error('Choose a device and TV service for ' + file + '.');
                 }
-                sources.push({ file: file, device: device, provider: choice.provider, source: choice.source });
+                sources.push({ file: file, device: choice.device, provider: provider, source: choice.source });
             }
             if (sources.length === 0) {
                 throw new Error('Select at least one channel list to combine.');
@@ -179,17 +189,7 @@
             });
             if (Array.isArray(payload.remote)) scriptSources.github = keep(payload.remote);
             if (Array.isArray(payload.bundled)) scriptSources.bundled = keep(payload.bundled);
-            const devices = [...new Set(Object.values(scriptSources).flat().map(path => path.split('/')[1]))].sort();
-            document.querySelectorAll('.src-device').forEach(function (deviceSelect) {
-                const currentDevice = deviceSelect.value;
-                devices.forEach(function (device) {
-                    if (![...deviceSelect.options].some(option => option.value === device)) {
-                        deviceSelect.add(new Option(device, device));
-                    }
-                });
-                deviceSelect.value = currentDevice;
-                populateProviders(deviceSelect);
-            });
+            document.querySelectorAll('.src-device').forEach(populateDevices);
         }
 
         async function downloadSelectedScripts() {
@@ -233,7 +233,7 @@
                     packageStatuses[path] = 'ready';
                     if (!scriptSources.local.includes(path)) scriptSources.local.push(path);
                 }
-                document.querySelectorAll('.src-device').forEach(populateProviders);
+                document.querySelectorAll('.src-device').forEach(populateDevices);
                 status.className = 'm3u-action-status connection-state--ready';
                 status.textContent = 'The selected scripts are ready. No other script packages were downloaded.';
             } catch (error) {
