@@ -1134,7 +1134,17 @@ func cutDriverText(buf []byte) ([]byte, bool) {
 	// takes out exactly that repetition is the right one.
 	line := repeatedLine(buf[runStart:runEnd])
 	first := []byte(nil)
-	for start := runStart; start <= runStart+slack && start <= packet; start++ {
+	// Text most often lands between two packets, and there a byte of the
+	// packet before it can match the line too; a cut on the packet edge is
+	// tried first, so that byte stays with its packet.
+	starts := []int{}
+	if runStart <= packet && packet <= runStart+slack {
+		starts = append(starts, packet)
+	}
+	for start := runStart; start <= runStart+slack && start < packet; start++ {
+		starts = append(starts, start)
+	}
+	for _, start := range starts {
 		for end := runEnd; end >= runEnd-slack && end-start >= shortest; end-- {
 			cut := end - start
 			if 3*packet+cut >= len(buf) {
