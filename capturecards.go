@@ -1172,6 +1172,17 @@ func isRepetitionOf(seg, line []byte) bool {
 	return true
 }
 
+// channelsStreamPattern matches a channel streamed by Channels DVR, from any
+// custom-channels source: ah4c's own AH4C Capture, or one made by hand in
+// Channels DVR, as the community guide does, often on another computer.
+var channelsStreamPattern = regexp.MustCompile(`/devices/[^/?#]+/channels/[^/?#]+/stream(\.mpg)?([?#]|$)`)
+
+// isChannelsStream reports whether an encoder address is a Channels DVR
+// channel, whose picture may carry a graphics driver's stray text.
+func isChannelsStream(address string) bool {
+	return channelsStreamPattern.MatchString(address)
+}
+
 // capturePreviewHandler shows a capture tuner's picture with only whole
 // packets, for the Activity and Settings previews. Like the preview check it
 // gives way to a tune at once: it refuses while one runs, and the moment one
@@ -1191,8 +1202,8 @@ func capturePreviewHandler(c *gin.Context) {
 	address := tuners[index].url
 	active := tuners[index].active
 	tunerLock.Unlock()
-	if !strings.Contains(address, "/devices/"+captureDeviceID+"/channels/") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "this tuner does not record a capture card"})
+	if !isChannelsStream(address) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "this tuner does not read a Channels DVR channel"})
 		return
 	}
 	if active || tunesPending() {

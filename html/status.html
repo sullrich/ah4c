@@ -185,6 +185,13 @@
             return match ? match[1] : '';
         }
 
+        // A channel streamed by Channels DVR, from any of its sources, is
+        // previewed through the route that takes a graphics driver's stray
+        // text out of it; see capturePreviewHandler.
+        function channelsStream(url) {
+            return /\/devices\/[^/?#]+\/channels\/[^/?#]+\/stream(\.mpg)?([?#]|$)/.test(String(url || ''));
+        }
+
         function escUrl(s) {
             return esc(s).replace(/(:\/\/|[:/])/g, '$1<wbr>');
         }
@@ -290,9 +297,7 @@
             player = mpegts.createPlayer({
                 type: 'mse',
                 isLive: true,
-                // A capture tuner is previewed with only whole packets; see
-                // capturePreviewHandler.
-                url: captureChannel(tunerUrls[index]) ? '/api/tuner/' + index + '/capture-preview' : '/api/tuner/' + index + '/preview'
+                url: channelsStream(tunerUrls[index]) ? '/api/tuner/' + index + '/capture-preview' : '/api/tuner/' + index + '/preview'
             }, {
                 isLive: true
             });

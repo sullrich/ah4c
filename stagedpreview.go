@@ -141,10 +141,10 @@ func stagedPreviewHandler(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Writer.WriteHeaderNow()
 	c.Writer.Flush()
-	// A capture card's picture, re-encoded by Channels DVR, can carry a
-	// graphics driver's stray text; it goes through copyAlignedTS like the
-	// running capture tuner's preview does.
-	if strings.Contains(target.Path, "/devices/"+captureDeviceID+"/channels/") {
+	// A channel streamed by Channels DVR, a capture card's among them, can
+	// carry a graphics driver's stray text; it goes through copyAlignedTS
+	// like the running tuner's preview does.
+	if isChannelsStream(target.Path) {
 		_ = copyAlignedTS(c.Writer, response.Body, c.Writer.Flush)
 		if yielded.Load() {
 			logger("[PREVIEW] Stopped the Settings preview of %s because a tune started", target.Redacted())

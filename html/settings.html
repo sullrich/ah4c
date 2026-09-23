@@ -1158,9 +1158,10 @@ function tunerPreviewSource(card, pairing = false) {
     const tunerIP = card.querySelector('[data-tuner="tunerIP"]')?.value.trim() || '';
     if (!pairing && live && live.encoderURL === encoderURL) {
         return {
-            // A capture tuner's picture goes through the route that takes a
-            // graphics driver's stray text out of it; see capturePreviewHandler.
-            url:card.dataset.source === 'capture' ? `/api/tuner/${number}/capture-preview` : `/api/tuner/${number}/preview`,
+            // A channel streamed by Channels DVR, a capture card's among them,
+            // goes through the route that takes a graphics driver's stray text
+            // out of it; see capturePreviewHandler.
+            url:/\/devices\/[^/?#]+\/channels\/[^/?#]+\/stream(\.mpg)?([?#]|$)/.test(encoderURL) ? `/api/tuner/${number}/capture-preview` : `/api/tuner/${number}/preview`,
             staged:false,
             remote:live.tunerIP === tunerIP,
             loading:'Loading the encoder output from the currently running configuration…',
