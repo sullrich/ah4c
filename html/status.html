@@ -1301,15 +1301,24 @@
                     .always(function() { channelsRecordingFetchInProgress = false; });
             }
 
+            // ah4c reads a capture card's picture from Channels DVR's AH4C
+            // Capture channel, for a tune or a preview, and Channels DVR lists
+            // that read as someone watching. It is ah4c's own plumbing, not
+            // DVR activity, so it is left out, and alone it is not "Active".
+            function isCapturePlumbing(details) {
+                return /\bAH4C Capture video\d+\b/.test(String(details || ''));
+            }
+
             function renderDVRActivity(data) {
-                var status = data.busy ? '— Active' : '— Idle';
-                $('#activity').text(status);
                 var activityHtml = '';
                 var isempty = true;
+                var hidden = 0;
                 $.each(data.activity || {}, function(key, details) {
+                    if (isCapturePlumbing(details)) { hidden++; return; }
                     activityHtml += `<tr><td>${esc(details)}</td></tr>`;
                     isempty = false;
                 });
+                $('#activity').text(data.busy && !(isempty && hidden) ? '— Active' : '— Idle');
                 if (isempty) activityHtml = `<tr><td>&nbsp;</td></tr>`;
                 $('#activityTable').html(activityHtml);
             }

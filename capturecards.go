@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -55,7 +57,27 @@ type captureCard struct {
 	Width     int    `json:"width"`
 	Height    int    `json:"height"`
 	Framerate int    `json:"framerate"`
+	// PixelFormat is how the card sends its picture at this size and rate,
+	// such as mjpeg. Empty leaves the choice to Channels DVR's ffmpeg, which
+	// takes the uncompressed format, and many cards send full HD uncompressed
+	// at only a few frames a second.
+	PixelFormat string `json:"pixelFormat"`
+	// Modes are the sizes and rates the card itself says it can send.
+	Modes []captureMode `json:"modes,omitempty"`
 }
+
+// captureMode is one picture size a card can send in one format, with the
+// frame rates it offers at that size.
+type captureMode struct {
+	Format string `json:"format"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Rates  []int  `json:"rates"`
+}
+
+// capturePixelFormats are the formats ah4c names in a capture line, keyed by
+// the four-character code a USB card gives its uncompressed formats.
+var capturePixelFormats = map[string]string{"YUY2": "yuyv422", "NV12": "nv12"}
 
 // captureAudioChoice is an ALSA capture device that no video device claimed,
 // offered so a card can be paired with it by hand.
@@ -77,6 +99,7 @@ type v4l2Device struct {
 	name  string
 	bus   string
 	video string
+	modes []captureMode
 }
 
 type alsaCard struct {
@@ -169,11 +192,12 @@ func detectVideoDevices(root string) []v4l2Device {
 			name = first
 		}
 		// Only USB cards: a camera or codec built into the board is not one.
-		_, bus := usbDeviceOf(filepath.Join(node, "device"))
+		usbDir, bus := usbDeviceOf(filepath.Join(node, "device"))
 		if bus == "" {
 			continue
 		}
-		devices = append(devices, v4l2Device{name: name, bus: bus, video: video})
+		raw, _ := os.ReadFile(filepath.Join(usbDir, "descriptors"))
+		devices = append(devices, v4l2Device{name: name, bus: bus, video: video, modes: parseUVCModes(raw)})
 	}
 	return devices
 }
@@ -283,7 +307,11 @@ func pairCaptureCards(videos []v4l2Device, sounds []alsaCard) ([]captureCard, []
 	claimed := map[int]bool{}
 	cards := make([]captureCard, 0, len(videos))
 	for _, video := range videos {
-		card := captureCard{Name: video.name, Bus: video.bus, Video: video.video, AudioCard: -1, Width: 1920, Height: 1080, Framerate: 60}
+		card := captureCard{Name: video.name, Bus: video.bus, Video: video.video, AudioCard: -1, Width: 1920, Height: 1080, Framerate: 60, Modes: video.modes}
+		if mode, rate, ok := bestCaptureMode(video.modes); ok {
+			card.Width, card.Height, card.Framerate = mode.Width, mode.Height, rate
+			card.PixelFormat = captureFormatFor(video.modes, mode.Width, mode.Height, rate)
+		}
 		for _, sound := range sounds {
 			if video.bus != "" && sound.bus == video.bus && !claimed[sound.index] {
 				card.Audio = fmt.Sprintf("hw:%s,%d", sound.id, sound.device)
@@ -322,7 +350,131 @@ func validCaptureCard(card captureCard, allowSilent bool) error {
 	if card.Framerate < 1 || card.Framerate > 120 {
 		return fmt.Errorf("the frame rate must be between 1 and 120")
 	}
+	if card.PixelFormat != "" && card.PixelFormat != "mjpeg" && card.PixelFormat != "yuyv422" && card.PixelFormat != "nv12" {
+		return fmt.Errorf("the picture format must be mjpeg, yuyv422 or nv12")
+	}
 	return nil
+}
+
+// parseUVCModes reads the picture modes a USB video card describes about
+// itself: every size in every format it can send, with the frame rates it
+// offers at each. The USB descriptors are readable from any container, so the
+// card is asked nothing and nothing opens it. A format ah4c cannot name, such
+// as a card's own H.264, is left out.
+func parseUVCModes(raw []byte) []captureMode {
+	var modes []captureMode
+	format := ""
+	for i := 0; i+2 < len(raw); {
+		length := int(raw[i])
+		if length < 3 || i+length > len(raw) {
+			break
+		}
+		block := raw[i : i+length]
+		i += length
+		if block[1] != 0x24 {
+			continue
+		}
+		switch block[2] {
+		case 0x04: // uncompressed format; its GUID starts with a four-character code
+			format = ""
+			if len(block) >= 9 {
+				format = capturePixelFormats[string(block[5:9])]
+			}
+		case 0x06: // MJPEG format
+			format = "mjpeg"
+		case 0x10: // frame-based formats such as H.264
+			format = ""
+		case 0x05, 0x07: // a frame of the format above
+			if format == "" || len(block) < 26 {
+				continue
+			}
+			mode := captureMode{Format: format, Width: int(binary.LittleEndian.Uint16(block[5:7])), Height: int(binary.LittleEndian.Uint16(block[7:9]))}
+			seen := map[int]bool{}
+			addRate := func(interval uint32) {
+				if interval == 0 {
+					return
+				}
+				rate := int(math.Round(1e7 / float64(interval)))
+				if rate >= 1 && rate <= 120 && !seen[rate] {
+					seen[rate] = true
+					mode.Rates = append(mode.Rates, rate)
+				}
+			}
+			if count := int(block[25]); count > 0 {
+				for k := 0; k < count && 26+4*k+4 <= len(block); k++ {
+					addRate(binary.LittleEndian.Uint32(block[26+4*k:]))
+				}
+			} else if len(block) >= 38 {
+				// A continuous range: offer the usual rates inside it.
+				fastest, slowest := binary.LittleEndian.Uint32(block[26:]), binary.LittleEndian.Uint32(block[30:])
+				for _, rate := range []int{60, 50, 30, 25, 24, 20, 15, 10, 5} {
+					interval := uint32(1e7 / rate)
+					if interval >= fastest && interval <= slowest {
+						addRate(interval)
+					}
+				}
+			}
+			sort.Sort(sort.Reverse(sort.IntSlice(mode.Rates)))
+			if len(mode.Rates) > 0 {
+				modes = append(modes, mode)
+			}
+		}
+	}
+	return modes
+}
+
+// captureFormatFor names the format to ask for at a size and rate. When the
+// card sends that uncompressed, nothing is named, as in the Channels
+// community's guide; only when it takes MJPEG to reach the rate is mjpeg named.
+func captureFormatFor(modes []captureMode, width, height, rate int) string {
+	format := ""
+	for _, mode := range modes {
+		if mode.Width != width || mode.Height != height {
+			continue
+		}
+		for _, r := range mode.Rates {
+			if r != rate {
+				continue
+			}
+			if mode.Format != "mjpeg" {
+				return ""
+			}
+			format = "mjpeg"
+		}
+	}
+	return format
+}
+
+// bestCaptureMode picks what a card is set up with at first: full HD when the
+// card offers it, otherwise its largest picture, at the fastest rate any of
+// its formats gives that size, so a card that sends full HD uncompressed at
+// five frames a second but as MJPEG at sixty is set up as MJPEG at sixty.
+func bestCaptureMode(modes []captureMode) (captureMode, int, bool) {
+	var best captureMode
+	bestRate, bestScore := 0, -1
+	for _, mode := range modes {
+		if len(mode.Rates) == 0 {
+			continue
+		}
+		rate := mode.Rates[0]
+		score := mode.Width * mode.Height
+		if mode.Width == 1920 && mode.Height == 1080 {
+			score = 1 << 30
+		}
+		if rate > 60 {
+			rate = 60
+			for _, r := range mode.Rates {
+				if r <= 60 {
+					rate = r
+					break
+				}
+			}
+		}
+		if score > bestScore || (score == bestScore && rate > bestRate) {
+			best, bestRate, bestScore = mode, rate, score
+		}
+	}
+	return best, bestRate, bestScore >= 0
 }
 
 func captureSoundError(allowSilent bool) error {
@@ -350,12 +502,17 @@ func captureSourceText(cards []captureCard) string {
 	var text strings.Builder
 	text.WriteString("#EXTM3U\n")
 	for _, card := range cards {
-		fmt.Fprintf(&text, "\n#EXTINF:-1 channel-id=\"ah4c-capture-%s\",%s\n", card.Video, captureChannelName(card))
+		fmt.Fprintf(&text, "\n#EXTINF:-1, channel-id=\"ah4c-capture-%s\",channel-number=\"capture%s\",%s\n", card.Video, strings.TrimPrefix(card.Video, "video"), captureChannelName(card))
 		device := card.Video + "/"
 		if card.Audio != "" {
 			device += card.Audio + "/"
 		}
-		fmt.Fprintf(&text, "capture://v4l2/%s?framerate=%d&width=%d&height=%d\n", device, card.Framerate, card.Width, card.Height)
+		if card.PixelFormat != "" {
+			// The form the Channels community uses to pick a card's format.
+			fmt.Fprintf(&text, "capture://v4l2/%s?framerate=%d&video_size=%dx%d&pixel_format=%s\n", device, card.Framerate, card.Width, card.Height, card.PixelFormat)
+		} else {
+			fmt.Fprintf(&text, "capture://v4l2/%s?framerate=%d&width=%d&height=%d\n", device, card.Framerate, card.Width, card.Height)
+		}
 	}
 	return text.String()
 }
@@ -386,6 +543,15 @@ func captureCardsFromText(text string) ([]captureCard, int) {
 			if value, err := strconv.Atoi(query.Get("height")); err == nil {
 				card.Height = value
 			}
+			if width, height, found := strings.Cut(query.Get("video_size"), "x"); found {
+				if w, err := strconv.Atoi(width); err == nil {
+					card.Width = w
+				}
+				if h, err := strconv.Atoi(height); err == nil {
+					card.Height = h
+				}
+			}
+			card.PixelFormat = query.Get("pixel_format")
 		}
 		cards = append(cards, card)
 	}
@@ -594,10 +760,12 @@ func findCaptureStreamsHandler(c *gin.Context) {
 // Channels DVR web admin sends for a text source, which is also what other
 // tools that create capture sources send.
 func putCaptureSource(ctx context.Context, dvrBase string, cards []captureCard) error {
+	// Set up as the Channels community's capture guide sets it up: stream
+	// format MPEG-TS, and the channel numbers taken from the list.
 	payload := map[string]string{
-		"name": captureSourceName, "type": "HLS", "source": "Text", "url": "",
+		"name": captureSourceName, "type": "MPEG-TS", "source": "Text", "url": "",
 		"text": captureSourceText(cards), "refresh": "", "limit": "", "satip": "",
-		"numbering": "ignore", "logos": "", "xmltv_url": "", "xmltv_refresh": "",
+		"numbering": "", "logos": "", "xmltv_url": "", "xmltv_refresh": "",
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

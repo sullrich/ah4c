@@ -1903,7 +1903,44 @@ function showTunerSource(card) {
 function captureDetailsOf(card) {
     const field = name => card.querySelector(`[data-capture-field="${name}"]`);
     const [width, height] = field('size').value.split('x').map(Number);
-    return {video: field('video').value, audio: field('audio').value.trim(), width, height, framerate: Number(field('framerate').value)};
+    return {video: field('video').value, audio: field('audio').value.trim(), width, height, framerate: Number(field('framerate').value), pixelFormat: card.dataset.pixelFormat || ''};
+}
+
+function captureModesOf(video) {
+    return (((captureFound && captureFound.cards) || []).find(item => item.video === video) || {}).modes || [];
+}
+
+// The same rule as the server's: name no format when the card sends this size
+// and rate uncompressed, and mjpeg only when that is the way to reach it.
+function captureFormatFor(modes, width, height, rate) {
+    let format = '';
+    for (const mode of modes) {
+        if (mode.width !== width || mode.height !== height || !mode.rates.includes(rate)) continue;
+        if (mode.format !== 'mjpeg') return '';
+        format = 'mjpeg';
+    }
+    return format;
+}
+
+// Offers only the sizes and rates the chosen card says it can send, and works
+// out the format for the pair chosen, so no one is left asking a card for a
+// rate it cannot give.
+function renderCaptureModes(card) {
+    const field = name => card.querySelector(`[data-capture-field="${name}"]`);
+    const modes = captureModesOf(field('video').value);
+    if (!modes.length) return;
+    const size = field('size');
+    const sizes = [...new Set(modes.map(mode => `${mode.width}x${mode.height}`))]
+        .sort((a, b) => { const [aw, ah] = a.split('x').map(Number); const [bw, bh] = b.split('x').map(Number); return bw * bh - aw * ah; });
+    const chosenSize = sizes.includes(size.value) ? size.value : (sizes.includes('1920x1080') ? '1920x1080' : sizes[0]);
+    size.innerHTML = sizes.map(value => `<option value="${value}" ${value === chosenSize ? 'selected' : ''}>${value.replace('x', ' × ')}</option>`).join('');
+    const [width, height] = chosenSize.split('x').map(Number);
+    const rates = [...new Set(modes.filter(mode => mode.width === width && mode.height === height).flatMap(mode => mode.rates))].sort((a, b) => b - a);
+    const framerate = field('framerate');
+    const current = Number(framerate.value);
+    const chosenRate = rates.includes(current) ? current : (rates.find(rate => rate <= 60) || rates[0]);
+    framerate.innerHTML = rates.map(rate => `<option value="${rate}" ${rate === chosenRate ? 'selected' : ''}>${rate}</option>`).join('');
+    card.dataset.pixelFormat = captureFormatFor(modes, width, height, chosenRate);
 }
 
 function setCaptureSelect(select, value) {
@@ -1942,15 +1979,18 @@ function fillCaptureFields(card) {
             field('audio').value = from.audio || '';
             setCaptureSelect(field('size'), `${from.width || 1920}x${from.height || 1080}`);
             setCaptureSelect(field('framerate'), String(from.framerate || 60));
+            card.dataset.pixelFormat = from.pixelFormat || '';
             card.dataset.captureFilled = chosen;
         }
     }
+    renderCaptureModes(card);
     card.querySelector('[data-capture-stream]').textContent = channel ? `Channels DVR channel ${channel}` : 'Set up in Channels DVR when you save';
     card.id = `tuner-card-${tunerNumber(card)}`;
 }
 
 function captureFieldChanged(card, input) {
     card.querySelector('[data-capture-error]').textContent = '';
+    if (input.dataset.captureField === 'size' || input.dataset.captureField === 'framerate') renderCaptureModes(card);
     if (input.dataset.captureField === 'video') {
         // Another card is another Channels DVR channel, so the old stream
         // address goes and Save sets up the new one.
@@ -2170,7 +2210,13 @@ async function setUpCaptureTuners() {
 
 // The same list ah4c writes to Channels DVR, for pasting into it by hand.
 function captureSourceTextFor(cards) {
-    return '#EXTM3U\n' + cards.map(card => `\n#EXTINF:-1 channel-id="ah4c-capture-${card.video}",AH4C Capture ${card.video}\ncapture://v4l2/${card.video}/${card.audio ? card.audio + '/' : ''}?framerate=${card.framerate}&width=${card.width}&height=${card.height}\n`).join('');
+    return '#EXTM3U\n' + cards.map(card => {
+        const device = `${card.video}/${card.audio ? card.audio + '/' : ''}`;
+        const picture = card.pixelFormat
+            ? `framerate=${card.framerate}&video_size=${card.width}x${card.height}&pixel_format=${card.pixelFormat}`
+            : `framerate=${card.framerate}&width=${card.width}&height=${card.height}`;
+        return `\n#EXTINF:-1, channel-id="ah4c-capture-${card.video}",channel-number="capture${card.video.replace('video', '')}",AH4C Capture ${card.video}\ncapture://v4l2/${device}?${picture}\n`;
+    }).join('');
 }
 
 function renderCaptureDrivers(drivers) {
