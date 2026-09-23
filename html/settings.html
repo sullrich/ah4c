@@ -77,7 +77,7 @@
                     <button id="query-streamers" class="btn btn-sm btn-primary" type="button">Check GitHub for scripts</button>
                     <span id="streamer-query-status" class="muted"></span>
                 </div>
-                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. Choices <strong>included with ah4c</strong> are copied from ah4c itself, without going online. <strong>Check GitHub for scripts</strong> lists more choices that are not included with ah4c; ah4c downloads only the one you select. Your own copy of a script is never deleted, and a GitHub outage never prevents ah4c from using a complete stored copy.</p>
+                <p class="setting-description"><strong>Browse local scripts</strong> shows choices already stored on this server. Choices <strong>included with ah4c</strong> are copied from ah4c itself, without going online. <strong>Check GitHub for scripts</strong> lists what is on GitHub in its own group; ah4c downloads only a choice it does not already include. Your own copy of a script is never deleted, and a GitHub outage never prevents ah4c from using a complete stored copy.</p>
                 <div id="section-streamer" class="settings-grid"></div>
                 <div id="local-script-browser" class="local-script-browser hidden">
                     <div class="local-script-browser-head">
@@ -742,9 +742,7 @@ function renderFieldInto(spec, target, replace = false) {
     if (spec.key === 'STREAMER_APP') {
         const local = [...new Set(localStreamerChoices)].sort();
         const bundled = [...new Set(bundledStreamerChoices)].sort();
-        // ah4c only goes to GitHub for scripts it was not built with, so a
-        // folder it already carries is offered once, as its own.
-        const remote = [...new Set(remoteStreamerChoices)].filter(value => !bundled.includes(value)).sort();
+        const remote = [...new Set(remoteStreamerChoices)].sort();
         const known = [...new Set([...local, ...bundled, ...remote])];
         const updateValue = document.querySelector('[data-setting="UPDATE_SCRIPTS"]')?.value
             || state.catalog.find(item => item.key === 'UPDATE_SCRIPTS')?.value || '';
@@ -784,7 +782,11 @@ function renderFieldInto(spec, target, replace = false) {
             if (updateScripts && !updateScripts.disabled && choice.source === 'none') updateScripts.value = 'false';
             if (byId('streamer-query-status') && choice.source === 'local') byId('streamer-query-status').textContent = 'Local folder selected. ah4c will keep this folder unchanged.';
             if (byId('streamer-query-status') && choice.source === 'bundled') byId('streamer-query-status').textContent = 'Included with ah4c. ah4c copies these scripts into your scripts folder when it starts. Files you already have there are kept unless updates are turned on.';
-            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = 'GitHub version selected. ah4c downloads only these scripts when it starts. Files you already have there are kept unless updates are turned on.';
+            // Startup copies a folder ah4c includes from its own copy and goes
+            // to GitHub only for one it does not, so say which this is.
+            if (byId('streamer-query-status') && choice.source === 'github') byId('streamer-query-status').textContent = bundledStreamerChoices.includes(choice.path)
+                ? 'These scripts are also included with ah4c, so ah4c uses its own copy of them. Files you already have there are kept unless updates are turned on.'
+                : 'GitHub version selected. ah4c downloads only these scripts when it starts. Files you already have there are kept unless updates are turned on.';
             if (byId('streamer-query-status') && choice.source === 'none') byId('streamer-query-status').textContent = 'The streaming app selection will be cleared when you save all changes.';
         });
         customInput?.addEventListener('input', () => {
