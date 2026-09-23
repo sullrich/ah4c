@@ -147,9 +147,9 @@
 		var CHOICE_KEY = 'ah4c-device-choice';
 		var SOFTWARE = '@software';      // the device's software encoder, whatever it is called
 
-		// Widths are multiples of 64 and heights multiples of 16: many
-		// streaming boxes' video chips need that, and an unaligned size is what
-		// turns the picture into slanted stripes. Standard and Sharp keep
+		// Widths are multiples of 64: many streaming boxes' video chips need
+		// an aligned width, and an unaligned one is what turns the picture
+		// into slanted stripes. Standard and Sharp keep
 		// ws-scrcpy's own bitrate, frame rate and keyframe spacing.
 		var BUILT_IN = [
 			{ key: 'standard', name: 'Standard', width: 1280, height: 720, bitrate: 7340032, maxFps: 60, iFrameInterval: 10, encoder: '',
@@ -179,7 +179,12 @@
 		var tunerIndex = new Map(); // "ip:port" -> tuner number
 		var custom = [];            // custom settings saved in the config directory
 		var assignments = {};       // device address -> the picture it starts with
-		var customLoaded = false;
+		var customLoaded = false;   // the saved profiles have been asked for, successfully or not
+		var profilesReady = false;  // ...and were read, so they can be changed safely
+		var revision = '';          // what the server last gave us; a save names it
+		var pendingPicture = loadChoice().picture || ''; // a remembered profile, until the profiles arrive
+		var listState = 'connecting'; // ws-scrcpy's device list: connecting, open or lost
+		var openedWith = '';        // what the frame is showing, so a changed choice can reopen it
 		var appliedFor = null;      // the device whose starting picture was last applied
 		var listReached = false;
 		var showing = '';           // '', 'stream' or 'passthrough'
@@ -206,7 +211,7 @@
 		}
 
 		function renderPictures() {
-			var keep = pictureSelect.value || loadChoice().picture || 'standard';
+			var keep = pendingPicture || pictureSelect.value || 'standard';
 			pictureSelect.innerHTML = '';
 			function add(parent, p, label) {
 				var o = document.createElement('option');
@@ -222,11 +227,16 @@
 				pictureSelect.appendChild(g);
 			}
 			add(pictureSelect, PASSTHROUGH, PASSTHROUGH.name);
-			// A remembered profile that has since been deleted falls
-			// back to Standard, but only once the saved list has been read.
-			pictureSelect.value = picture(keep).key === keep || !customLoaded ? keep : 'standard';
+			// A remembered profile is held until the saved list has been read;
+			// one that has since been deleted then falls back to Standard.
+			pictureSelect.value = keep;
 			if (!pictureSelect.value) pictureSelect.value = 'standard';
+			if (customLoaded) {
+				pendingPicture = '';
+				if (pictureSelect.value !== keep) saveChoice();
+			}
 			update();
+			followChoice();
 		}
 
 		function loadChoice() {
@@ -234,7 +244,7 @@
 		}
 		function saveChoice() {
 			try {
-				localStorage.setItem(CHOICE_KEY, JSON.stringify({ udid: deviceSelect.value, picture: pictureSelect.value }));
+				localStorage.setItem(CHOICE_KEY, JSON.stringify({ udid: deviceSelect.value, picture: pendingPicture || pictureSelect.value }));
 			} catch (e) {}
 		}
 
@@ -289,9 +299,15 @@
 				deviceSelect.appendChild(o);
 			});
 			if (list.some(function (d) { return d.udid === keep; })) deviceSelect.value = keep;
+			else if (showing === 'stream') {
+				// The device on screen has gone; don't quietly swap in another.
+				showPlaceholder('That device disconnected. Choose a device and press <strong>Open</strong>.');
+			}
 			applyStartingPicture();
 			update();
-			if (modal.classList.contains('open') && !saving) renderAssignments();
+			followChoice();
+			var sig = sortedDevices().map(function (d) { return d.udid + '=' + deviceName(d); }).join('|');
+			if (modal.classList.contains('open') && !saving && sig !== assignSig) renderAssignments();
 		}
 
 		// When a device is chosen, switch to the picture it starts with. Only
@@ -303,8 +319,21 @@
 			var key = assignments[udid];
 			if (!key || pictureSelect.value === 'passthrough') return;
 			if (picture(key).key !== key) return;
+			pendingPicture = '';
 			pictureSelect.value = key;
 			saveChoice();
+		}
+
+		// When a choice changes by itself (profiles arrive, a profile is
+		// deleted or edited, a device's state changes), a stream already on
+		// screen follows it, so the lists never describe something else.
+		function followChoice() {
+			if (showing === 'stream' && currentChoice() !== openedWith) openStream();
+		}
+		function currentChoice() {
+			var p = picture(pictureSelect.value);
+			var d = devices.get(deviceSelect.value);
+			return deviceSelect.value + '|' + (d && p.key !== 'passthrough' ? JSON.stringify(videoSettings(p, d)) : p.key);
 		}
 
 		function update() {
@@ -322,9 +351,10 @@
 			if (!passthrough && d && assignments[d.udid] === p.key) text = 'This device\u2019s starting picture. ' + text;
 			if (!passthrough) {
 				if (!PLAYER) text = 'This browser can’t play the picture settings. Choose Pass-through instead.';
-				else if (!listReached) text = 'Can’t reach ws-scrcpy yet. Trying again…';
+				else if (listState === 'connecting') text = 'Looking for devices…';
+				else if (listState === 'lost') text = 'Can’t reach ws-scrcpy. Trying again…';
 				else if (!devices.size) text = 'No Android devices are connected. Check that each device is on and has network debugging allowed.';
-				else if (d && d.state === 'unauthorized') text = 'This device is asking for permission. Look at the TV and allow debugging from this computer.';
+				else if (d && d.state === 'unauthorized') text = 'This device is asking for permission. On the TV, tick \u201cAlways allow\u201d and choose Allow.';
 				else if (d && d.state !== 'device') text = 'This device isn’t connected right now.';
 				else if (d && d.pid === -1) text = 'This device is getting ready. Open becomes available in a few seconds.';
 			}
@@ -388,7 +418,11 @@
 		function openStream() {
 			var p = picture(pictureSelect.value);
 			var d = devices.get(deviceSelect.value);
-			if (!PLAYER || p.key === 'passthrough' || !isReady(d)) return;
+			if (!PLAYER || p.key === 'passthrough') return;
+			if (!isReady(d)) {
+				if (showing === 'stream') showPlaceholder('That device isn' + '\u2019' + 't ready right now. Press <strong>Open</strong> when it is.');
+				return;
+			}
 			// Settle the bar first (its hint and buttons change height), then
 			// pin a blank frame to whole pixels and read its size back, so the
 			// size the setting is filed under is the size ws-scrcpy will see
@@ -414,6 +448,7 @@
 				showPlaceholder('This browser isn’t allowing saved settings, so a picture setting can’t be applied. Choose <strong>Pass-through</strong> instead.');
 				return;
 			}
+			openedWith = currentChoice();
 			f.src = streamUrl(d.udid);
 		}
 
@@ -424,6 +459,7 @@
 		}
 
 		pictureSelect.addEventListener('change', function () {
+			pendingPicture = '';
 			saveChoice();
 			if (pictureSelect.value === 'passthrough') showPassthrough();
 			else if (showing === 'stream') openStream();
@@ -432,6 +468,7 @@
 		});
 		deviceSelect.addEventListener('change', function () {
 			applyStartingPicture();
+			pendingPicture = '';
 			saveChoice();
 			if (showing === 'stream') openStream();
 			else update();
@@ -461,6 +498,7 @@
 				if (!msg || !msg.data) return;
 				if (msg.type === 'devicelist' && Array.isArray(msg.data.list)) {
 					listReached = true;
+					listState = 'open';
 					devices = new Map();
 					msg.data.list.forEach(function (d) { if (d && d.udid) devices.set(d.udid, d); });
 					renderDevices();
@@ -471,6 +509,7 @@
 			};
 			ws.onclose = function () {
 				listReached = false;
+				listState = 'lost';
 				update();
 				if (!retry) retry = setTimeout(watchDevices, 5000);
 			};
@@ -493,6 +532,8 @@
 		};
 		var sizeNote = byId('cpSizeNote');
 		var encoderNote = byId('cpEncoderNote');
+		var assignSig = '';         // the devices the starting-picture rows were drawn for
+		var focusKeep = false;      // move focus to "Keep it" once, when a delete is asked for
 		var editingId = '';         // the profile in the form; '' for a new one
 		var formOpen = false;
 		var confirmingDelete = '';
@@ -511,24 +552,44 @@
 				throw new Error('AH4C could not be reached. Check the connection and try again.');
 			}).then(function (r) {
 				return r.json().catch(function () { return null; }).then(function (data) {
-					if (!r.ok || !data) throw new Error((data && data.error) || 'AH4C answered with an error (' + r.status + ').');
+					if (!r.ok || !data) {
+						var err = new Error((data && data.error) || 'AH4C answered with an error (' + r.status + ').');
+						err.status = r.status;
+						err.data = data;
+						throw err;
+					}
 					return data;
 				});
 			});
 		}
 
+		function takeProfiles(data) {
+			custom = Array.isArray(data.pictures) ? data.pictures : [];
+			assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
+			revision = typeof data.revision === 'string' ? data.revision : '';
+		}
+
+		// Changing profiles is only allowed after they have been read: a save
+		// replaces the whole list, so saving from an empty list that merely
+		// failed to load would erase them.
 		function loadCustom() {
 			return api('GET').then(function (data) {
-				custom = Array.isArray(data.pictures) ? data.pictures : [];
-				assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
+				takeProfiles(data);
 				customLoaded = true;
+				profilesReady = true;
 				renderPictures();
 				applyStartingPicture();
 				update();
+				followChoice();
 				renderCustomList();
-			}).catch(function () {
+				return true;
+			}).catch(function (err) {
 				customLoaded = true;
+				profilesReady = false;
 				renderPictures();
+				renderCustomList();
+				showStatus('The saved profiles couldn' + '\u2019' + 't be read, so they can' + '\u2019' + 't be changed right now. ' + err.message, true);
+				return false;
 			});
 		}
 
@@ -543,6 +604,8 @@
 		// picture but are not connected right now.
 		function renderAssignments() {
 			var list = byId('assignList');
+			var focused = document.activeElement && list.contains(document.activeElement) ? document.activeElement.getAttribute('data-udid') : null;
+			assignSig = sortedDevices().map(function (d) { return d.udid + '=' + deviceName(d); }).join('|');
 			list.innerHTML = '';
 			var serials = sortedDevices().map(function (d) { return d.udid; });
 			Object.keys(assignments).sort().forEach(function (u) { if (serials.indexOf(u) === -1) serials.push(u); });
@@ -568,21 +631,25 @@
 					select.appendChild(o);
 				});
 				select.value = assignments[udid] || '';
-				select.disabled = saving;
+				select.disabled = saving || !profilesReady;
+				select.setAttribute('data-udid', udid);
+				select.setAttribute('aria-label', 'Starting picture for ' + labelForSerial(udid));
 				select.addEventListener('change', function () {
 					var next = Object.assign({}, assignments);
 					if (select.value) next[udid] = select.value; else delete next[udid];
-					persist(custom, next).then(function (ok) {
+					persist(custom, next, 'status').then(function (ok) {
 						if (ok && udid === deviceSelect.value && select.value) {
 							appliedFor = null;
 							applyStartingPicture();
-							if (showing === 'stream') openStream(); else update();
+							update();
+							followChoice();
 						}
 					});
 				});
 				row.appendChild(name);
 				row.appendChild(select);
 				list.appendChild(row);
+				if (focused === udid) select.focus();
 			});
 		}
 
@@ -621,15 +688,16 @@
 				edit.type = 'button';
 				edit.className = 'btn btn-sm';
 				edit.textContent = 'Edit';
-				edit.disabled = saving;
+				edit.disabled = saving || !profilesReady;
 				edit.addEventListener('click', function () { startEdit(c.id); });
 				var del = document.createElement('button');
 				del.type = 'button';
 				del.className = 'btn btn-sm btn-danger';
 				del.textContent = 'Delete';
-				del.disabled = saving;
+				del.disabled = saving || !profilesReady;
 				del.addEventListener('click', function () {
 					confirmingDelete = c.id;
+					focusKeep = true;
 					showStatus('');
 					renderCustomList();
 				});
@@ -662,11 +730,12 @@
 			yes.addEventListener('click', function () {
 				var left = {};
 				Object.keys(assignments).forEach(function (u) { if (assignments[u] !== c.id) left[u] = assignments[u]; });
-				var closeForm = formOpen && editingId === c.id;
-				persist(custom.filter(function (x) { return x.id !== c.id; }), left).then(function (ok) {
+				var wasEditing = formOpen && editingId === c.id;
+				persist(custom.filter(function (x) { return x.id !== c.id; }), left, 'status').then(function (ok) {
 					if (!ok) return;
-					if (closeForm) closeForm_();
+					if (wasEditing) closeForm();
 					showStatus('Deleted ' + c.name + '.');
+					customNew.focus();
 				});
 			});
 			var no = document.createElement('button');
@@ -674,11 +743,14 @@
 			no.className = 'btn btn-sm';
 			no.textContent = 'Keep it';
 			no.disabled = saving;
-			no.addEventListener('click', function () { confirmingDelete = ''; renderCustomList(); });
+			no.addEventListener('click', function () { confirmingDelete = ''; renderCustomList(); customNew.focus(); });
 			row.appendChild(text);
 			row.appendChild(yes);
 			row.appendChild(no);
-			setTimeout(function () { no.focus(); }, 0);
+			if (focusKeep) {
+				focusKeep = false;
+				setTimeout(function () { no.focus(); }, 0);
+			}
 			return row;
 		}
 
@@ -688,8 +760,11 @@
 			customStatus.classList.toggle('is-error', !!isError);
 		}
 
+		// The device's own software encoder is what "Software" already picks.
+		var SOFTWARE_NAMES = ['c2.android.avc.encoder', 'OMX.google.h264.encoder'];
+
 		function renderEncoderOptions(selected) {
-			var names = probedEncoders.slice();
+			var names = probedEncoders.filter(function (n) { return SOFTWARE_NAMES.indexOf(n) === -1; });
 			if (selected && selected !== SOFTWARE && names.indexOf(selected) === -1) names.push(selected);
 			cp.encoder.innerHTML = '';
 			[['', 'The device’s usual choice'], [SOFTWARE, 'Software (slower, most compatible)']]
@@ -709,6 +784,8 @@
 		function probeEncoders() {
 			var generation = ++probeGeneration;
 			var d = devices.get(deviceSelect.value);
+			probedEncoders = [];
+			renderEncoderOptions(cp.encoder.value);
 			if (!isReady(d)) {
 				encoderNote.textContent = 'This is how the Android device compresses its picture to send it here. It isn’t your HDMI encoder. Pick a connected device on the page to see its choices. The first two work on any device.';
 				return;
@@ -798,6 +875,9 @@
 			cp.width.value = c ? c.width : 1280;
 			cp.height.value = c ? c.height : 720;
 			cp.quality.value = c ? Math.round(c.bitrate / 1e6 * 100) / 100 : 7;
+			Array.prototype.slice.call(cp.fps.options).forEach(function (o) {
+				if (['60', '30', '24', '15'].indexOf(o.value) === -1) o.remove();
+			});
 			cp.fps.value = String(c ? c.maxFps : 60);
 			if (!cp.fps.value) {
 				var o = document.createElement('option');
@@ -825,11 +905,12 @@
 			cp.name.focus();
 		}
 
-		function closeForm_() {
+		function closeForm() {
 			editingId = '';
 			formOpen = false;
 			customForm.classList.add('hidden');
 			renderCustomList();
+			customNew.focus();
 		}
 
 		function startEdit(id) {
@@ -865,25 +946,35 @@
 			Object.keys(cp).forEach(function (k) { cp[k].disabled = on; });
 			customSave.disabled = on;
 			customCancelEdit.disabled = on;
-			customNew.disabled = on;
+			customNew.disabled = on || !profilesReady;
 			renderCustomList();
 		}
 
-		// Errors show in the form while it is open, otherwise above the list.
-		function persist(list, nextAssignments) {
+		// A save replaces the whole list and names the revision it was made
+		// from. Errors show where the change was made: in the form for the
+		// form's own save, otherwise above the list.
+		function persist(list, nextAssignments, target) {
+			if (!profilesReady) return Promise.resolve(false);
 			customError.textContent = '';
 			showStatus('');
 			setSaving(true);
-			return api('PUT', { pictures: list, assignments: nextAssignments }).then(function (data) {
-				custom = Array.isArray(data.pictures) ? data.pictures : [];
-				assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
+			return api('PUT', { pictures: list, assignments: nextAssignments, revision: revision }).then(function (data) {
+				takeProfiles(data);
 				confirmingDelete = '';
 				setSaving(false);
 				renderPictures();
 				return true;
 			}).catch(function (err) {
+				// Someone else saved first: show their copy, and let the change
+				// be made again on top of it.
+				if (err.status === 409 && err.data) {
+					takeProfiles(err.data);
+					confirmingDelete = '';
+					renderPictures();
+				}
 				setSaving(false);
-				if (formOpen) customError.textContent = err.message;
+				if (target === 'form' && err.status === 409) showStatus('The profiles were changed in another browser and have been reloaded. Your form is still filled in: press ' + customSave.textContent + ' again to keep it.', true);
+				else if (target === 'form') customError.textContent = err.message;
 				else showStatus(err.message, true);
 				renderCustomList();
 				return false;
@@ -895,22 +986,29 @@
 			if (typeof p === 'string') { customError.textContent = p; return; }
 			var isNew = !editingId;
 			var list = isNew ? custom.concat([p]) : custom.map(function (c) { return c.id === p.id ? p : c; });
-			persist(list, assignments).then(function (ok) {
+			persist(list, assignments, 'form').then(function (ok) {
 				if (!ok) return;
-				closeForm_();
+				closeForm();
 				showStatus((isNew ? 'Added ' : 'Saved ') + p.name + (isNew ? '. It is now chosen in the Picture list.' : '.'));
-				// A new profile becomes the page's choice; an edited one that is
-				// on screen now is reopened with its new values.
-				if (isNew || pictureSelect.value === p.id) {
+				// A new profile becomes the page's choice, unless Pass-through is
+				// in use; an edited one that is on screen now is reopened with its
+				// new values.
+				if (isNew && showing !== 'passthrough') {
+					pendingPicture = '';
 					pictureSelect.value = p.id;
 					saveChoice();
-					if (showing === 'stream') openStream();
-					else if (showing === 'passthrough') showPlaceholder('Choose a device and press <strong>Open</strong>.');
-					else update();
 				}
+				update();
+				followChoice();
 			});
 		});
-		customCancelEdit.addEventListener('click', closeForm_);
+		customCancelEdit.addEventListener('click', closeForm);
+		// Enter in any field saves, as it would in an ordinary form.
+		Object.keys(cp).forEach(function (k) {
+			if (cp[k].tagName === 'INPUT') cp[k].addEventListener('keydown', function (e) {
+				if (e.key === 'Enter') { e.preventDefault(); customSave.click(); }
+			});
+		});
 		customNew.addEventListener('click', function () { openForm(null); });
 		cp.width.addEventListener('input', updateSizeNote);
 
@@ -921,10 +1019,17 @@
 			showStatus('');
 			customForm.classList.add('hidden');
 			fillForm(null);
-			renderCustomList();
+			// Read the profiles again: another browser may have changed them,
+			// and an earlier read may have failed.
+			profilesReady = false;
+			setSaving(false);
 			modal.classList.add('open');
+			byId('customClose').focus();
+			loadCustom().then(function (ok) {
+				setSaving(false);
+				if (ok) (custom.length ? byId('customClose') : customNew).focus();
+			});
 			probeEncoders();
-			(custom.length ? byId('customClose') : customNew).focus();
 		}
 		function closeModal() {
 			if (saving) return;

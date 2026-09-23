@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Custom picture settings for Device Control, and which picture each device
+// Picture profiles for Device Control, and which picture each device
 // starts with. The page writes a picture where ws-scrcpy keeps its own saved
 // video settings before it opens a stream; this file only keeps the choices,
 // in the config directory beside settings.json, so every browser sees the
@@ -71,17 +73,22 @@ func devicePicturesPath() string {
 	return filepath.Join(filepath.Dir(settingsFilePath()), "device-pictures.json")
 }
 
-func loadDevicePictures() (devicePicturesFile, error) {
+// loadDevicePictures also returns a revision of what it read, so a save
+// made from a page showing an older copy can be refused rather than
+// silently replacing what another browser saved in between.
+func loadDevicePictures() (devicePicturesFile, string, error) {
 	f := devicePicturesFile{Version: 1, Pictures: []devicePicture{}, Assignments: map[string]string{}}
 	b, err := os.ReadFile(devicePicturesPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return f, nil
+		return f, "", nil
 	}
 	if err != nil {
-		return f, err
+		return f, "", err
 	}
+	sum := sha256.Sum256(b)
+	revision := hex.EncodeToString(sum[:8])
 	if err := json.Unmarshal(b, &f); err != nil {
-		return f, fmt.Errorf("device-pictures.json is not valid: %w", err)
+		return f, revision, fmt.Errorf("device-pictures.json is not valid: %w", err)
 	}
 	if f.Pictures == nil {
 		f.Pictures = []devicePicture{}
@@ -89,24 +96,29 @@ func loadDevicePictures() (devicePicturesFile, error) {
 	if f.Assignments == nil {
 		f.Assignments = map[string]string{}
 	}
-	return f, nil
+	return f, revision, nil
 }
 
-func saveDevicePictures(f devicePicturesFile) error {
+func saveDevicePictures(f devicePicturesFile) (string, error) {
 	f.Version = 1
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
+	b = append(b, '\n')
 	path := devicePicturesPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+		return "", err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0600); err != nil {
-		return err
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return "", err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8]), nil
 }
 
 // normalizeDevicePictures checks a complete list before it replaces the saved
@@ -114,7 +126,7 @@ func saveDevicePictures(f devicePicturesFile) error {
 // rejects anything the page could not hand to ws-scrcpy as it stands.
 func normalizeDevicePictures(in []devicePicture) ([]devicePicture, error) {
 	if len(in) > maxDevicePictures {
-		return nil, fmt.Errorf("at most %d custom settings can be saved", maxDevicePictures)
+		return nil, fmt.Errorf("at most %d profiles can be saved", maxDevicePictures)
 	}
 	out := make([]devicePicture, 0, len(in))
 	ids := map[string]bool{}
@@ -127,17 +139,17 @@ func normalizeDevicePictures(in []devicePicture) ([]devicePicture, error) {
 		}
 		label := p.Name
 		if label == "" {
-			label = "a custom setting"
+			label = "a profile"
 		}
 		switch {
 		case !devicePictureIDPattern.MatchString(p.ID):
 			return nil, fmt.Errorf("%s has an invalid id", label)
 		case ids[p.ID]:
-			return nil, fmt.Errorf("%s has the same id as another setting", label)
+			return nil, fmt.Errorf("%s has the same id as another profile", label)
 		case p.Name == "" || len([]rune(p.Name)) > 40:
-			return nil, errors.New("each setting needs a name of 1 to 40 characters")
+			return nil, errors.New("each profile needs a name of 1 to 40 characters")
 		case names[strings.ToLower(p.Name)]:
-			return nil, fmt.Errorf("there is already a setting named %q", p.Name)
+			return nil, fmt.Errorf("there is already a profile named %q", p.Name)
 		case p.Width < 128 || p.Width > 4096 || p.Height < 128 || p.Height > 4096:
 			return nil, fmt.Errorf("%s: width and height must each be between 128 and 4096", p.Name)
 		case p.Bitrate < 250_000 || p.Bitrate > 50_000_000:
@@ -145,7 +157,7 @@ func normalizeDevicePictures(in []devicePicture) ([]devicePicture, error) {
 		case p.MaxFps < 1 || p.MaxFps > 60:
 			return nil, fmt.Errorf("%s: frame rate must be between 1 and 60", p.Name)
 		case p.IFrameInterval < 1 || p.IFrameInterval > 60:
-			return nil, fmt.Errorf("%s: full-picture interval must be between 1 and 60 seconds", p.Name)
+			return nil, fmt.Errorf("%s: the keyframe interval must be between 1 and 60 seconds", p.Name)
 		case p.Encoder != "" && p.Encoder != encoderSoftware && !devicePictureEncoderPattern.MatchString(p.Encoder):
 			return nil, fmt.Errorf("%s: %q is not a compression choice the Android device offers", p.Name, p.Encoder)
 		}
@@ -160,16 +172,12 @@ func normalizeDevicePictures(in []devicePicture) ([]devicePicture, error) {
 // against the pictures that will exist once the save lands. An empty picture
 // means the device has no starting picture of its own.
 func normalizeDeviceAssignments(in map[string]string, pictures []devicePicture) (map[string]string, error) {
-	if len(in) > maxDeviceAssignments {
-		return nil, fmt.Errorf("at most %d devices can have a starting picture", maxDeviceAssignments)
-	}
 	known := map[string]bool{}
 	for _, p := range pictures {
 		known[p.ID] = true
 	}
 	out := map[string]string{}
 	for serial, key := range in {
-		serial = strings.TrimSpace(serial)
 		if !deviceSerialPattern.MatchString(serial) {
 			return nil, fmt.Errorf("%q is not a device address", serial)
 		}
@@ -177,9 +185,12 @@ func normalizeDeviceAssignments(in map[string]string, pictures []devicePicture) 
 			continue
 		}
 		if !builtInDevicePictures[key] && !known[key] {
-			return nil, fmt.Errorf("%s starts with a picture that no longer exists", serial)
+			return nil, fmt.Errorf("%s starts with a profile that no longer exists", serial)
 		}
 		out[serial] = key
+	}
+	if len(out) > maxDeviceAssignments {
+		return nil, fmt.Errorf("at most %d devices can have a starting picture", maxDeviceAssignments)
 	}
 	return out, nil
 }
@@ -187,25 +198,28 @@ func normalizeDeviceAssignments(in map[string]string, pictures []devicePicture) 
 func getDevicePicturesHandler(c *gin.Context) {
 	devicePicturesMu.Lock()
 	defer devicePicturesMu.Unlock()
-	f, err := loadDevicePictures()
+	f, revision, err := loadDevicePictures()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"pictures": f.Pictures, "assignments": f.Assignments})
+	c.JSON(http.StatusOK, gin.H{"pictures": f.Pictures, "assignments": f.Assignments, "revision": revision})
 }
 
 func putDevicePicturesHandler(c *gin.Context) {
 	var req struct {
-		Pictures    []devicePicture   `json:"pictures"`
+		Pictures    *[]devicePicture  `json:"pictures"`
 		Assignments map[string]string `json:"assignments"`
+		// Revision is what the page last read; the save is refused if the
+		// file has changed since.
+		Revision string `json:"revision"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "the settings could not be read"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Pictures == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "the profiles could not be read"})
 		return
 	}
-	pictures, err := normalizeDevicePictures(req.Pictures)
+	pictures, err := normalizeDevicePictures(*req.Pictures)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -217,9 +231,22 @@ func putDevicePicturesHandler(c *gin.Context) {
 	}
 	devicePicturesMu.Lock()
 	defer devicePicturesMu.Unlock()
-	if err := saveDevicePictures(devicePicturesFile{Pictures: pictures, Assignments: assignments}); err != nil {
+	current, revision, err := loadDevicePictures()
+	if err == nil && req.Revision != revision {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":       "The profiles were changed in another browser. They have been reloaded, so make your change again.",
+			"pictures":    current.Pictures,
+			"assignments": current.Assignments,
+			"revision":    revision,
+		})
+		return
+	}
+	// A file that cannot be read is replaced by a deliberate save rather than
+	// blocking every save for ever.
+	revision, err = saveDevicePictures(devicePicturesFile{Pictures: pictures, Assignments: assignments})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"pictures": pictures, "assignments": assignments})
+	c.JSON(http.StatusOK, gin.H{"pictures": pictures, "assignments": assignments, "revision": revision})
 }

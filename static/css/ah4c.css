@@ -1527,3 +1527,4 @@ body.release-popover-open { overflow: hidden; }
 @media (max-width: 560px) {
 	.custom-picture-assign select { width: 100%; min-width: 0; }
 }
+.device-stage { overflow: hidden; }
