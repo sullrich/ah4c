@@ -147,12 +147,6 @@
                     <textarea id="capture-manual-text" class="capture-manual-text" rows="6" readonly spellcheck="false" aria-label="Text to paste into Channels DVR"></textarea>
                     <div class="btn-row"><button id="capture-manual-copy" class="btn" type="button">Copy</button><span id="capture-manual-status" class="muted" aria-live="polite"></span></div>
                 </details>
-                <details id="capture-advanced" class="capture-passthrough">
-                    <summary>Advanced</summary>
-                    <label class="capture-debug"><input type="checkbox" id="capture-debug"><span>Debug mode</span></label>
-                    <p class="setting-description">For testing only. A card's sound device may be left empty, to set up the picture alone on a computer with no sound driver. It also shows exactly what was sent to Channels DVR and what Channels DVR kept.</p>
-                    <div id="capture-debug-output" class="capture-debug-output hidden"></div>
-                </details>
             </section>
 
             <section class="card settings-section" data-section="playback">
@@ -2333,8 +2327,8 @@ function renderCaptureHelp() {
     byId('capture-manual').classList.toggle('hidden', !details.length);
     const code = value => `<code>${escapeHTML(value)}</code>`;
     byId('capture-devices-list').innerHTML = details.map(item => `<li>${code('/dev/' + item.video)}</li>`).join('') + `<li>${code('/dev/snd')} <span class="muted">(the cards' sound)</span></li>`;
-    // Only what ah4c itself would write: a sound device, or none in Debug mode.
-    byId('capture-manual-text').value = captureSourceTextFor(details.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio || '') || (!item.audio && captureDebug())));
+    // Only what ah4c itself would write: cards with a sound device.
+    byId('capture-manual-text').value = captureSourceTextFor(details.filter(item => /^(?:plug)?hw:[A-Za-z0-9_]+,\d+$/.test(item.audio || '')));
     byId('capture-manual-status').textContent = '';
 }
 
@@ -2389,7 +2383,7 @@ async function setUpCaptureTuners() {
         };
         if (!/^video\d+$/.test(item.video)) return fail('Choose its capture card. If none is listed, plug the card in and press Find cards again.');
         if (seen.has(item.video)) return fail(`Tuner ${seen.get(item.video)} already uses this capture card. Each card can feed one tuner.`);
-        if (!item.audio && !captureDebug()) return fail('Choose its sound device.');
+        if (!item.audio) return fail('Choose its sound device.');
         seen.set(item.video, number);
         details.push(item);
     }
@@ -2418,12 +2412,11 @@ async function setUpCaptureTuners() {
     try {
         payload = await captureRequest('/api/capture/channels', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({debug: captureDebug(), cards: details}),
+            body: JSON.stringify({cards: details}),
         });
     } catch (error) {
         return stop(`The capture cards could not be set up in Channels DVR: ${error.message}`);
     }
-    renderCaptureDebug(payload);
     for (const [index, card] of cards.entries()) {
         const stream = (payload.streams || []).find(item => item.video === details[index].video);
         if (!stream) return stop(`Channels DVR has not listed the channel for Tuner ${tunerNumber(card)} yet. Choose Save again in a moment.`);
@@ -2470,7 +2463,7 @@ function renderCaptureDrivers(drivers) {
         steps.push('The driver is there but did not pick the card up. Unplug the card and plug it back in.');
     }
     if (modules.some(module => !loaded.includes(module))) {
-        const soundOnly = sound.length && !video.length ? ' Without a sound driver the card records no sound; <strong>Debug mode</strong>, under Advanced below, can set it up with the picture only, for testing.' : '';
+        const soundOnly = sound.length && !video.length ? ' Without a sound driver the card records no sound.' : '';
         steps.push(`Install the driver for your system on the computer itself, not in a container, and restart.${soundOnly}`);
     }
     box.innerHTML = `<strong>${heading}</strong><p>${names.map(escapeHTML).join(', ')}</p><p>${steps.join(' ')} Then press <strong>Find cards again</strong>.</p>`;
@@ -2487,25 +2480,6 @@ async function captureRequest(url, options) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || 'The request failed.');
     return payload;
-}
-
-// Debug mode: whether it is on, and the lists behind the last setup, so a test
-// can compare what ah4c sent with what Channels DVR kept.
-const captureDebugKey = 'ah4c.captureDebug';
-function captureDebug() {
-    return byId('capture-debug').checked;
-}
-
-function renderCaptureDebug(payload) {
-    const box = byId('capture-debug-output');
-    const parts = [];
-    if (captureDebug() && payload) {
-        if (typeof payload.sentText === 'string') parts.push(`<p class="setting-description">Sent to Channels DVR:</p><pre class="capture-command">${escapeHTML(payload.sentText)}</pre>`);
-        if (typeof payload.channelsText === 'string') parts.push(`<p class="setting-description">Channels DVR holds:</p><pre class="capture-command">${escapeHTML(payload.channelsText || '(nothing)')}</pre>`);
-        if (Array.isArray(payload.streams)) parts.push(`<p class="setting-description">Stream addresses:</p><pre class="capture-command">${escapeHTML(payload.streams.map(item => `${item.video}: ${item.url}`).join('\n') || '(none listed yet)')}</pre>`);
-    }
-    box.innerHTML = parts.join('');
-    box.classList.toggle('hidden', !parts.length);
 }
 
 // Adds the AH4C Capture source to Channels DVR for every tuner that records a
@@ -2544,14 +2518,6 @@ byId('capture-manual-copy').addEventListener('click', async () => {
         try { copied = document.execCommand('copy'); } catch (ignored) {}
     }
     byId('capture-manual-status').textContent = copied ? 'Copied.' : 'Select the text and copy it yourself.';
-});
-try {
-    byId('capture-debug').checked = localStorage.getItem(captureDebugKey) === '1';
-} catch (error) {}
-byId('capture-debug').addEventListener('change', () => {
-    try { localStorage.setItem(captureDebugKey, captureDebug() ? '1' : '0'); } catch (error) {}
-    if (!captureDebug()) renderCaptureDebug(null);
-    renderCaptureHelp();
 });
 
 loadSettings().catch(error => showNotice(error.message, 'danger'));

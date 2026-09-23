@@ -333,17 +333,15 @@ func pairCaptureCards(videos []v4l2Device, sounds []alsaCard) ([]captureCard, []
 }
 
 // validCaptureCard checks one card before it is written into a capture:// line,
-// where a slash, a space, or a stray character would break the address. A card
-// with no sound device is refused unless the page is in debug mode, where it is
-// written as a picture-only line for testing on a server with no sound driver.
-func validCaptureCard(card captureCard, allowSilent bool) error {
+// where a slash, a space, or a stray character would break the address.
+// Channels DVR does not capture a card without its sound, so a sound device
+// is required.
+func validCaptureCard(card captureCard) error {
 	if !captureVideoPattern.MatchString(card.Video) {
 		return fmt.Errorf("the video device must look like video0")
 	}
-	if card.Audio == "" && allowSilent {
-		// Written without a sound device; see captureSourceText.
-	} else if !captureAudioPattern.MatchString(card.Audio) {
-		return captureSoundError(allowSilent)
+	if !captureAudioPattern.MatchString(card.Audio) {
+		return fmt.Errorf("pick its sound device, which looks like hw:Video,0")
 	}
 	if card.Width < 320 || card.Width > 7680 || card.Height < 240 || card.Height > 4320 {
 		return fmt.Errorf("the picture size must be between 320x240 and 7680x4320")
@@ -489,13 +487,6 @@ func bestCaptureMode(modes []captureMode) (captureMode, int, bool) {
 	return best, bestRate, bestScore >= 0
 }
 
-func captureSoundError(allowSilent bool) error {
-	if allowSilent {
-		return fmt.Errorf("its sound device must look like hw:Video,0, or be left empty")
-	}
-	return fmt.Errorf("pick its sound device, which looks like hw:Video,0; a card with no sound can only be set up in Debug mode")
-}
-
 // captureChannelName names a card's channel after its video device, so the
 // channel is the card wherever the card sits in the list. A name taken from the
 // position would move a channel onto another card when one is removed or the
@@ -507,18 +498,13 @@ func captureChannelName(card captureCard) string {
 
 // captureSourceText is the custom-channels list Channels DVR captures from: one
 // channel per card, each a capture:// address naming the card's video node and
-// sound device. A card with no sound device, allowed only in debug mode, gets a
-// picture-only line, like the capture://v4l2/<videoX> form the Channels community
-// shows; it has not been tried here.
+// sound device.
 func captureSourceText(cards []captureCard) string {
 	var text strings.Builder
 	text.WriteString("#EXTM3U\n")
 	for _, card := range cards {
 		fmt.Fprintf(&text, "\n#EXTINF:-1, channel-id=\"ah4c-capture-%s\",channel-number=\"capture%s\",%s\n", card.Video, strings.TrimPrefix(card.Video, "video"), captureChannelName(card))
-		device := card.Video + "/"
-		if card.Audio != "" {
-			device += card.Audio + "/"
-		}
+		device := card.Video + "/" + card.Audio + "/"
 		if card.PixelFormat != "" {
 			// The form the Channels community uses to pick a card's format.
 			fmt.Fprintf(&text, "capture://v4l2/%s?framerate=%d&video_size=%dx%d&pixel_format=%s\n", device, card.Framerate, card.Width, card.Height, card.PixelFormat)
@@ -709,8 +695,7 @@ func captureState(ctx context.Context, dvrBase string) (gin.H, error) {
 		}
 		streams = captureStreamsFromDevice(device, dvrBase, cards)
 	}
-	// channelsText is the list as Channels DVR holds it, which debug mode shows.
-	return gin.H{"present": present, "source": captureSourceName, "cards": cards, "streams": streams, "unreadLines": unread, "channelsText": settings.Text}, nil
+	return gin.H{"present": present, "source": captureSourceName, "cards": cards, "streams": streams, "unreadLines": unread}, nil
 }
 
 // captureSetup is what the page is told: the capture state, and any other
@@ -813,7 +798,6 @@ func putCaptureSource(ctx context.Context, dvrBase string, cards []captureCard) 
 func putCaptureSourceHandler(c *gin.Context) {
 	var request struct {
 		Cards []captureCard `json:"cards"`
-		Debug bool          `json:"debug"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCaptureRequestBytes)
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -826,7 +810,7 @@ func putCaptureSourceHandler(c *gin.Context) {
 	}
 	seen := map[string]int{}
 	for position, card := range request.Cards {
-		if err := validCaptureCard(card, request.Debug); err != nil {
+		if err := validCaptureCard(card); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Card %d: %v.", position+1, err), "card": position})
 			return
 		}
@@ -853,9 +837,6 @@ func putCaptureSourceHandler(c *gin.Context) {
 		return
 	}
 	logger("[CAPTURE] wrote %s with %d cards to Channels DVR at %s", captureSourceName, len(request.Cards), dvrBase)
-	if request.Debug {
-		logger("[CAPTURE] debug: the source text sent was:\n%s", captureSourceText(request.Cards))
-	}
 	// Channels DVR loads a new source in the background, so its channels can
 	// take a moment to reach the export. Look a few times rather than once.
 	var setup gin.H
@@ -880,12 +861,8 @@ func putCaptureSourceHandler(c *gin.Context) {
 		if lookup != nil {
 			message = "The capture source was written, but its channels could not be read back: " + lookup.Error() + ". Press Load from Channels DVR in a moment."
 		}
-		reply := gin.H{"written": true, "present": true, "source": captureSourceName, "cards": request.Cards, "streams": []captureStream{},
-			"otherSources": []string{}, "uncheckedSources": 0, "unreadLines": 0, "message": message}
-		if request.Debug {
-			reply["sentText"] = captureSourceText(request.Cards)
-		}
-		c.JSON(http.StatusOK, reply)
+		c.JSON(http.StatusOK, gin.H{"written": true, "present": true, "source": captureSourceName, "cards": request.Cards, "streams": []captureStream{},
+			"otherSources": []string{}, "uncheckedSources": 0, "unreadLines": 0, "message": message})
 		return
 	}
 	// The rest of Channels DVR is scanned once, after the wait, not on every look.
@@ -895,10 +872,6 @@ func putCaptureSourceHandler(c *gin.Context) {
 		setup["message"] = "Other sources in Channels DVR could not be checked for the same cards: " + err.Error() + "."
 	}
 	setup["written"] = true
-	// Debug mode shows the exact list sent, beside what Channels DVR now holds.
-	if request.Debug {
-		setup["sentText"] = captureSourceText(request.Cards)
-	}
 	c.JSON(http.StatusOK, setup)
 }
 
