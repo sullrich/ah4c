@@ -44,7 +44,7 @@
 				<div class="device-actions">
 					<button id="openBtn" class="btn btn-primary btn-sm" type="button">Open</button>
 					<button id="stopBtn" class="btn btn-sm hidden" type="button">Stop</button>
-					<button id="customBtn" class="btn btn-sm" type="button">Custom settings</button>
+					<button id="customBtn" class="btn btn-sm" type="button">Picture profiles</button>
 				</div>
 				<p id="deviceHint" class="device-hint"></p>
 			</div>
@@ -60,19 +60,20 @@
 		<div class="modal custom-picture-modal">
 			<div class="modal-head">
 				<div>
-					<div id="customTitle" class="card-title">Custom picture settings</div>
+					<div id="customTitle" class="card-title">Picture profiles</div>
 					<div class="muted">Saved with AH4C's settings, so every browser sees them.</div>
 				</div>
 				<button id="customClose" class="btn btn-sm modal-close" type="button">Close</button>
 			</div>
-			<div id="customList" class="custom-picture-list"></div>
 			<div class="custom-picture-section">
-				<div class="custom-picture-form-title">Starting picture for each device</div>
-				<p class="modal-hint">Opening a device uses its starting picture. You can still pick another one from the Picture list at any time.</p>
-				<div id="assignList" class="custom-picture-list"></div>
-			</div>
-			<div class="custom-picture-form">
-				<div id="customFormTitle" class="custom-picture-form-title">New setting</div>
+				<div class="custom-picture-section-head">
+					<div class="custom-picture-form-title">Your profiles</div>
+					<button id="customNew" class="btn btn-sm" type="button">+ New profile</button>
+				</div>
+				<div id="customStatus" class="custom-picture-status hidden" role="status" aria-live="polite"></div>
+				<div id="customList" class="custom-picture-list"></div>
+			<div id="customForm" class="custom-picture-form hidden">
+				<div id="customFormTitle" class="custom-picture-form-title">New profile</div>
 				<div class="field">
 					<label for="cpName">Name</label>
 					<input id="cpName" type="text" maxlength="40" placeholder="Living room box">
@@ -108,9 +109,15 @@
 				</div>
 				<div id="customError" class="field-validation" role="alert"></div>
 				<div class="btn-row">
-					<button id="customSave" class="btn btn-primary" type="button">Save setting</button>
-					<button id="customCancelEdit" class="btn hidden" type="button">Cancel changes</button>
+					<button id="customSave" class="btn btn-primary" type="button">Save profile</button>
+					<button id="customCancelEdit" class="btn" type="button">Cancel</button>
 				</div>
+			</div>
+			</div>
+			<div class="custom-picture-section">
+				<div class="custom-picture-form-title">Starting picture for each device</div>
+				<p class="modal-hint">Opening a device uses its starting picture. You can still pick another one from the Picture list at any time.</p>
+				<div id="assignList" class="custom-picture-list"></div>
 			</div>
 		</div>
 	</div>
@@ -210,12 +217,12 @@
 			BUILT_IN.forEach(function (p) { add(pictureSelect, p, p.name + ' (' + p.width + ' × ' + p.height + ')'); });
 			if (custom.length) {
 				var g = document.createElement('optgroup');
-				g.label = 'Your settings';
+				g.label = 'Your profiles';
 				custom.forEach(function (c) { add(g, { key: c.id }, c.name + ' (' + c.width + ' × ' + c.height + ')'); });
 				pictureSelect.appendChild(g);
 			}
 			add(pictureSelect, PASSTHROUGH, PASSTHROUGH.name);
-			// A remembered custom setting that has since been deleted falls
+			// A remembered profile that has since been deleted falls
 			// back to Standard, but only once the saved list has been read.
 			pictureSelect.value = picture(keep).key === keep || !customLoaded ? keep : 'standard';
 			if (!pictureSelect.value) pictureSelect.value = 'standard';
@@ -305,6 +312,7 @@
 			var passthrough = p.key === 'passthrough';
 			var d = devices.get(deviceSelect.value);
 			deviceSelect.disabled = passthrough || !devices.size;
+			deviceSelect.title = passthrough ? 'Pass-through uses ws-scrcpy\u2019s own device list below.' : '';
 			openBtn.classList.toggle('hidden', passthrough);
 			openBtn.disabled = !PLAYER || !isReady(d);
 			openBtn.textContent = showing === 'stream' ? 'Reopen' : 'Open';
@@ -476,13 +484,17 @@
 		var customSave = byId('customSave');
 		var customCancelEdit = byId('customCancelEdit');
 		var formTitle = byId('customFormTitle');
+		var customForm = byId('customForm');
+		var customNew = byId('customNew');
+		var customStatus = byId('customStatus');
 		var cp = {
 			name: byId('cpName'), width: byId('cpWidth'), height: byId('cpHeight'),
 			quality: byId('cpQuality'), fps: byId('cpFps'), encoder: byId('cpEncoder')
 		};
 		var sizeNote = byId('cpSizeNote');
 		var encoderNote = byId('cpEncoderNote');
-		var editingId = '';
+		var editingId = '';         // the profile in the form; '' for a new one
+		var formOpen = false;
 		var confirmingDelete = '';
 		var saving = false;
 		var probeGeneration = 0;
@@ -560,7 +572,7 @@
 				select.addEventListener('change', function () {
 					var next = Object.assign({}, assignments);
 					if (select.value) next[udid] = select.value; else delete next[udid];
-					persist(custom, next, false).then(function (ok) {
+					persist(custom, next).then(function (ok) {
 						if (ok && udid === deviceSelect.value && select.value) {
 							appliedFor = null;
 							applyStartingPicture();
@@ -580,13 +592,18 @@
 			if (!custom.length) {
 				var empty = document.createElement('div');
 				empty.className = 'empty-state';
-				empty.textContent = 'No custom settings yet. Make one below and it appears in the Picture list.';
+				empty.innerHTML = 'No profiles yet. Press <strong>+ New profile</strong> to make one. It then appears in the Picture list.';
 				customList.appendChild(empty);
 				return;
 			}
 			custom.forEach(function (c) {
+				var users = Object.keys(assignments).filter(function (u) { return assignments[u] === c.id; }).map(labelForSerial);
+				if (confirmingDelete === c.id) {
+					customList.appendChild(deleteConfirmRow(c, users));
+					return;
+				}
 				var row = document.createElement('div');
-				row.className = 'custom-picture-row' + (c.id === editingId ? ' is-editing' : '');
+				row.className = 'custom-picture-row' + (formOpen && c.id === editingId ? ' is-editing' : '');
 				var text = document.createElement('div');
 				text.className = 'custom-picture-text';
 				var name = document.createElement('strong');
@@ -595,7 +612,6 @@
 				detail.textContent = summary(c);
 				text.appendChild(name);
 				text.appendChild(detail);
-				var users = Object.keys(assignments).filter(function (u) { return assignments[u] === c.id; }).map(labelForSerial);
 				if (users.length) {
 					var used = document.createElement('span');
 					used.textContent = 'Starting picture for ' + users.join(', ');
@@ -610,19 +626,66 @@
 				var del = document.createElement('button');
 				del.type = 'button';
 				del.className = 'btn btn-sm btn-danger';
-				del.textContent = confirmingDelete === c.id ? 'Delete it' : 'Delete';
+				del.textContent = 'Delete';
 				del.disabled = saving;
 				del.addEventListener('click', function () {
-					if (confirmingDelete !== c.id) { confirmingDelete = c.id; renderCustomList(); return; }
-					var left = {};
-					Object.keys(assignments).forEach(function (u) { if (assignments[u] !== c.id) left[u] = assignments[u]; });
-					persist(custom.filter(function (x) { return x.id !== c.id; }), left, c.id === editingId);
+					confirmingDelete = c.id;
+					showStatus('');
+					renderCustomList();
 				});
 				row.appendChild(text);
 				row.appendChild(edit);
 				row.appendChild(del);
 				customList.appendChild(row);
 			});
+		}
+
+		// The row a profile turns into while its deletion is being confirmed.
+		function deleteConfirmRow(c, users) {
+			var row = document.createElement('div');
+			row.className = 'custom-picture-row custom-picture-confirm';
+			var text = document.createElement('div');
+			text.className = 'custom-picture-text';
+			var q = document.createElement('strong');
+			q.textContent = 'Delete ' + c.name + '?';
+			var what = document.createElement('span');
+			what.textContent = users.length
+				? users.join(', ') + (users.length === 1 ? ' starts' : ' start') + ' with this profile and will go back to whatever was used last.'
+				: 'This can\u2019t be undone.';
+			text.appendChild(q);
+			text.appendChild(what);
+			var yes = document.createElement('button');
+			yes.type = 'button';
+			yes.className = 'btn btn-sm btn-danger';
+			yes.textContent = 'Delete profile';
+			yes.disabled = saving;
+			yes.addEventListener('click', function () {
+				var left = {};
+				Object.keys(assignments).forEach(function (u) { if (assignments[u] !== c.id) left[u] = assignments[u]; });
+				var closeForm = formOpen && editingId === c.id;
+				persist(custom.filter(function (x) { return x.id !== c.id; }), left).then(function (ok) {
+					if (!ok) return;
+					if (closeForm) closeForm_();
+					showStatus('Deleted ' + c.name + '.');
+				});
+			});
+			var no = document.createElement('button');
+			no.type = 'button';
+			no.className = 'btn btn-sm';
+			no.textContent = 'Keep it';
+			no.disabled = saving;
+			no.addEventListener('click', function () { confirmingDelete = ''; renderCustomList(); });
+			row.appendChild(text);
+			row.appendChild(yes);
+			row.appendChild(no);
+			setTimeout(function () { no.focus(); }, 0);
+			return row;
+		}
+
+		function showStatus(text, isError) {
+			customStatus.textContent = text;
+			customStatus.classList.toggle('hidden', !text);
+			customStatus.classList.toggle('is-error', !!isError);
 		}
 
 		function renderEncoderOptions(selected) {
@@ -744,19 +807,33 @@
 				cp.fps.value = o.value;
 			}
 			renderEncoderOptions(c ? c.encoder : '');
-			formTitle.textContent = c ? 'Editing ' + c.name : 'New setting';
-			customSave.textContent = c ? 'Save changes' : 'Save setting';
-			customCancelEdit.classList.toggle('hidden', !c);
+			formTitle.textContent = c ? 'Edit profile: ' + c.name : 'New profile';
+			customSave.textContent = c ? 'Save changes' : 'Save profile';
 			customError.textContent = '';
 			updateSizeNote();
 		}
 
-		function startEdit(id) {
-			editingId = id;
+		function openForm(c) {
+			editingId = c ? c.id : '';
+			formOpen = true;
 			confirmingDelete = '';
-			fillForm(custom.find(function (c) { return c.id === id; }));
+			showStatus('');
+			fillForm(c || null);
+			customForm.classList.remove('hidden');
 			renderCustomList();
+			customForm.scrollIntoView({ block: 'nearest' });
 			cp.name.focus();
+		}
+
+		function closeForm_() {
+			editingId = '';
+			formOpen = false;
+			customForm.classList.add('hidden');
+			renderCustomList();
+		}
+
+		function startEdit(id) {
+			openForm(custom.find(function (c) { return c.id === id; }));
 		}
 
 		function readForm() {
@@ -764,9 +841,9 @@
 			var width = parseInt(cp.width.value, 10);
 			var height = parseInt(cp.height.value, 10);
 			var quality = parseFloat(cp.quality.value);
-			if (!name) return 'Give the setting a name.';
+			if (!name) return 'Give the profile a name.';
 			if (custom.some(function (c) { return c.id !== editingId && c.name.toLowerCase() === name.toLowerCase(); }))
-				return 'There is already a setting called ' + name + '.';
+				return 'There is already a profile called ' + name + '.';
 			if (!(width >= 128 && width <= 4096 && height >= 128 && height <= 4096))
 				return 'Width and height must each be between 128 and 4096.';
 			if (!(quality >= 0.25 && quality <= 50)) return 'Quality must be between 0.25 and 50 Mbps.';
@@ -788,23 +865,26 @@
 			Object.keys(cp).forEach(function (k) { cp[k].disabled = on; });
 			customSave.disabled = on;
 			customCancelEdit.disabled = on;
+			customNew.disabled = on;
 			renderCustomList();
 		}
 
-		function persist(list, nextAssignments, resetForm) {
+		// Errors show in the form while it is open, otherwise above the list.
+		function persist(list, nextAssignments) {
 			customError.textContent = '';
+			showStatus('');
 			setSaving(true);
 			return api('PUT', { pictures: list, assignments: nextAssignments }).then(function (data) {
 				custom = Array.isArray(data.pictures) ? data.pictures : [];
 				assignments = data.assignments && typeof data.assignments === 'object' ? data.assignments : {};
 				confirmingDelete = '';
-				if (resetForm) { editingId = ''; fillForm(null); }
 				setSaving(false);
 				renderPictures();
 				return true;
 			}).catch(function (err) {
 				setSaving(false);
-				customError.textContent = err.message;
+				if (formOpen) customError.textContent = err.message;
+				else showStatus(err.message, true);
 				renderCustomList();
 				return false;
 			});
@@ -815,9 +895,11 @@
 			if (typeof p === 'string') { customError.textContent = p; return; }
 			var isNew = !editingId;
 			var list = isNew ? custom.concat([p]) : custom.map(function (c) { return c.id === p.id ? p : c; });
-			persist(list, assignments, true).then(function (ok) {
+			persist(list, assignments).then(function (ok) {
 				if (!ok) return;
-				// A new setting becomes the page's choice; an edited one that is
+				closeForm_();
+				showStatus((isNew ? 'Added ' : 'Saved ') + p.name + (isNew ? '. It is now chosen in the Picture list.' : '.'));
+				// A new profile becomes the page's choice; an edited one that is
 				// on screen now is reopened with its new values.
 				if (isNew || pictureSelect.value === p.id) {
 					pictureSelect.value = p.id;
@@ -828,21 +910,21 @@
 				}
 			});
 		});
-		customCancelEdit.addEventListener('click', function () {
-			editingId = '';
-			fillForm(null);
-			renderCustomList();
-		});
+		customCancelEdit.addEventListener('click', closeForm_);
+		customNew.addEventListener('click', function () { openForm(null); });
 		cp.width.addEventListener('input', updateSizeNote);
 
 		function openModal() {
 			editingId = '';
+			formOpen = false;
 			confirmingDelete = '';
+			showStatus('');
+			customForm.classList.add('hidden');
 			fillForm(null);
 			renderCustomList();
 			modal.classList.add('open');
 			probeEncoders();
-			cp.name.focus();
+			(custom.length ? byId('customClose') : customNew).focus();
 		}
 		function closeModal() {
 			if (saving) return;
