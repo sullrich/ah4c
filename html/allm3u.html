@@ -117,6 +117,12 @@
             populateProviders(deviceSelect);
         }
 
+        const rootProvider = '.';
+
+        function scriptPath(device, provider) {
+            return 'scripts/' + device + (provider ? '/' + provider : '');
+        }
+
         function decodeDevice(value) {
             const match = /^(local|bundled|github)::(.+)$/.exec(value || '');
             return match ? {source: match[1], device: match[2]} : {source: '', device: ''};
@@ -131,13 +137,20 @@
                 providerSelect.innerHTML = '<option value="">Select device first</option>';
                 return;
             }
-            const prefix = 'scripts/' + choice.device + '/';
-            const providers = [...new Set((scriptSources[choice.source] || []).filter(path => path.startsWith(prefix)))].map(path => path.slice(prefix.length)).sort();
+            const folder = 'scripts/' + choice.device;
+            const paths = [...new Set(scriptSources[choice.source] || [])];
+            // A script folder directly under scripts, such as scripts/mine,
+            // has no provider of its own; it is offered as the folder itself.
+            if (paths.includes(folder)) {
+                const incomplete = choice.source === 'local' && packageStatuses[folder] === 'incomplete';
+                providerSelect.add(new Option(folder + ' itself' + (incomplete ? ' — missing required files' : ''), rootProvider));
+            }
+            const providers = paths.filter(path => path.startsWith(folder + '/')).map(path => path.slice(folder.length + 1)).sort();
             providers.forEach(function (p) {
-                const incomplete = choice.source === 'local' && packageStatuses[prefix + p] === 'incomplete';
+                const incomplete = choice.source === 'local' && packageStatuses[folder + '/' + p] === 'incomplete';
                 providerSelect.add(new Option(p + (incomplete ? ' — missing required files' : ''), p));
             });
-            if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
+            if ([...providerSelect.options].some(option => option.value === currentProvider)) providerSelect.value = currentProvider;
         }
 
         document.querySelectorAll('.src-device').forEach(function (sel) {
@@ -152,10 +165,11 @@
                 if (!row.querySelector('.src-enable').checked) continue;
                 const file = row.querySelector('.src-file').textContent.trim();
                 const choice = decodeDevice(row.querySelector('.src-device').value);
-                const provider = row.querySelector('.src-provider').value;
-                if (!choice.device || !provider) {
+                const providerValue = row.querySelector('.src-provider').value;
+                if (!choice.device || !providerValue) {
                     throw new Error('Choose a device and TV service for ' + file + '.');
                 }
+                const provider = providerValue === rootProvider ? '' : providerValue;
                 sources.push({ file: file, device: choice.device, provider: provider, source: choice.source });
             }
             if (sources.length === 0) {
@@ -185,7 +199,7 @@
         function mergeAvailableScripts(payload) {
             const keep = paths => (Array.isArray(paths) ? paths : []).filter(function (path) {
                 const parts = String(path).split('/');
-                return parts.length === 3 && parts[0] === 'scripts' && parts[1] && parts[2] && parts[1] !== 'all';
+                return (parts.length === 2 || (parts.length === 3 && parts[2])) && parts[0] === 'scripts' && parts[1] && parts[1] !== 'all';
             });
             if (Array.isArray(payload.remote)) scriptSources.github = keep(payload.remote);
             if (Array.isArray(payload.bundled)) scriptSources.bundled = keep(payload.bundled);
@@ -205,9 +219,9 @@
             // ah4c and a GitHub one downloaded; a folder already here only
             // gains the files it is missing.
             const seen = new Set();
-            const downloads = sources.map(source => ({path: 'scripts/' + source.device + '/' + source.provider, source: source.source}))
+            const downloads = sources.map(source => ({path: scriptPath(source.device, source.provider), source: source.source}))
                 .filter(job => job.source !== 'local' && !seen.has(job.path) && seen.add(job.path));
-            const incompleteLocal = [...new Set(sources.filter(source => source.source === 'local').map(source => 'scripts/' + source.device + '/' + source.provider))]
+            const incompleteLocal = [...new Set(sources.filter(source => source.source === 'local').map(source => scriptPath(source.device, source.provider)))]
                 .filter(path => packageStatuses[path] === 'incomplete');
             if (incompleteLocal.length) {
                 status.className = 'm3u-action-status connection-state--error';
