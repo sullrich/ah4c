@@ -178,6 +178,13 @@
             });
         }
 
+        // A tuner fed by a USB capture card has a Channels DVR capture channel
+        // as its encoder, which is shown as the card rather than as an address.
+        function captureChannel(url) {
+            var match = /\/devices\/M3U-AH4CCapture\/channels\/([^/?#]+)\/stream\.mpg/.exec(String(url || ''));
+            return match ? match[1] : '';
+        }
+
         function escUrl(s) {
             return esc(s).replace(/(:\/\/|[:/])/g, '$1<wbr>');
         }
@@ -1031,10 +1038,10 @@
 		                        </div>
 		                        <div class="tuner-pairing">
 		                            <div class="endpoint-label lbl-device">Device</div>
-		                            <div class="endpoint-label lbl-encoder">Encoder</div>
+		                            <div class="endpoint-label lbl-encoder">${captureChannel(tuner.Url) ? 'Capture card' : 'Encoder'}</div>
 		                            <div class="endpoint-value val-device">${escUrl(tuner.Tunerip) || '—'}</div>
 		                            <div class="pair-link">⇄</div>
-		                            <div class="endpoint-value val-encoder">${escUrl(tuner.Url) || '—'}</div>
+		                            <div class="endpoint-value val-encoder">${captureChannel(tuner.Url) ? esc(`USB capture card · Channels DVR channel ${captureChannel(tuner.Url)}`) : (escUrl(tuner.Url) || '—')}</div>
 		                        </div>
 		                        <div class="tuner-actions">
 		                            <button class="btn btn-sm" onclick="openTunerModal(${index})">View &amp; control</button>
