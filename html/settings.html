@@ -135,7 +135,7 @@
                 <p class="section-help">Every capture card plugged into this computer is listed here. Channels DVR records a card itself; to record from one, press <strong>Use on a new tuner</strong>, or choose the card as a tuner's video source under Tuners. <strong>Save all changes</strong> then sets the card up in Channels DVR.</p>
                 <div id="capture-drivers" class="restart-tune-warning hidden" role="alert"></div>
                 <div id="capture-list" class="capture-list"></div>
-                <div class="btn-row"><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
+                <div class="btn-row"><button id="capture-apply" class="btn btn-primary" type="button">Set up in Channels DVR</button><button id="capture-find" class="btn" type="button">Find cards again</button><span id="capture-find-status" class="muted" aria-live="polite"></span></div>
                 <details id="capture-passthrough" class="capture-passthrough hidden" open>
                     <summary>Giving the cards to Channels DVR</summary>
                     <p class="setting-description">Channels DVR needs these devices from the computer the cards are plugged into. If Channels DVR runs in a container or a virtual machine, pass them through to it and restart it.</p>
@@ -2232,6 +2232,27 @@ function renderCaptureDebug(payload) {
     box.classList.toggle('hidden', !parts.length);
 }
 
+// Adds the AH4C Capture source to Channels DVR for every tuner that records a
+// card, even when nothing changed, then saves like Save all changes, restart
+// prompt and all.
+byId('capture-apply').addEventListener('click', async () => {
+    if (!captureTunerCards().length) {
+        byId('capture-find-status').textContent = 'No tuner records a card yet. Press Use on a new tuner first.';
+        return;
+    }
+    const button = byId('capture-apply');
+    button.disabled = true;
+    captureSavedSignature = '';
+    try {
+        await handleSaveClick();
+    } finally {
+        button.disabled = false;
+    }
+    if (captureSavedSignature) {
+        const count = captureTunerCards().length;
+        byId('capture-find-status').textContent = `Channels DVR has the AH4C Capture source with ${count === 1 ? '1 card' : `${count} cards`}.`;
+    }
+});
 byId('capture-find').addEventListener('click', () => {
     captureFound = null;
     findCaptureCards();
