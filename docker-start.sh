@@ -82,14 +82,23 @@ adbConnections() {
   for android in "${androids[@]}"
     do
       if [[ -n $android ]]; then
-        adb connect $android
+        # A device that is asleep, off or moved never answers, and adb waits
+        # about two minutes for it, all before ah4c starts serving. Give each
+        # device ten seconds; one that misses it is connected when it is used.
+        local connected
+        connected=$(timeout 10 adb connect $android 2>&1)
+        echo "$connected"
+        if [[ $connected != *"connected to"* ]]; then
+          echo "adb: could not connect to $android within 10 seconds; skipping it at startup"
+          continue
+        fi
 
-        local androidVersion=$(adb -s $android shell getprop ro.build.version.release | tr -d '\r')
+        local androidVersion=$(timeout 10 adb -s $android shell getprop ro.build.version.release | tr -d '\r')
         if [[ -n $androidVersion ]] && (( ${androidVersion%%.*} >= 11 )); then
-          local adbAllowedTime=$(adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
+          local adbAllowedTime=$(timeout 10 adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
           if [[ "$adbAllowedTime" == "null" ]]; then
-            adb -s $android shell settings put global adb_allowed_connection_time 0
-            adbAllowedTime=$(adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
+            timeout 10 adb -s $android shell settings put global adb_allowed_connection_time 0
+            adbAllowedTime=$(timeout 10 adb -s $android shell settings get global adb_allowed_connection_time | tr -d '\r')
             echo "adb_allowed_connection_time for $android set to $adbAllowedTime"
           fi
         fi
