@@ -18,7 +18,9 @@ device=$(echo "$combined" | awk -F~ '{print $1}')
 provider=$(echo "$combined" | awk -F~ '{print $2}')
 channelID=$(echo "$combined" | cut -d'~' -f3-)
 scriptDir="$(cd "$(dirname "$0")" && pwd)"
-targetScript="$scriptDir/../../$device/$provider/prebmitune.sh"
+# An empty provider (device~~channel) is a script folder directly under
+# scripts, such as scripts/mine, with no app folder below it.
+targetScript="$scriptDir/../../$device${provider:+/$provider}/prebmitune.sh"
 
 #Trap end of script run
 finish() {
@@ -29,7 +31,7 @@ trap finish EXIT
 
 #Reject anything that isn't a bare directory name before it touches a path
 validateDeviceProvider() {
-  if [[ ! "$device" =~ ^[A-Za-z0-9_-]+$ ]] || [[ ! "$provider" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  if [[ ! "$device" =~ ^[A-Za-z0-9_-]+$ ]] || [[ ! "$provider" =~ ^[A-Za-z0-9_-]*$ ]]; then
     echo "Invalid device/provider parsed from channel argument: $combined"
     exit 1
   fi

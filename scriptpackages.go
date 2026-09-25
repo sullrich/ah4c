@@ -200,6 +200,9 @@ func addMissingScriptFiles(stage, target string) error {
 		return fmt.Errorf("could not read the downloaded scripts: %w", err)
 	}
 	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !validScriptFileName(entry.Name()) {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(stage, entry.Name()))
 		if err != nil {
 			return fmt.Errorf("could not read %s: %w", entry.Name(), err)

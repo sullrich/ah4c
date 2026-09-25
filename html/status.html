@@ -157,6 +157,11 @@
         var tunerUrls = [];
         var tunerActive = [];
         var tunerLabels = [];
+        var tunerChannels = [];
+        var channelsStreamNames = {};
+        var channelsStreamNameFetchInProgress = false;
+        var channelsStreamNameRetryAt = 0;
+        var channelsStreamNameRetryDelay = 5000;
         var tunerElapsed = [];
         var tunerStartedAt = [];
         var channelsRecordings = [];
@@ -444,6 +449,12 @@
             });
         }
 
+        // A stream is named the way Channels DVR names it. ah4c's own lists
+        // stand in while that is unknown, then the bare channel.
+        function readerLabel(reader) {
+            return (reader && (channelsStreamNames[reader.Channel] || reader.Name || reader.Channel)) || '';
+        }
+
         function normalizeChannelLabel(value) {
             return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         }
@@ -494,6 +505,7 @@
         function captureReleaseTunerSnapshot(index) {
             return {
                 index: index,
+                channel: String(tunerChannels[index] || ''),
                 label: normalizeChannelLabel(tunerLabels[index]),
                 displayLabel: tunerLabels[index] || 'Unknown channel',
                 elapsed: Math.max(0, Number(tunerElapsed[index]) || 0),
@@ -722,9 +734,8 @@
             var tuner = data.Tuners && data.Tuners[index];
             if (!tuner || !tuner.Active) return 'idle';
             if (!reader || !snapshot || snapshot.index !== index) return 'changed';
-            var label = normalizeChannelLabel(reader.Name || reader.Channel);
             var startedAt = Math.floor(Date.now() / 1000) - Math.max(0, Number(reader.Elapsed) || 0);
-            return label === snapshot.label && Math.abs(startedAt - snapshot.startedAt) <= 3 ? 'same' : 'changed';
+            return String(reader.Channel || '') === snapshot.channel && Math.abs(startedAt - snapshot.startedAt) <= 3 ? 'same' : 'changed';
         }
 
         function fetchSelectedTunerState(token, index, onSuccess, onFailure) {
@@ -984,6 +995,38 @@
                 return `<div class="stat-tile"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
             }
 
+            function fetchChannelsStreamNames(readers) {
+                if (channelsStreamNameFetchInProgress || Date.now() < channelsStreamNameRetryAt) return;
+                var unnamed = $.map(readers || [], function(reader) {
+                    return !reader.Channel || channelsStreamNames[reader.Channel] ? null : reader.Channel;
+                });
+                if (!unnamed.length) return;
+                channelsStreamNameFetchInProgress = true;
+                $.ajax({ url: '/api/channels/names', data: { channel: unnamed }, traditional: true, timeout: 30000, dataType: 'json' })
+                    .done(function(data) {
+                        var found = false;
+                        $.each((data && data.names) || {}, function(channel, name) {
+                            if (name && !channelsStreamNames[channel]) {
+                                channelsStreamNames[channel] = String(name);
+                                found = true;
+                            }
+                        });
+                        if (unnamed.every(function(channel) { return channelsStreamNames[channel]; })) {
+                            channelsStreamNameRetryAt = 0;
+                            channelsStreamNameRetryDelay = 5000;
+                        } else {
+                            channelsStreamNameRetryAt = Date.now() + channelsStreamNameRetryDelay;
+                            channelsStreamNameRetryDelay = Math.min(channelsStreamNameRetryDelay * 2, 60000);
+                        }
+                        if (found) setTimeout(fetchDataAndUpdate, 0);
+                    })
+                    .fail(function() {
+                        channelsStreamNameRetryAt = Date.now() + channelsStreamNameRetryDelay;
+                        channelsStreamNameRetryDelay = Math.min(channelsStreamNameRetryDelay * 2, 60000);
+                    })
+                    .always(function() { channelsStreamNameFetchInProgress = false; });
+            }
+
 			// Function to fetch and update data
 		    function fetchDataAndUpdate() {
 		        if (document.hidden) return;
@@ -1012,6 +1055,7 @@
 		            tunerUrls = $.map(data.Tuners, function(t) { return t.Url || ''; });
 		            tunerActive = $.map(data.Tuners, function(t) { return t.Active; });
 		            tunerLabels = [];
+                    tunerChannels = [];
                     tunerElapsed = [];
                     tunerStartedAt = [];
 		            var readerByTuner = {};
@@ -1028,8 +1072,9 @@
 		                var reader = readerByTuner[index];
                             var isRecording = false;
 		                if (tuner.Active && reader && reader.Elapsed >= 0) {
-		                    var label = reader.Name || reader.Channel || '';
+		                    var label = readerLabel(reader);
 		                    tunerLabels[index] = label;
+		                    tunerChannels[index] = reader.Channel;
 		                    var labelHtml = label ? `<span class="tune-label">${esc(label)}</span>` : '';
                             isRecording = tunerIsRecording(index);
                             var activityLabel = label ? label + (isRecording ? ' — recording' : ' — streaming') : (isRecording ? 'Recording' : 'Streaming');
@@ -1077,12 +1122,13 @@
 		                    <tr>
 		                        <td>Tuner ${reader.T}</td>
 		                        <td><span class="tune-timer stream-state-marker${readerIsRecording ? ' is-recording' : ''}" data-tuner-index="${reader.T}" title="${readerIsRecording ? 'Recording' : 'Live'}" aria-label="${readerIsRecording ? 'Recording' : 'Live'}"><span class="activity-marker" aria-hidden="true">${readerIsRecording ? 'REC' : 'LIVE'}</span></span></td>
-		                        <td title="${esc(reader.Channel)}">${esc(reader.Name || reader.Channel)}</td>
+		                        <td title="${esc(reader.Channel)}">${esc(readerLabel(reader))}</td>
 		                        <td><span class="tune-timer"><span class="tune-clock" data-started="${Math.floor(Date.now() / 1000) - reader.Elapsed}">${fmtElapsed(reader.Elapsed)}</span></span></td>
 		                    </tr>
 		                `;
 		            });
 		            $('#readerStatus').html(readerStatusHtml);
+		            fetchChannelsStreamNames(data.Readers);
 
 					if (prevNetRecv !== null && prevNetSent !== null) {
 						var timeInterval = (currentTimestamp - prevTimestamp) / 1000; // in seconds

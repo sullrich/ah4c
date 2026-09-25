@@ -1605,8 +1605,8 @@ func channelName(channel string) string {
 				continue
 			}
 			if strings.HasSuffix(strings.TrimSpace(lines[i+1]), "/"+channel) {
-				if idx := strings.LastIndex(line, ","); idx != -1 {
-					return strings.TrimSpace(line[idx+1:])
+				if _, title := extinfEntry(line); title != "" {
+					return title
 				}
 			}
 		}

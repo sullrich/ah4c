@@ -31,7 +31,69 @@ type allM3URequest struct {
 }
 
 type scriptInstallRequest struct {
-	Path string `json:"path"`
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// allM3UScriptSources lists the device/provider folders the page offers, the
+// way Settings does: local folders on this server, the ones included with
+// ah4c, and the ones found on GitHub by the last check. Each is a
+// scripts/device/provider path, or scripts/name for a script folder directly
+// under scripts; all/all is left out because it is the dispatcher that reads
+// the finished list, not a place to send a channel.
+func allM3UScriptSources() map[string][]string {
+	pick := func(paths []string) []string {
+		result := []string{}
+		for _, path := range paths {
+			parts := strings.Split(path, "/")
+			if (len(parts) == 2 || len(parts) == 3) && parts[0] == "scripts" && parts[1] != "all" {
+				result = append(result, path)
+			}
+		}
+		sort.Strings(result)
+		return result
+	}
+	local := localTopLevelScriptFolders()
+	for device, providers := range scriptDeviceProviders() {
+		for _, provider := range providers {
+			local = append(local, "scripts/"+device+"/"+provider)
+		}
+	}
+	return map[string][]string{"local": pick(local), "bundled": pick(discoverBundledStreamers()), "github": pick(loadStreamerCache())}
+}
+
+// localTopLevelScriptFolders lists script folders directly under ./scripts,
+// such as scripts/mine, which Settings also offers as a streaming app.
+func localTopLevelScriptFolders() []string {
+	var result []string
+	entries, err := os.ReadDir("scripts")
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && validScriptPathPart(entry.Name()) && entry.Name() != "all" && holdsTuneScript(filepath.Join("scripts", entry.Name())) {
+			result = append(result, "scripts/"+entry.Name())
+		}
+	}
+	return result
+}
+
+// installBundledScriptPackage puts a folder included with ah4c into ./scripts.
+// Like every other install, a folder already there only gains missing files.
+func installBundledScriptPackage(selection string) error {
+	source := filepath.Join(bundledScriptsRoot, strings.TrimPrefix(selection, "scripts/"))
+	if !scriptPackageComplete(source) {
+		return fmt.Errorf("%s is not included with this version of ah4c", selection)
+	}
+	root, err := localScriptsRoot()
+	if err != nil {
+		return fmt.Errorf("could not locate the local scripts folder: %w", err)
+	}
+	target := filepath.Join(root, strings.TrimPrefix(selection, "scripts/"))
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return fmt.Errorf("could not prepare %s: %w", selection, err)
+	}
+	return addMissingScriptFiles(source, target)
 }
 
 // scriptDeviceProviders scans scripts/<device>/<provider> and returns the
@@ -61,6 +123,9 @@ func allM3UDeviceProviders() map[string][]string {
 			result[parts[1]] = append(result[parts[1]], parts[2])
 		}
 	}
+	// all/all is the dispatcher that reads this list, not a place to send a
+	// channel: a line pointing at it would dispatch to itself.
+	delete(result, "all")
 	for device, providers := range result {
 		sort.Strings(providers)
 		result[device] = providers
@@ -112,11 +177,24 @@ func mergeScriptDeviceProviders(into map[string][]string, root string) {
 			continue
 		}
 		for _, s := range subEntries {
-			if s.IsDir() && validScriptPathPart(s.Name()) && !slices.Contains(into[d.Name()], s.Name()) {
+			if s.IsDir() && validScriptPathPart(s.Name()) && holdsTuneScript(filepath.Join(root, d.Name(), s.Name())) && !slices.Contains(into[d.Name()], s.Name()) {
 				into[d.Name()] = append(into[d.Name()], s.Name())
 			}
 		}
 	}
+}
+
+// holdsTuneScript is true for a folder with at least one of the three entry
+// points. Any other folder under scripts, such as one a user keeps captions
+// or notes in, is not a streaming app. A folder missing only some of them is
+// still listed, so the page can say it is incomplete.
+func holdsTuneScript(dir string) bool {
+	for _, name := range requiredStreamerFiles {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // allM3USources lists m3u/*.m3u files that are not themselves a previous
@@ -150,12 +228,18 @@ func registerAllM3URoutes(r *gin.Engine) {
 		r.LoadHTMLGlob("html/*")
 		devices := allM3UDeviceProviders()
 		packageStatuses := scriptPackageStatuses(devices)
+		for _, selection := range localTopLevelScriptFolders() {
+			packageStatuses[selection] = "incomplete"
+			if scriptPackageComplete(selection) {
+				packageStatuses[selection] = "ready"
+			}
+		}
 		deviceNames := make([]string, 0, len(devices))
 		for d := range devices {
 			deviceNames = append(deviceNames, d)
 		}
 		sort.Strings(deviceNames)
-		devicesJSON, err := json.Marshal(devices)
+		devicesJSON, err := json.Marshal(allM3UScriptSources())
 		if err != nil {
 			c.String(http.StatusInternalServerError, "Failed to list scripts: %v", err)
 			return
@@ -181,8 +265,21 @@ func registerAllM3URoutes(r *gin.Engine) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if !validStreamerSelection(req.Path) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "script package must use scripts/device/app"})
+		if !validStreamerSelection(req.Path) || strings.HasPrefix(req.Path+"/", "scripts/all/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "script package must use scripts/device or scripts/device/app"})
+			return
+		}
+		if req.Source == "bundled" {
+			scriptUploadMu.Lock()
+			err := installBundledScriptPackage(req.Path)
+			scriptUploadMu.Unlock()
+			if err != nil {
+				logger("[SCRIPTS] could not copy included package %s: %v", req.Path, err)
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			logger("[SCRIPTS] copied included package %s", req.Path)
+			c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path})
 			return
 		}
 		if !configOperationsAllowed() {
@@ -235,7 +332,8 @@ func registerAllM3URoutes(r *gin.Engine) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("not an m3u file: %s", src.File)})
 				return
 			}
-			if !validScriptPathPart(src.Device) || !validScriptPathPart(src.Provider) {
+			// An empty provider is a script folder directly under scripts.
+			if !validScriptPathPart(src.Device) || (src.Provider != "" && !validScriptPathPart(src.Provider)) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device or provider name"})
 				return
 			}

@@ -43,8 +43,8 @@
                 {{if ne .streamerApp "scripts/all/all"}}<a class="btn btn-sm" href="/settings">Open Settings</a>{{end}}
             </div>
             <div class="btn-row" style="margin-top:0; margin-bottom:.8rem;">
-                <button class="btn btn-sm" id="check-scripts" type="button">Check for available scripts</button>
-                <span class="muted" id="script-check-status">This checks the list only. It does not download scripts.</span>
+                <button class="btn btn-sm" id="check-scripts" type="button">Check GitHub for scripts</button>
+                <span class="muted" id="script-check-status">Devices are grouped like Settings: local scripts on this server, scripts included with ah4c, and, after checking GitHub, scripts from sullrich/ah4c on GitHub.</span>
             </div>
 
             {{if not .sources}}
@@ -61,16 +61,12 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{$devices := .devices}}
                         {{range .sources}}
                         <tr>
                             <td><input type="checkbox" class="src-enable"></td>
                             <td class="mono src-file">{{.}}</td>
                             <td>
-                                <select class="src-device">
-                                    <option value="">Select device</option>
-                                    {{range $devices}}<option value="{{.}}">{{.}}</option>{{end}}
-                                </select>
+                                <select class="src-device"></select>
                             </td>
                             <td><select class="src-provider"><option value="">Select device first</option></select></td>
                         </tr>
@@ -93,37 +89,74 @@
         <div id="allm3u-status" class="m3u-action-status muted" role="status"></div>
     </div>
     <script>
-        const deviceProviders = {{.devicesJSON}};
+        // The same three places Settings offers scripts from, as
+        // scripts/device/provider paths.
+        const scriptSources = {{.devicesJSON}};
         const packageStatuses = {{.packageStatusesJSON}};
+        const sourceGroups = [
+            ['local', 'Local scripts on this server'],
+            ['bundled', 'Included with ah4c'],
+            ['github', 'From sullrich/ah4c on GitHub'],
+        ];
 
-        document.querySelectorAll('.src-device').forEach(function (sel) {
-            sel.addEventListener('change', function () { populateProviders(sel); });
-        });
+        // The device list is grouped like the streaming-app scripts in
+        // Settings; the provider list then offers that group's providers.
+        function populateDevices(deviceSelect) {
+            const current = deviceSelect.value;
+            deviceSelect.innerHTML = '';
+            deviceSelect.add(new Option('Select device', ''));
+            sourceGroups.forEach(function ([source, label]) {
+                const devices = [...new Set((scriptSources[source] || []).map(path => path.split('/')[1]))].sort();
+                if (!devices.length) return;
+                const group = document.createElement('optgroup');
+                group.label = label;
+                devices.forEach(device => group.appendChild(new Option(device, source + '::' + device)));
+                deviceSelect.appendChild(group);
+            });
+            if ([...deviceSelect.options].some(option => option.value === current)) deviceSelect.value = current;
+            populateProviders(deviceSelect);
+        }
+
+        const rootProvider = '.';
+
+        function scriptPath(device, provider) {
+            return 'scripts/' + device + (provider ? '/' + provider : '');
+        }
+
+        function decodeDevice(value) {
+            const match = /^(local|bundled|github)::(.+)$/.exec(value || '');
+            return match ? {source: match[1], device: match[2]} : {source: '', device: ''};
+        }
 
         function populateProviders(deviceSelect) {
             const providerSelect = deviceSelect.closest('tr').querySelector('.src-provider');
-            const providers = deviceProviders[deviceSelect.value] || [];
             const currentProvider = providerSelect.value;
+            const choice = decodeDevice(deviceSelect.value);
             providerSelect.innerHTML = '';
-            if (!deviceSelect.value) {
+            if (!choice.device) {
                 providerSelect.innerHTML = '<option value="">Select device first</option>';
                 return;
             }
+            const folder = 'scripts/' + choice.device;
+            const paths = [...new Set(scriptSources[choice.source] || [])];
+            // A script folder directly under scripts, such as scripts/mine,
+            // has no provider of its own; it is offered as the folder itself.
+            if (paths.includes(folder)) {
+                const incomplete = choice.source === 'local' && packageStatuses[folder] === 'incomplete';
+                providerSelect.add(new Option(folder + ' itself' + (incomplete ? ' — missing required files' : ''), rootProvider));
+            }
+            const providers = paths.filter(path => path.startsWith(folder + '/')).map(path => path.slice(folder.length + 1)).sort();
             providers.forEach(function (p) {
-                const opt = document.createElement('option');
-                opt.value = p;
-                const path = 'scripts/' + deviceSelect.value + '/' + p;
-                const status = packageStatuses[path] || 'remote';
-                const description = status === 'ready'
-                    ? ' — ready locally'
-                    : status === 'incomplete'
-                        ? ' — local folder is missing required files'
-                        : ' — available to download';
-                opt.textContent = p + description;
-                providerSelect.appendChild(opt);
+                const incomplete = choice.source === 'local' && packageStatuses[folder + '/' + p] === 'incomplete';
+                providerSelect.add(new Option(p + (incomplete ? ' — missing required files' : ''), p));
             });
-            if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
+            if ([...providerSelect.options].some(option => option.value === currentProvider)) providerSelect.value = currentProvider;
         }
+
+        document.querySelectorAll('.src-device').forEach(function (sel) {
+            populateDevices(sel);
+            sel.addEventListener('change', function () { populateProviders(sel); });
+        });
 
         function selectedSources() {
             const rows = document.querySelectorAll('#sourcesTable tbody tr');
@@ -131,12 +164,13 @@
             for (const row of rows) {
                 if (!row.querySelector('.src-enable').checked) continue;
                 const file = row.querySelector('.src-file').textContent.trim();
-                const device = row.querySelector('.src-device').value;
-                const provider = row.querySelector('.src-provider').value;
-                if (!device || !provider) {
+                const choice = decodeDevice(row.querySelector('.src-device').value);
+                const providerValue = row.querySelector('.src-provider').value;
+                if (!choice.device || !providerValue) {
                     throw new Error('Choose a device and TV service for ' + file + '.');
                 }
-                sources.push({ file: file, device: device, provider: provider });
+                const provider = providerValue === rootProvider ? '' : providerValue;
+                sources.push({ file: file, device: choice.device, provider: provider, source: choice.source });
             }
             if (sources.length === 0) {
                 throw new Error('Select at least one channel list to combine.');
@@ -148,13 +182,13 @@
             const button = document.getElementById('check-scripts');
             const status = document.getElementById('script-check-status');
             button.disabled = true;
-            status.textContent = 'Checking GitHub for the available script list…';
+            status.textContent = 'Checking sullrich/ah4c on GitHub for scripts…';
             try {
-                const response = await fetch('/api/config/streamers?remote=true');
+                const response = await fetch('/api/config/streamers?remote=true&details=true');
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload.error || 'GitHub could not be reached.');
-                mergeAvailableScripts(payload.streamers || payload);
-                status.textContent = 'Script list updated. No scripts were downloaded.';
+                mergeAvailableScripts(payload);
+                status.textContent = 'GitHub scripts are listed in their own group. No scripts were downloaded.';
             } catch (error) {
                 status.textContent = error.message + ' Installed scripts are still available.';
             } finally {
@@ -162,28 +196,14 @@
             }
         }
 
-        function mergeAvailableScripts(streamers) {
-            if (!Array.isArray(streamers)) return;
-            streamers.forEach(function (path) {
+        function mergeAvailableScripts(payload) {
+            const keep = paths => (Array.isArray(paths) ? paths : []).filter(function (path) {
                 const parts = String(path).split('/');
-                if (parts.length !== 3 || parts[0] !== 'scripts' || !parts[1] || !parts[2]) return;
-                if (!deviceProviders[parts[1]]) deviceProviders[parts[1]] = [];
-                if (!deviceProviders[parts[1]].includes(parts[2])) {
-                    deviceProviders[parts[1]].push(parts[2]);
-                    deviceProviders[parts[1]].sort();
-                }
+                return (parts.length === 2 || (parts.length === 3 && parts[2])) && parts[0] === 'scripts' && parts[1] && parts[1] !== 'all';
             });
-            const devices = Object.keys(deviceProviders).sort();
-            document.querySelectorAll('.src-device').forEach(function (deviceSelect) {
-                const currentDevice = deviceSelect.value;
-                devices.forEach(function (device) {
-                    if (![...deviceSelect.options].some(option => option.value === device)) {
-                        deviceSelect.add(new Option(device, device));
-                    }
-                });
-                deviceSelect.value = currentDevice;
-                populateProviders(deviceSelect);
-            });
+            if (Array.isArray(payload.remote)) scriptSources.github = keep(payload.remote);
+            if (Array.isArray(payload.bundled)) scriptSources.bundled = keep(payload.bundled);
+            document.querySelectorAll('.src-device').forEach(populateDevices);
         }
 
         async function downloadSelectedScripts() {
@@ -195,33 +215,39 @@
                 status.textContent = error.message;
                 return;
             }
-            const packages = [...new Set(sources.map(source => 'scripts/' + source.device + '/' + source.provider))];
-            const incompleteLocal = packages.filter(path => packageStatuses[path] === 'incomplete');
+            // A local choice is used as it is. An included one is copied from
+            // ah4c and a GitHub one downloaded; a folder already here only
+            // gains the files it is missing.
+            const seen = new Set();
+            const downloads = sources.map(source => ({path: scriptPath(source.device, source.provider), source: source.source}))
+                .filter(job => job.source !== 'local' && !seen.has(job.path) && seen.add(job.path));
+            const incompleteLocal = [...new Set(sources.filter(source => source.source === 'local').map(source => scriptPath(source.device, source.provider)))]
+                .filter(path => packageStatuses[path] === 'incomplete');
             if (incompleteLocal.length) {
                 status.className = 'm3u-action-status connection-state--error';
-                status.textContent = incompleteLocal.join(', ') + ' already exists locally but is missing one or more required files. The local folder was not replaced.';
+                status.textContent = incompleteLocal.join(', ') + ' already exists locally but is missing one or more required files. Choose it from Included with ah4c or GitHub to add them.';
                 return;
             }
-            const downloads = packages.filter(path => (packageStatuses[path] || 'remote') === 'remote');
             if (!downloads.length) {
                 status.className = 'm3u-action-status connection-state--ready';
-                status.textContent = 'The selected scripts are already ready locally. Nothing was downloaded.';
+                status.textContent = 'The selected scripts are local scripts on this server. Nothing was downloaded.';
                 return;
             }
             button.disabled = true;
             try {
                 for (let index = 0; index < downloads.length; index++) {
-                    const path = downloads[index];
+                    const path = downloads[index].path;
                     status.className = 'm3u-action-status muted';
-                    status.textContent = 'Downloading ' + path + ' (' + (index + 1) + ' of ' + downloads.length + ')…';
+                    status.textContent = (downloads[index].source === 'bundled' ? 'Copying ' : 'Downloading ') + path + ' (' + (index + 1) + ' of ' + downloads.length + ')…';
                     const response = await fetch('/allm3u/install-script', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
+                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(downloads[index])
                     });
                     const payload = await response.json();
                     if (!response.ok) throw new Error(payload.error || 'Could not download ' + path + '.');
                     packageStatuses[path] = 'ready';
+                    if (!scriptSources.local.includes(path)) scriptSources.local.push(path);
                 }
-                document.querySelectorAll('.src-device').forEach(populateProviders);
+                document.querySelectorAll('.src-device').forEach(populateDevices);
                 status.className = 'm3u-action-status connection-state--ready';
                 status.textContent = 'The selected scripts are ready. No other script packages were downloaded.';
             } catch (error) {
