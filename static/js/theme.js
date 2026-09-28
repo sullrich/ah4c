@@ -24,6 +24,11 @@
 			document.documentElement.removeAttribute('data-theme');
 		}
 	});
+	// /status and /logs shown as panes inside Activity & Logs, which loads them
+	// with ?embedded=1. Asked of the address rather than of window.top, which
+	// is someone else's whenever ah4c itself sits in a frame, as it does in
+	// Organizr: there every page is framed and none of them is a pane.
+	var isPane = new URLSearchParams(window.location.search).has('embedded');
 	// The build stamp, in the bar on every page.
 	//
 	// Fetched rather than templated because the twelve pages are static files
@@ -49,10 +54,9 @@
 			el.className = 'build-version';
 			el.textContent = d.version;
 			el.title = 'Build ' + d.version + ' (UTC)';
-			// Framed pages keep theirs in the bar: /status and /logs are shown
-			// as panes inside Activity & Logs, and a footer in each pane would
-			// stamp the version on the page three times over.
-			if (window.self !== window.top) {
+			// Panes keep theirs in the bar: a footer in each pane of Activity &
+			// Logs would stamp the version on the page three times over.
+			if (isPane) {
 				bar.appendChild(el);
 				return;
 			}
@@ -87,9 +91,32 @@
 			});
 		}).catch(function () {});
 	}
+	// The container's hostname stands in for "AH4C" in the tab title and
+	// follows the page's name in the bar, "Activity — ah4c2", the way the tab
+	// reads, so someone running ah4c, ah4c2 and ah4c3 can tell their pages
+	// apart. The home page's name is "AH4C" itself, so there the hostname
+	// replaces it rather than following it. The server sends no name when the
+	// hostname is Docker's default container ID, and the pages keep "AH4C".
+	// Only the exact word is replaced: "AH4C Capture" and the like are names of
+	// things in Channels DVR, not of this instance.
+	//
+	// Panes leave their bar alone: Activity & Logs' own bar already names it.
+	function showHostname() {
+		fetch('/api/hostname').then(function (r) {
+			return r.json();
+		}).then(function (d) {
+			if (!d || !d.name) return;
+			document.title = document.title.replace(/(^|— )AH4C$/, '$1' + d.name);
+			if (isPane) return;
+			var el = document.querySelector('.pagebar > strong, .topbar > strong');
+			if (!el) return;
+			el.textContent = el.textContent === 'AH4C' ? d.name : el.textContent + ' — ' + d.name;
+		}).catch(function () {});
+	}
 	function onReady() {
 		showVersion();
 		hideDeviceControl();
+		showHostname();
 	}
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', onReady);

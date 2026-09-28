@@ -82,6 +82,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	registerChannelsNameRoutes(r)
 	registerCaptureCardRoutes(r)
 	registerDevicePictureRoutes(r)
+	registerHostnameRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
