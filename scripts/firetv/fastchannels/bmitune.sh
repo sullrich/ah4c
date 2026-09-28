@@ -44,6 +44,21 @@ if [ -z "$SOURCE" ] || [ -z "$CHANNEL_ID" ] || [ "$SOURCE" == "$CHANNEL_ID" ]; t
 	exit 1
 fi
 
+# ah4c doesn't kill this script when the viewer disconnects — it runs
+# stopbmitune.sh and lets this one finish. Left alone, an unconfirmed tune kept
+# retrying for up to a minute after it was stopped, re-triggering a channel
+# nobody was watching (or onto a newer tune on the same device), and could
+# report [SUCCESS] off a later tune's playback. The tune file names the tune
+# that currently owns this tuner; stopbmitune.sh removes it and a newer tune
+# overwrites it, and either one ends this run.
+TUNE_FILE="/tmp/fastchannels-tune-${TUNERIP//[^A-Za-z0-9._-]/_}"
+TUNE_TOKEN="$STATION $$"
+echo "$TUNE_TOKEN" > "$TUNE_FILE"
+
+is_current_tune() {
+	[ "$(cat "$TUNE_FILE" 2>/dev/null)" == "$TUNE_TOKEN" ]
+}
+
 is_media_playing() {
 	# Do not accept a playing session from the Fire TV launcher, Alexa, or a
 	# previous app as proof that *our* tune succeeded.  Media3 publishes the
@@ -84,6 +99,11 @@ trigger
 echo -n "[WAITING] for stream to start..."
 while [ "$STATUS" == "notplaying" ]; do
 	sleep 1
+	if ! is_current_tune; then
+		echo ""
+		echo "[STOPPED] $STATION was stopped or replaced by a newer tune on $TUNERIP. Not retrying."
+		exit 0
+	fi
 	if is_media_playing; then
 		STATUS="playing"
 		echo ""
