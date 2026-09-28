@@ -87,9 +87,27 @@
 			});
 		}).catch(function () {});
 	}
+	// The container's hostname stands in for "AH4C" in the tab title and, on
+	// the pages whose bar spells it out, next to the logo, so someone running
+	// ah4c, ah4c2 and ah4c3 can tell their tabs apart. The server sends no name
+	// when the hostname is Docker's default container ID, and the pages keep
+	// "AH4C". Only the exact word is replaced: "AH4C Capture" and the like are
+	// names of things in Channels DVR, not of this instance.
+	function showHostname() {
+		fetch('/api/hostname').then(function (r) {
+			return r.json();
+		}).then(function (d) {
+			if (!d || !d.name) return;
+			document.title = document.title.replace(/(^|— )AH4C$/, '$1' + d.name);
+			document.querySelectorAll('.pagebar > strong, .topbar > strong').forEach(function (el) {
+				if (el.textContent === 'AH4C') el.textContent = d.name;
+			});
+		}).catch(function () {});
+	}
 	function onReady() {
 		showVersion();
 		hideDeviceControl();
+		showHostname();
 	}
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', onReady);
