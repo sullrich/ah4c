@@ -1,6 +1,6 @@
 #!/bin/bash
 # bmitune.sh for firetv/xfinity
-# 2025.03.13
+# 2026.09.30
 
 #Debug on if uncommented
 set -x
@@ -175,7 +175,7 @@ launchDelay() {
 
 #Tuning is based on deeplink values from xfinity.m3u.
 tuneChannel() {
-  $adbTarget shell am start -n $packageName/$packageAction https://www.xfinity.com/stream/live/$channelName/$channelID/$channelName
+  $adbTarget shell "am start -n $packageName/$packageAction 'https://www.xfinity.com/stream/live/$channelName/$channelID/$channelName'"
   echo -e "#!/bin/bash\n\nwhile true; do sleep $KEEP_WATCHING; $adbTarget shell input keyevent KEYCODE_DPAD_DOWN; done" > ./$streamerNoPort/keep_watching.sh && chmod +x ./$streamerNoPort/keep_watching.sh
   [[ $KEEP_WATCHING ]] && nohup ./$streamerNoPort/keep_watching.sh &
 }
