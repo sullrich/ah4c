@@ -33,6 +33,36 @@ type allM3URequest struct {
 type scriptInstallRequest struct {
 	Path   string `json:"path"`
 	Source string `json:"source"`
+	// Replace writes the new files over a folder that is already here (keeping
+	// a backup) instead of only adding the files it is missing.
+	Replace bool `json:"replace"`
+}
+
+// relativeScriptPath shows a backup folder as scripts/..., the way the rest of
+// the API names script folders; "" stays "".
+func relativeScriptPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	root, err := localScriptsRoot()
+	if err != nil {
+		return path
+	}
+	if rel, err := filepath.Rel(filepath.Dir(root), path); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return path
+}
+
+func replacedNote(replace bool, backup string) string {
+	switch {
+	case !replace:
+		return ""
+	case backup == "":
+		return " (already up to date)"
+	default:
+		return " (replaced; previous files in " + relativeScriptPath(backup) + ")"
+	}
 }
 
 // allM3UScriptSources lists the device/provider folders the page offers, the
@@ -79,21 +109,25 @@ func localTopLevelScriptFolders() []string {
 }
 
 // installBundledScriptPackage puts a folder included with ah4c into ./scripts.
-// Like every other install, a folder already there only gains missing files.
-func installBundledScriptPackage(selection string) error {
+// Like every other install, a folder already there only gains missing files,
+// unless replace was asked for (see replaceScriptFiles, which returns the backup).
+func installBundledScriptPackage(selection string, replace bool) (string, error) {
 	source := filepath.Join(bundledScriptsRoot, strings.TrimPrefix(selection, "scripts/"))
 	if !scriptPackageComplete(source) {
-		return fmt.Errorf("%s is not included with this version of ah4c", selection)
+		return "", fmt.Errorf("%s is not included with this version of ah4c", selection)
 	}
 	root, err := localScriptsRoot()
 	if err != nil {
-		return fmt.Errorf("could not locate the local scripts folder: %w", err)
+		return "", fmt.Errorf("could not locate the local scripts folder: %w", err)
 	}
 	target := filepath.Join(root, strings.TrimPrefix(selection, "scripts/"))
 	if err := os.MkdirAll(target, 0755); err != nil {
-		return fmt.Errorf("could not prepare %s: %w", selection, err)
+		return "", fmt.Errorf("could not prepare %s: %w", selection, err)
 	}
-	return addMissingScriptFiles(source, target)
+	if replace {
+		return replaceScriptFiles(source, target)
+	}
+	return "", addMissingScriptFiles(source, target)
 }
 
 // scriptDeviceProviders scans scripts/<device>/<provider> and returns the
@@ -269,17 +303,22 @@ func registerAllM3URoutes(r *gin.Engine) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "script package must use scripts/device or scripts/device/app"})
 			return
 		}
+		// Replacing scripts a tune may be running waits, like a download does.
+		if req.Replace && !configOperationsAllowed() {
+			c.JSON(http.StatusConflict, gin.H{"error": "script updates wait until no tune is starting or active"})
+			return
+		}
 		if req.Source == "bundled" {
 			scriptUploadMu.Lock()
-			err := installBundledScriptPackage(req.Path)
+			backup, err := installBundledScriptPackage(req.Path, req.Replace)
 			scriptUploadMu.Unlock()
 			if err != nil {
 				logger("[SCRIPTS] could not copy included package %s: %v", req.Path, err)
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "backup": relativeScriptPath(backup)})
 				return
 			}
-			logger("[SCRIPTS] copied included package %s", req.Path)
-			c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path})
+			logger("[SCRIPTS] copied included package %s%s", req.Path, replacedNote(req.Replace, backup))
+			c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path, "backup": relativeScriptPath(backup)})
 			return
 		}
 		if !configOperationsAllowed() {
@@ -292,17 +331,18 @@ func registerAllM3URoutes(r *gin.Engine) {
 		case <-c.Request.Context().Done():
 			return
 		}
-		if err := installScriptPackage(c.Request.Context(), req.Path); err != nil {
+		backup, err := installScriptPackage(c.Request.Context(), req.Path, req.Replace)
+		if err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, errScriptInstallTune) {
 				status = http.StatusConflict
 			}
 			logger("[SCRIPTS] could not install selected package %s: %v", req.Path, err)
-			c.JSON(status, gin.H{"error": err.Error()})
+			c.JSON(status, gin.H{"error": err.Error(), "backup": relativeScriptPath(backup)})
 			return
 		}
-		logger("[SCRIPTS] downloaded selected package %s", req.Path)
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path})
+		logger("[SCRIPTS] downloaded selected package %s%s", req.Path, replacedNote(req.Replace, backup))
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "path": req.Path, "backup": relativeScriptPath(backup)})
 	})
 
 	r.POST("/allm3u/generate", func(c *gin.Context) {

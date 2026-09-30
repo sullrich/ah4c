@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,20 +36,22 @@ type githubContentsEntry struct {
 // installScriptPackage downloads one explicitly selected scripts/device or
 // scripts/device/app folder. It stages every file beside the destination and swaps the complete
 // directory into place, so a network failure cannot damage a working package.
-func installScriptPackage(ctx context.Context, selection string) error {
+// With replace, a folder already here gets the downloaded files over its own
+// (see replaceScriptFiles); the returned path is the backup of what they replaced.
+func installScriptPackage(ctx context.Context, selection string, replace bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	return installScriptPackageFrom(ctx, selection, "scripts", githubContentsBaseURL, http.DefaultClient, configOperationsAllowed)
+	return installScriptPackageFrom(ctx, selection, replace, "scripts", githubContentsBaseURL, http.DefaultClient, configOperationsAllowed)
 }
 
-func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) error {
+func installScriptPackageFrom(ctx context.Context, selection string, replace bool, scriptsRoot, contentsBaseURL string, client *http.Client, allowed func() bool) (string, error) {
 	selection = canonicalStreamerSelection(selection)
 	if !validStreamerSelection(selection) {
-		return fmt.Errorf("script folder must use scripts/device or scripts/device/app")
+		return "", fmt.Errorf("script folder must use scripts/device or scripts/device/app")
 	}
 	parts := strings.Split(selection, "/")
 	if !allowed() {
-		return errScriptInstallTune
+		return "", errScriptInstallTune
 	}
 	operationCtx, cancelOperation := context.WithCancel(ctx)
 	stopWatcher := make(chan struct{})
@@ -80,65 +83,65 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 	contentsURL := strings.TrimRight(contentsBaseURL, "/") + "/" + strings.Join(escaped, "/") + "?ref=main"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentsURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "ah4c-script-installer")
 	resp, err := client.Do(req)
 	if err != nil {
 		if !allowed() {
-			return errScriptInstallTune
+			return "", errScriptInstallTune
 		}
-		return fmt.Errorf("could not reach GitHub: %w", err)
+		return "", fmt.Errorf("could not reach GitHub: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub returned %s for %s", resp.Status, selection)
+		return "", fmt.Errorf("GitHub returned %s for %s", resp.Status, selection)
 	}
 	contents, err := readScriptBody(resp.Body, 1<<20, allowed)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var entries []githubContentsEntry
 	if err := json.Unmarshal(contents, &entries); err != nil {
-		return fmt.Errorf("could not read the script folder list: %w", err)
+		return "", fmt.Errorf("could not read the script folder list: %w", err)
 	}
 	if len(entries) == 0 || len(entries) > maxPackageFiles {
-		return fmt.Errorf("the selected script folder has an unexpected number of files")
+		return "", fmt.Errorf("the selected script folder has an unexpected number of files")
 	}
 
 	root, err := filepath.Abs(scriptsRoot)
 	if err != nil {
-		return fmt.Errorf("could not locate the local scripts folder: %w", err)
+		return "", fmt.Errorf("could not locate the local scripts folder: %w", err)
 	}
 	if err := os.MkdirAll(root, 0755); err != nil {
-		return fmt.Errorf("could not prepare the local scripts folder: %w", err)
+		return "", fmt.Errorf("could not prepare the local scripts folder: %w", err)
 	}
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
-		return fmt.Errorf("could not verify the local scripts folder: %w", err)
+		return "", fmt.Errorf("could not verify the local scripts folder: %w", err)
 	}
 	parent := root
 	packageName := parts[len(parts)-1]
 	if len(parts) == 3 {
 		parent = filepath.Join(root, parts[1])
 		if info, statErr := os.Lstat(parent); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("the selected device folder cannot be a symbolic link")
+			return "", fmt.Errorf("the selected device folder cannot be a symbolic link")
 		} else if statErr != nil && !os.IsNotExist(statErr) {
-			return fmt.Errorf("could not inspect the selected device folder: %w", statErr)
+			return "", fmt.Errorf("could not inspect the selected device folder: %w", statErr)
 		}
 		if err := os.MkdirAll(parent, 0755); err != nil {
-			return fmt.Errorf("could not prepare the local scripts folder: %w", err)
+			return "", fmt.Errorf("could not prepare the local scripts folder: %w", err)
 		}
 		parent, err = filepath.EvalSymlinks(parent)
 		if err != nil || filepath.Dir(parent) != root {
-			return fmt.Errorf("could not verify the selected device folder")
+			return "", fmt.Errorf("could not verify the selected device folder")
 		}
 	}
 	target := filepath.Join(parent, packageName)
 	stage, err := os.MkdirTemp(parent, "."+packageName+".update.")
 	if err != nil {
-		return fmt.Errorf("could not prepare the script update: %w", err)
+		return "", fmt.Errorf("could not prepare the script update: %w", err)
 	}
 	defer os.RemoveAll(stage)
 
@@ -149,47 +152,163 @@ func installScriptPackageFrom(ctx context.Context, selection, scriptsRoot, conte
 			continue
 		}
 		if !allowed() {
-			return errScriptInstallTune
+			return "", errScriptInstallTune
 		}
 		data, err := downloadScriptFile(ctx, client, entry.DownloadURL, allowed)
 		if err != nil {
-			return fmt.Errorf("could not download %s: %w", entry.Name, err)
+			return "", fmt.Errorf("could not download %s: %w", entry.Name, err)
 		}
 		total += int64(len(data))
 		if total > maxPackageBytes {
-			return fmt.Errorf("the selected script folder is larger than the safe download limit")
+			return "", fmt.Errorf("the selected script folder is larger than the safe download limit")
 		}
 		mode := os.FileMode(0644)
 		if strings.HasSuffix(entry.Name, ".sh") {
 			mode = 0755
 		}
 		if err := os.WriteFile(filepath.Join(stage, entry.Name), data, mode); err != nil {
-			return fmt.Errorf("could not stage %s: %w", entry.Name, err)
+			return "", fmt.Errorf("could not stage %s: %w", entry.Name, err)
 		}
 		files++
 	}
 	if files == 0 || !scriptPackageComplete(stage) {
-		return fmt.Errorf("%s does not contain bmitune.sh, prebmitune.sh, and stopbmitune.sh", selection)
+		return "", fmt.Errorf("%s does not contain bmitune.sh, prebmitune.sh, and stopbmitune.sh", selection)
 	}
 	if !allowed() {
-		return errScriptInstallTune
+		return "", errScriptInstallTune
 	}
 
 	// A folder that is already here belongs to the user and may hold their own
 	// edits and helpers, so it is never swapped out or emptied: it only gains
-	// the files it is missing.
+	// the files it is missing, unless replace was asked for explicitly.
 	if info, err := os.Lstat(target); err == nil {
 		if !info.IsDir() {
-			return fmt.Errorf("%s exists and is not a folder", selection)
+			return "", fmt.Errorf("%s exists and is not a folder", selection)
 		}
-		return addMissingScriptFiles(stage, target)
+		if replace {
+			if !allowed() {
+				return "", errScriptInstallTune
+			}
+			return replaceScriptFiles(stage, target)
+		}
+		return "", addMissingScriptFiles(stage, target)
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("could not inspect the current script folder: %w", err)
+		return "", fmt.Errorf("could not inspect the current script folder: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
-		return fmt.Errorf("could not activate the downloaded script folder: %w", err)
+		return "", fmt.Errorf("could not activate the downloaded script folder: %w", err)
 	}
-	return nil
+	return "", nil
+}
+
+// replaceScriptFiles writes each file from source over the one of the same name
+// in target, the on-request counterpart of UPDATE_SCRIPTS=true: files only the
+// user has are left alone and nothing is removed. Every file it overwrites is
+// first copied into a hidden .<folder>.backup-<time> folder beside target, which
+// the script lists skip, and that folder's path is returned ("" when nothing
+// differed). Everything is checked, backed up and staged before the first file
+// is swapped in, so a file that cannot be replaced leaves the folder as it was
+// rather than half old and half new, and each swap is a rename, so a tune never
+// reads a half-written script.
+func replaceScriptFiles(source, target string) (string, error) {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return "", fmt.Errorf("could not read the new scripts: %w", err)
+	}
+	type change struct {
+		name     string
+		data     []byte
+		mode     os.FileMode
+		previous []byte
+		prevMode os.FileMode
+		existed  bool
+	}
+	var changes []change
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !validScriptFileName(entry.Name()) {
+			continue
+		}
+		next := change{name: entry.Name(), mode: 0644}
+		if strings.HasSuffix(next.name, ".sh") {
+			next.mode = 0755
+		}
+		if next.data, err = os.ReadFile(filepath.Join(source, next.name)); err != nil {
+			return "", fmt.Errorf("could not read %s: %w", next.name, err)
+		}
+		destination := filepath.Join(target, next.name)
+		info, err := os.Lstat(destination)
+		switch {
+		case err == nil:
+			if !info.Mode().IsRegular() {
+				return "", fmt.Errorf("%s is not a regular file, so nothing was replaced", next.name)
+			}
+			if next.previous, err = os.ReadFile(destination); err != nil {
+				return "", fmt.Errorf("could not read the current %s: %w", next.name, err)
+			}
+			if bytes.Equal(next.previous, next.data) {
+				continue
+			}
+			next.existed, next.prevMode = true, info.Mode().Perm()
+		case !os.IsNotExist(err):
+			return "", fmt.Errorf("could not inspect the current %s: %w", next.name, err)
+		}
+		changes = append(changes, next)
+	}
+
+	backup := ""
+	for _, c := range changes {
+		if !c.existed {
+			continue
+		}
+		if backup == "" {
+			stamp := time.Now().Format("20060102-150405")
+			backup, err = os.MkdirTemp(filepath.Dir(target), "."+filepath.Base(target)+".backup-"+stamp+"-")
+			if err != nil {
+				return "", fmt.Errorf("could not create a backup folder: %w", err)
+			}
+			// MkdirTemp makes it owner-only; match the script folders so the
+			// backup can be opened from the host like the scripts beside it.
+			if err := os.Chmod(backup, 0755); err != nil {
+				return backup, fmt.Errorf("could not prepare the backup folder: %w", err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(backup, c.name), c.previous, c.prevMode); err != nil {
+			return backup, fmt.Errorf("could not back up %s, so nothing was replaced: %w", c.name, err)
+		}
+	}
+
+	staged := make([]string, 0, len(changes))
+	removeStaged := func() {
+		for _, path := range staged {
+			os.Remove(path)
+		}
+	}
+	for _, c := range changes {
+		temporary, err := os.CreateTemp(target, "."+c.name+".new-")
+		if err != nil {
+			removeStaged()
+			return backup, fmt.Errorf("could not stage %s, so nothing was replaced: %w", c.name, err)
+		}
+		staged = append(staged, temporary.Name())
+		_, writeErr := temporary.Write(c.data)
+		if closeErr := temporary.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr == nil {
+			writeErr = os.Chmod(temporary.Name(), c.mode)
+		}
+		if writeErr != nil {
+			removeStaged()
+			return backup, fmt.Errorf("could not stage %s, so nothing was replaced: %w", c.name, writeErr)
+		}
+	}
+	for i, c := range changes {
+		if err := os.Rename(staged[i], filepath.Join(target, c.name)); err != nil {
+			removeStaged()
+			return backup, fmt.Errorf("could not replace %s; the files before it were replaced and the originals are in the backup: %w", c.name, err)
+		}
+	}
+	return backup, nil
 }
 
 // addMissingScriptFiles copies each staged file whose name is not yet taken in
