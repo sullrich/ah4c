@@ -411,6 +411,77 @@ changes.
 Each hold is logged under `[HOLD]`: when it began, what it is showing, and when the encoder
 took over along with how much filler was sent.
 
+### Power Cycle
+
+A streaming stick that has locked up hard stops answering adb, and then **Reboot** can't reach
+it. **Power Cycle**, next to Reboot in each tuner's **View & Control** window on the Activity
+page, cuts the stick's power and restores it instead. ah4c doesn't know how your stick is
+powered, so you supply the command: set it under **POWERCYCLE** on the tuner's card in
+Settings, or as `POWERCYCLE1` … `POWERCYCLE9` in the container environment. A command saved
+in Settings works right away, without a restart.
+
+The command runs through `sh`, so it can chain steps with `&&` or `;`, and it has 60 seconds
+to finish. ah4c only runs it when someone presses the button, never on its own. If the tuner
+is streaming, the confirmation warns that the stream will end.
+
+Use `curl -fsS` in these commands. Without `-f`, curl treats an HTTP error such as a 401 or
+404 as success, and Activity reports a power cycle that never happened. With it, the error
+shows up in Activity and in the log.
+
+**USB hub with per-port power switching:** [uhubctl-api](https://github.com/bnhf/uhubctl-api)
+is a small container that switches the ports of a
+[uhubctl-compatible USB hub](https://github.com/mvp/uhubctl) over HTTP. Plug each stick's
+power into a hub port, give the port a name in uhubctl-api's `PORT_NAMES`, and power cycle it
+by name. `delay` is how many seconds the port stays off:
+
+```
+curl -fsS -X POST "http://docker6:7610/api/v1/ports/firestick1/cycle?delay=5"
+```
+
+Or address the port by hub location and port number:
+
+```
+curl -fsS -X POST "http://docker6:7610/api/v1/hubs/1-1.2/ports/1/cycle?delay=5"
+```
+
+uhubctl-api answers once the port is back on. Many hubs only look like they switch power;
+check that yours is on uhubctl's compatibility list, and that each port can supply enough
+current for the stick.
+
+**Shelly smart plug:** Shelly plugs take a "flip-back" timer. You turn the plug off with the
+timer set, and the plug turns itself back on when it runs out. The command returns at once,
+and the plug comes back on even if ah4c restarts in the meantime. For Plus, Pro and newer
+(Gen2+) plugs, `toggle_after` is the number of seconds to stay off:
+
+```
+curl -fsS "http://shelly-plug1/rpc/Switch.Set?id=0&on=false&toggle_after=10"
+```
+
+For original (Gen1) plugs such as the Shelly Plug and Plug S, the timer is called `timer`:
+
+```
+curl -fsS "http://shelly-plug1/relay/0?turn=off&timer=10"
+```
+
+If the plug has a password set, add it to the command. Gen2+ plugs always use the user name
+`admin`, and need `--anyauth` because they use digest authentication:
+
+```
+curl -fsS --anyauth -u admin:yourpassword "http://shelly-plug1/rpc/Switch.Set?id=0&on=false&toggle_after=10"
+curl -fsS -u youruser:yourpassword "http://shelly-plug1/relay/0?turn=off&timer=10"
+```
+
+**Anything else:** A plug or switch without a flip-back timer can be turned off and on in two
+steps. Joining them with `&&` means the plug won't be switched back on if turning it off
+failed:
+
+```
+curl -fsS "http://plug1/off" && sleep 10 && curl -fsS "http://plug1/on"
+```
+
+Ten seconds off is plenty for most sticks. Keep the whole command well under the 60-second
+limit.
+
 ### Built-in ws-scrcpy for interacting directly with the streaming device:
 
 <img width="1666" height="836" alt="screenshot-docker6-2026-08-23-11-17-28" src="https://github.com/user-attachments/assets/f65ee365-7d42-4db0-aa91-79a254eaefb9" />
@@ -440,7 +511,7 @@ took over along with how much filler was sent.
 
 ```yaml
 services:
-  # 2026.09.16
+  # 2026.10.19
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
@@ -454,39 +525,48 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
-      - AH4C_COMPOSE=2026.09.16 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_COMPOSE=2026.10.19 # Compose file date stamp - do not change. The startup log flags it when out of date.
       # ── Proxy identity ──────────────────────────────────────────────────────
       - IPADDRESS=${IPADDRESS} # Hostname or IP address of this ah4c extension to be used in M3U file (also add port number if not in M3U)
       # ── Tuners ──────────────────────────────────────────────────────────────
-      # One trio per tuner: TUNERn_IP is the box to tune; video comes from CMDn if set, otherwise ENCODERn_URL.
-      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP, ENCODERn_URL and CMDn trio below for each beyond 9
+      # One set per tuner: TUNERn_IP is the box to tune; video comes from CMDn if set, otherwise ENCODERn_URL. Optional POWERCYCLEn cuts and restores the box's power for Power Cycle in Activity.
+      - NUMBER_TUNERS=${NUMBER_TUNERS} # Number of tuners you'd like defined - add a matching TUNERn_IP, ENCODERn_URL, CMDn and POWERCYCLEn set below for each beyond 9
       - TUNER1_IP=${TUNER1_IP} # Streaming device #1 with adb port in the form hostname:port or ip:port
       - ENCODER1_URL=${ENCODER1_URL} # Tuner #1 source URL (http://hostname/stream). Streamed directly when CMD1 is blank; otherwise referenced by CMD1 as ${ENCODER1_URL}.
       - CMD1=${CMD1} # Optional tuner #1 command; ah4c streams its stdout (end it with "-f mpegts -") instead of fetching ENCODER1_URL. No shell.
+      - POWERCYCLE1=${POWERCYCLE1} # Optional tuner #1 power cycle command, run through sh. For example a Shelly plug: curl -fsS "http://shelly-plug1/rpc/Switch.Set?id=0&on=false&toggle_after=10". See Power Cycle in the README.
       - TUNER2_IP=${TUNER2_IP} # Streaming device #2 with adb port in the form hostname:port or ip:port
       - ENCODER2_URL=${ENCODER2_URL} # Tuner #2 source URL. Streamed directly when CMD2 is blank; otherwise referenced by CMD2 as ${ENCODER2_URL}.
       - CMD2=${CMD2} # Optional tuner #2 command; ah4c streams its stdout instead of fetching ENCODER2_URL. See CMD1.
+      - POWERCYCLE2=${POWERCYCLE2} # Optional tuner #2 power cycle command. See POWERCYCLE1.
       - TUNER3_IP=${TUNER3_IP} # Streaming device #3 with adb port in the form hostname:port or ip:port
       - ENCODER3_URL=${ENCODER3_URL} # Tuner #3 source URL. Streamed directly when CMD3 is blank; otherwise referenced by CMD3 as ${ENCODER3_URL}.
       - CMD3=${CMD3} # Optional tuner #3 command; ah4c streams its stdout instead of fetching ENCODER3_URL. See CMD1.
+      - POWERCYCLE3=${POWERCYCLE3} # Optional tuner #3 power cycle command. See POWERCYCLE1.
       - TUNER4_IP=${TUNER4_IP} # Streaming device #4 with adb port in the form hostname:port or ip:port
       - ENCODER4_URL=${ENCODER4_URL} # Tuner #4 source URL. Streamed directly when CMD4 is blank; otherwise referenced by CMD4 as ${ENCODER4_URL}.
       - CMD4=${CMD4} # Optional tuner #4 command; ah4c streams its stdout instead of fetching ENCODER4_URL. See CMD1.
+      - POWERCYCLE4=${POWERCYCLE4} # Optional tuner #4 power cycle command. See POWERCYCLE1.
       - TUNER5_IP=${TUNER5_IP} # Streaming device #5 with adb port in the form hostname:port or ip:port
       - ENCODER5_URL=${ENCODER5_URL} # Tuner #5 source URL. Streamed directly when CMD5 is blank; otherwise referenced by CMD5 as ${ENCODER5_URL}.
       - CMD5=${CMD5} # Optional tuner #5 command; ah4c streams its stdout instead of fetching ENCODER5_URL. See CMD1.
+      - POWERCYCLE5=${POWERCYCLE5} # Optional tuner #5 power cycle command. See POWERCYCLE1.
       - TUNER6_IP=${TUNER6_IP} # Streaming device #6 with adb port in the form hostname:port or ip:port
       - ENCODER6_URL=${ENCODER6_URL} # Tuner #6 source URL. Streamed directly when CMD6 is blank; otherwise referenced by CMD6 as ${ENCODER6_URL}.
       - CMD6=${CMD6} # Optional tuner #6 command; ah4c streams its stdout instead of fetching ENCODER6_URL. See CMD1.
+      - POWERCYCLE6=${POWERCYCLE6} # Optional tuner #6 power cycle command. See POWERCYCLE1.
       - TUNER7_IP=${TUNER7_IP} # Streaming device #7 with adb port in the form hostname:port or ip:port
       - ENCODER7_URL=${ENCODER7_URL} # Tuner #7 source URL. Streamed directly when CMD7 is blank; otherwise referenced by CMD7 as ${ENCODER7_URL}.
       - CMD7=${CMD7} # Optional tuner #7 command; ah4c streams its stdout instead of fetching ENCODER7_URL. See CMD1.
+      - POWERCYCLE7=${POWERCYCLE7} # Optional tuner #7 power cycle command. See POWERCYCLE1.
       - TUNER8_IP=${TUNER8_IP} # Streaming device #8 with adb port in the form hostname:port or ip:port
       - ENCODER8_URL=${ENCODER8_URL} # Tuner #8 source URL. Streamed directly when CMD8 is blank; otherwise referenced by CMD8 as ${ENCODER8_URL}.
       - CMD8=${CMD8} # Optional tuner #8 command; ah4c streams its stdout instead of fetching ENCODER8_URL. See CMD1.
+      - POWERCYCLE8=${POWERCYCLE8} # Optional tuner #8 power cycle command. See POWERCYCLE1.
       - TUNER9_IP=${TUNER9_IP} # Streaming device #9 with adb port in the form hostname:port or ip:port
       - ENCODER9_URL=${ENCODER9_URL} # Tuner #9 source URL. Streamed directly when CMD9 is blank; otherwise referenced by CMD9 as ${ENCODER9_URL}.
       - CMD9=${CMD9} # Optional tuner #9 command; ah4c streams its stdout instead of fetching ENCODER9_URL. See CMD1.
+      - POWERCYCLE9=${POWERCYCLE9} # Optional tuner #9 power cycle command. See POWERCYCLE1.
       # ── Streaming app and DVR ───────────────────────────────────────────────
       - STREAMER_APP=${STREAMER_APP} # Streaming device name and streaming app you're using in the form scripts/streamer/app (use lowercase with slashes between as shown)
       - PYATV=${PYATV:-false} # Set to TRUE to run docker-start-pyatv.sh at container start for Apple TV tuners via pyatv, instead of the default docker-start.sh used for adb-based tuners. Case-insensitive; anything else runs the default.
@@ -557,30 +637,39 @@ NUMBER_TUNERS=5
 TUNER1_IP=firestick-desk1:5555
 ENCODER1_URL=http://linkpi-encoder2:8090/stream0
 CMD1=
+POWERCYCLE1=
 TUNER2_IP=firestick-desk2:5555
 ENCODER2_URL=http://linkpi-encoder2:8090/stream1
 CMD2=
+POWERCYCLE2=
 TUNER3_IP=firestick-desk3:5555
 ENCODER3_URL=http://linkpi-encoder2:8090/stream2
 CMD3=
+POWERCYCLE3=
 TUNER4_IP=firestick-desk4:5555
 ENCODER4_URL=http://linkpi-encoder2:8090/stream3
 CMD4=
+POWERCYCLE4=
 TUNER5_IP=firestick-desk5:5555
 ENCODER5_URL=http://linkpi-encoder2:8090/stream4
 CMD5=
+POWERCYCLE5=
 TUNER6_IP=
 ENCODER6_URL=
 CMD6=
+POWERCYCLE6=
 TUNER7_IP=
 ENCODER7_URL=
 CMD7=
+POWERCYCLE7=
 TUNER8_IP=
 ENCODER8_URL=
 CMD8=
+POWERCYCLE8=
 TUNER9_IP=
 ENCODER9_URL=
 CMD9=
+POWERCYCLE9=
 STREAMER_APP=scripts/firetv/dtvstreamdeeplinks
 PYATV=false
 CHANNELSIP=media-server10

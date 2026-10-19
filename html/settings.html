@@ -821,7 +821,7 @@ function renderTuners() {
     refreshCaptureTuners();
 }
 
-function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked:{}}, index) {
+function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', powerCycle:'', locked:{}}, index) {
     const card = document.createElement('div');
     card.className = 'tuner-card';
     const lock = tuner.locked || {};
@@ -848,7 +848,8 @@ function tunerCard(tuner = {tunerIP:'', encoderURL:'', cmd:'', teecmd:'', locked
         <div class="setting-description tuner-capture-only capture-remote-only capture-remote-help"><p><strong>For advanced users.</strong> The card has to be set up in Channels DVR already, on the computer it's plugged into. ah4c doesn't change anything in Channels DVR for this card.</p><p>Paste the full stream URL of the Channels DVR channel that records the card, such as <code>http://192.168.1.10:8089/devices/M3U-Capture/channels/1000/stream.mpg?format=ts&amp;codec=copy</code>.</p></div>
         <div class="field-validation tuner-capture-only" data-capture-error></div>
         <div class="field"><label>CMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="cmd" value="${escapeHTML(tuner.cmd)}" ${lock.cmd ? 'disabled' : ''}><div class="setting-description">Runs a program that supplies the tuner's video instead of opening the encoder URL. The program must send MPEG-TS video to standard output. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="cmd"></div></div>
-        <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>`;
+        <div class="field"><label>TEECMD <span class="muted">(advanced)</span></label><input type="text" data-tuner="teecmd" value="${escapeHTML(tuner.teecmd)}" ${lock.teecmd ? 'disabled' : ''}><div class="setting-description">Sends a second copy of the live stream into another program for monitoring or processing. It does not replace the main video source. Most users should leave this blank.</div><div class="field-validation" data-tuner-error="teecmd"></div></div>
+        <div class="field"><label>POWERCYCLE <span class="muted">(advanced)</span></label><input type="text" data-tuner="powerCycle" value="${escapeHTML(tuner.powerCycle || '')}" placeholder="curl -fsS &quot;http://shelly-plug1/rpc/Switch.Set?id=0&amp;on=false&amp;toggle_after=10&quot;" spellcheck="false" ${lock.powerCycle ? 'disabled' : ''}><div class="setting-description">A shell command that turns this tuner's streaming device off and back on, such as a curl to a smart plug it is plugged into. It runs when you choose <strong>Power Cycle</strong> on the Activity page, for a device that no longer responds to Reboot. Takes effect when saved, without a restart.</div><div class="field-validation" data-tuner-error="powerCycle"></div></div>`;
     card.querySelector('.delete-tuner').addEventListener('click', () => {
         if (!canDeleteTunerCard(card)) return;
         card.remove();
@@ -1365,7 +1366,7 @@ function validateExtraRow(row) {
     let message = '';
     if (!key && value) message = 'A variable name is required when a value is entered.';
     else if (key && !/^[A-Z][A-Z0-9_]*$/.test(key)) message = 'Names use uppercase letters, numbers and underscores, and must start with a letter.';
-    else if (key && (state.catalog.some(spec => spec.key === key) || /^(NUMBER_TUNERS|TUNER\d+_IP|ENCODER\d+_URL|CMD\d+|TEECMD\d+)$/.test(key))) message = 'This name is already managed by another field.';
+    else if (key && (state.catalog.some(spec => spec.key === key) || /^(NUMBER_TUNERS|TUNER\d+_IP|ENCODER\d+_URL|CMD\d+|TEECMD\d+|POWERCYCLE\d+)$/.test(key))) message = 'This name is already managed by another field.';
     else if (duplicate) message = 'This variable name is already used by another row.';
     else if (/\r|\n/.test(value)) message = 'Values must use one line.';
     row.classList.toggle('field-invalid', Boolean(message));

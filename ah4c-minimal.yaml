@@ -1,5 +1,5 @@
 services:
-  # 2026.09.16
+  # 2026.10.19
   # GitHub home for this project with setup instructions: https://github.com/sullrich/ah4c
   # Docker Hub home for this project: https://hub.docker.com/repository/docker/bnhf/ah4c
   ah4c: # This docker-compose typically requires no editing. Use the Environment variables section of Portainer to set your values.
@@ -13,7 +13,7 @@ services:
     ports:
       - ${HOST_PORT:-7654}:7654 # Port used by this ah4c proxy
     environment:
-      - AH4C_COMPOSE=2026.09.16 # Compose file date stamp - do not change. The startup log flags it when out of date.
+      - AH4C_COMPOSE=2026.10.19 # Compose file date stamp - do not change. The startup log flags it when out of date.
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES} # For the CUDA caption engine and/or an NVENC CMDn. Set to all alongside DOCKER_RUNTIME=nvidia to expose an NVIDIA GPU. Empty means no GPU and is the default.
       - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} # Set to compute,utility for the CUDA caption engine. A CMDn using h264_nvenc/hevc_nvenc also needs video - use compute,utility,video (or all).
     volumes:
