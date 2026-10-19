@@ -1,4 +1,4 @@
-#docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t bnhf/ah4c:latest . --push --no-cache
+#docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t bnhf/ah4c:latest -t bnhf/ah4c:2026.10.19 . --push --no-cache
 
 # First Stage: Build ws-scrcpy and ah4c
 FROM golang:trixie AS builder
