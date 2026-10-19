@@ -119,8 +119,10 @@
                     <button class="btn btn-sm" onclick="sendKey('wake')">Wake</button>
                     <button class="btn btn-sm" onclick="sendKey('sleep')">Sleep</button>
                     <button class="btn btn-danger btn-sm" onclick="if(confirm('Reboot this device?'))sendKey('reboot')">Reboot</button>
+                    <button class="btn btn-danger btn-sm" id="powerCycleButton" onclick="powerCycleClicked()">Power Cycle</button>
                 </div>
             </div>
+            <p class="modal-hint hidden" id="powerCycleNote" aria-live="polite"></p>
         </div>
     </div>
 
@@ -219,6 +221,7 @@
             $('#modalTunerNumber').text(index);
             $('#modalTitle').text('Tuner ' + index + ' — ' + (tunerIps[index] || ''));
             setModalHint();
+            setPowerCycleNote('');
             $('#tunerModal').addClass('open');
             startPreviewClicked();
         }
@@ -390,6 +393,50 @@
             $.post('/api/tuner/' + modalIndex + '/control/' + action).fail(function() {
                 $('#modalHint').text('Control failed — this device may not be reachable over adb.');
                 setTimeout(setModalHint, 4000);
+            });
+        }
+
+        function setPowerCycleNote(html) {
+            $('#powerCycleNote').html(html).toggleClass('hidden', !html);
+        }
+
+        // Power Cycle runs the tuner's POWERCYCLEn command. A tuner without
+        // one keeps the button, so the feature can be found, and a click
+        // explains where to set it up instead of failing. ah4c is asked
+        // each time because a command saved in Settings works at once.
+        function powerCycleClicked() {
+            if (modalIndex === null) return;
+            var index = modalIndex;
+            $.getJSON('/api/tuners/powercycle').done(function(data) {
+                if (modalIndex !== index) return;
+                if (!(data.configured || [])[index]) {
+                    setPowerCycleNote('No power cycle command is set for Tuner ' + index + '. Power Cycle runs a command you supply, such as a curl to the smart plug the device is plugged into. Add one in <a href="/settings">Settings</a> under POWERCYCLE on this tuner\'s card.');
+                    return;
+                }
+                var question = tunerActive[index]
+                    ? 'Tuner ' + index + ' is streaming ' + (tunerLabels[index] || 'a channel') + '. Power cycling its device will end that stream. Continue?'
+                    : 'Power cycle this device? Its power will be cut and restored.';
+                if (!confirm(question)) return;
+                if (previewDeadline) previewDeadline = Date.now() + PREVIEW_GRACE;
+                $('#powerCycleButton').prop('disabled', true);
+                setPowerCycleNote('Power cycling…');
+                $.post('/api/tuner/' + index + '/powercycle').done(function() {
+                    if (modalIndex === index) setPowerCycleNote('Power cycle finished. The device may take a minute or two to start up.');
+                }).fail(function(xhr) {
+                    if (modalIndex !== index) return;
+                    var error = xhr.responseJSON && xhr.responseJSON.error;
+                    // As text: the error can carry what the command printed.
+                    $('#powerCycleNote').text('Power cycle failed' + (error ? ': ' + error : '.')).removeClass('hidden');
+                }).always(function() {
+                    $('#powerCycleButton').prop('disabled', false);
+                });
+            }).fail(function(xhr) {
+                if (modalIndex !== index) return;
+                // A page served by an ah4c built before Power Cycle existed
+                // gets a 404 here, which is not the same as ah4c being down.
+                if (xhr.status === 404) setPowerCycleNote('This ah4c does not support Power Cycle yet. The page is newer than the running ah4c; rebuild or update the image and restart the container.');
+                else if (xhr.status) setPowerCycleNote('Could not check for a power cycle command: ah4c answered HTTP ' + xhr.status + '.');
+                else setPowerCycleNote('Could not reach ah4c to check for a power cycle command.');
             });
         }
 

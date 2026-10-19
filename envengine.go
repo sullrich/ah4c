@@ -48,6 +48,7 @@ type TunerSpec struct {
 	EncoderURL string `json:"encoderURL"`
 	CMD        string `json:"cmd"`
 	TEECMD     string `json:"teecmd"`
+	PowerCycle string `json:"powerCycle"`
 }
 
 type Settings struct {
@@ -114,7 +115,7 @@ var hostCatalog = []VarSpec{
 
 var (
 	envKeyPattern        = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
-	tunerKeyPattern      = regexp.MustCompile(`^(NUMBER_TUNERS|TUNER[0-9]+_IP|ENCODER[0-9]+_URL|CMD[0-9]+|TEECMD[0-9]+)$`)
+	tunerKeyPattern      = regexp.MustCompile(`^(NUMBER_TUNERS|TUNER[0-9]+_IP|ENCODER[0-9]+_URL|CMD[0-9]+|TEECMD[0-9]+|POWERCYCLE[0-9]+)$`)
 	envEngineMu          sync.RWMutex
 	envSettings          = emptySettings()
 	envLocked            = map[string]bool{}
@@ -270,6 +271,7 @@ func sanitizeLoadedSettings(s Settings) (Settings, []string) {
 			{"encoderURL", &s.Tuners[index].EncoderURL},
 			{"cmd", &s.Tuners[index].CMD},
 			{"teecmd", &s.Tuners[index].TEECMD},
+			{"powerCycle", &s.Tuners[index].PowerCycle},
 		}
 		for _, field := range fields {
 			if strings.ContainsAny(*field.value, "\r\n") {
@@ -308,6 +310,7 @@ func validateSettingsSchema(s Settings) error {
 	for i, tuner := range s.Tuners {
 		for key, value := range map[string]string{
 			"tunerIP": tuner.TunerIP, "encoderURL": tuner.EncoderURL, "cmd": tuner.CMD, "teecmd": tuner.TEECMD,
+			"powerCycle": tuner.PowerCycle,
 		} {
 			if err := validValue(fmt.Sprintf("tuners[%d].%s", i, key), value); err != nil {
 				return err
@@ -411,6 +414,7 @@ func synthesizeTunerVars(tuners []TunerSpec) map[string]string {
 		vars["ENCODER"+n+"_URL"] = tuner.EncoderURL
 		vars["CMD"+n] = tuner.CMD
 		vars["TEECMD"+n] = tuner.TEECMD
+		vars["POWERCYCLE"+n] = tuner.PowerCycle
 	}
 	return vars
 }

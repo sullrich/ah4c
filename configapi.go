@@ -83,6 +83,7 @@ func registerConfigRoutes(r *gin.Engine) {
 	registerCaptureCardRoutes(r)
 	registerDevicePictureRoutes(r)
 	registerHostnameRoutes(r)
+	registerPowerCycleRoutes(r)
 }
 
 func getConfigHandler(c *gin.Context) {
@@ -164,6 +165,9 @@ func putConfigHandler(c *gin.Context) {
 	if tunerSettingsChanged(old.Tuners, next.Tuners) {
 		configRestartNeeded = true
 		configRestartKeys["tuners"] = true
+	}
+	if !locked["NUMBER_TUNERS"] {
+		applyPowerCycleCommands(old.Tuners, next.Tuners)
 	}
 	envEngineMu.Lock()
 	envSettings = next
@@ -374,12 +378,14 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		n := strconv.Itoa(i + 1)
 		values := map[string]string{
 			"tunerIP": tuner.TunerIP, "encoderURL": tuner.EncoderURL, "cmd": tuner.CMD, "teecmd": tuner.TEECMD,
+			"powerCycle": tuner.PowerCycle,
 		}
 		fieldLocks := map[string]bool{
 			"tunerIP":    allLocked || locked["TUNER"+n+"_IP"],
 			"encoderURL": allLocked || locked["ENCODER"+n+"_URL"],
 			"cmd":        allLocked || locked["CMD"+n],
 			"teecmd":     allLocked || locked["TEECMD"+n],
+			"powerCycle": allLocked || locked["POWERCYCLE"+n],
 		}
 		if fieldLocks["tunerIP"] {
 			values["tunerIP"] = os.Getenv("TUNER" + n + "_IP")
@@ -393,7 +399,10 @@ func tunerResponse(s Settings, locked map[string]bool) gin.H {
 		if fieldLocks["teecmd"] {
 			values["teecmd"] = os.Getenv("TEECMD" + n)
 		}
-		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "locked": fieldLocks})
+		if fieldLocks["powerCycle"] {
+			values["powerCycle"] = os.Getenv("POWERCYCLE" + n)
+		}
+		items = append(items, gin.H{"number": i, "tunerIP": values["tunerIP"], "encoderURL": values["encoderURL"], "cmd": values["cmd"], "teecmd": values["teecmd"], "powerCycle": values["powerCycle"], "locked": fieldLocks})
 	}
 	return gin.H{"locked": allLocked, "countLocked": allLocked, "slotCount": len(list), "topologyLocked": tunerTopologyLocked(locked), "previewAvailable": previewAvailable, "live": live, "list": items}
 }
@@ -423,6 +432,7 @@ func tunersFromEnvironment() []TunerSpec {
 		list = append(list, TunerSpec{
 			TunerIP: os.Getenv("TUNER" + suffix + "_IP"), EncoderURL: os.Getenv("ENCODER" + suffix + "_URL"),
 			CMD: os.Getenv("CMD" + suffix), TEECMD: os.Getenv("TEECMD" + suffix),
+			PowerCycle: os.Getenv("POWERCYCLE" + suffix),
 		})
 	}
 	return list
@@ -466,7 +476,7 @@ func lockedRequestKeys(request configSaveRequest, old Settings, locked map[strin
 			n := strconv.Itoa(i + 1)
 			for key, value := range map[string]string{
 				"TUNER" + n + "_IP": tuner.TunerIP, "ENCODER" + n + "_URL": tuner.EncoderURL,
-				"CMD" + n: tuner.CMD, "TEECMD" + n: tuner.TEECMD,
+				"CMD" + n: tuner.CMD, "TEECMD" + n: tuner.TEECMD, "POWERCYCLE" + n: tuner.PowerCycle,
 			} {
 				if locked[key] && value != os.Getenv(key) {
 					rejected = append(rejected, key)
@@ -489,7 +499,7 @@ func tunerCountChangeMovesLockedPosition(oldCount, newCount int, locked map[stri
 	}
 	for index := 0; index < limit; index++ {
 		n := strconv.Itoa(index + 1)
-		if locked["TUNER"+n+"_IP"] || locked["ENCODER"+n+"_URL"] || locked["CMD"+n] || locked["TEECMD"+n] {
+		if locked["TUNER"+n+"_IP"] || locked["ENCODER"+n+"_URL"] || locked["CMD"+n] || locked["TEECMD"+n] || locked["POWERCYCLE"+n] {
 			lastLocked = index
 		}
 	}
@@ -521,6 +531,12 @@ func restoreLockedTunerSettings(next *Settings, old Settings, locked map[string]
 			next.Tuners[i].TEECMD = ""
 			if i < len(old.Tuners) {
 				next.Tuners[i].TEECMD = old.Tuners[i].TEECMD
+			}
+		}
+		if locked["POWERCYCLE"+n] {
+			next.Tuners[i].PowerCycle = ""
+			if i < len(old.Tuners) {
+				next.Tuners[i].PowerCycle = old.Tuners[i].PowerCycle
 			}
 		}
 	}
@@ -596,7 +612,8 @@ func validatedSettingsRequest(request configSaveRequest, old Settings) (Settings
 		tuner.EncoderURL = strings.TrimSpace(tuner.EncoderURL)
 		tuner.CMD = strings.TrimSpace(tuner.CMD)
 		tuner.TEECMD = strings.TrimSpace(tuner.TEECMD)
-		for field, value := range map[string]string{"Tuner IP": tuner.TunerIP, "Encoder URL": tuner.EncoderURL, "CMD": tuner.CMD, "TEECMD": tuner.TEECMD} {
+		tuner.PowerCycle = strings.TrimSpace(tuner.PowerCycle)
+		for field, value := range map[string]string{"Tuner IP": tuner.TunerIP, "Encoder URL": tuner.EncoderURL, "CMD": tuner.CMD, "TEECMD": tuner.TEECMD, "POWERCYCLE": tuner.PowerCycle} {
 			if strings.ContainsAny(value, "\r\n") {
 				return Settings{}, fmt.Errorf("tuner %d %s must be one line", index, field)
 			}
@@ -810,16 +827,22 @@ func changedSettings(old, next Settings) []string {
 	if tunerSettingsChanged(old.Tuners, next.Tuners) {
 		changed = append(changed, "tuners")
 	}
+	changed = append(changed, powerCycleChanges(old.Tuners, next.Tuners)...)
 	sort.Strings(changed)
 	return changed
 }
 
+// tunerSettingsChanged reports a tuner change that needs a restart. A power
+// cycle command is read when its button is pressed, so changing one alone
+// does not; see applyPowerCycleCommands.
 func tunerSettingsChanged(a, b []TunerSpec) bool {
 	if len(a) != len(b) {
 		return true
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		x, y := a[i], b[i]
+		x.PowerCycle, y.PowerCycle = "", ""
+		if x != y {
 			return true
 		}
 	}
